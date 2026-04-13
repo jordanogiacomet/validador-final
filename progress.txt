@@ -146,3 +146,18 @@ Expected architectural direction:
   - Relative quality comparison uses Descrição as the grouping key (tipo_item) — this is the closest proxy for item type in canonical fields
   - The threshold comparison uses `<=` (word_count <= threshold) meaning threshold is the max "short" count, not the minimum acceptable
 ---
+
+## 2026-04-13 - US-006
+- Implemented `CategoryCriticalCheckRule` in `app/rules/category_rules.py`
+- `classify_category()` matches Descrição against tenant-configured category keywords (case-insensitive substring match)
+- Critical checks use regex patterns: `btu_pattern` for air conditioners, `inches_pattern` for TVs
+- Searches across Descrição + Complemento + Modelo for pattern matches
+- Updated `empresa_exemplo` tenant to enable `category_critical_check` rule
+- 20 tests in `tests/test_category_rules.py` covering: classification, applies logic, BTU/inches patterns in various fields, unknown checks, None handling, engine integration
+- Files changed: `app/rules/category_rules.py`, `tests/test_category_rules.py`, `app/tenants/empresa_exemplo/tenant.yaml`
+- **Learnings for future iterations:**
+  - `CRITICAL_CHECK_PATTERNS` dict maps check names to compiled regex — extensible for new category patterns
+  - Pattern search spans Descrição + Complemento + Modelo concatenated, so the pattern can appear in any of those fields
+  - When using `x or default` with lists, remember empty list `[]` is falsy — use `if x is None` instead
+  - Category classification is a simple keyword substring match; no NLP or fuzzy matching needed at this stage
+---
