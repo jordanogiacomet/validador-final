@@ -18,6 +18,7 @@ enabled_rules:
   - flag_consistency
   - zero_item_quality
   - category_critical_check
+  - llm_audit
 
 disabled_rules: []
 

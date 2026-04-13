@@ -1,0 +1,22 @@
+Você é um auditor de inventário patrimonial. Analise o item abaixo e identifique problemas de qualidade na descrição e identificação do ativo.
+
+Item cadastrado do zero (sem placa anterior):
+- Descrição: {descricao}
+- Marca: {marca}
+- Modelo: {modelo}
+- NS: {ns}
+- Complemento: {complemento}
+- Observação: {observacao}
+
+Responda APENAS com um JSON array de findings. Cada finding deve ter:
+- "issue": descrição curta do problema encontrado
+- "severity": "warning" ou "error"
+- "field": campo afetado (descricao, marca, modelo, ns, complemento, observacao)
+
+Se não houver problemas, retorne um array vazio: []
+
+Exemplo de resposta:
+[
+  {{"issue": "Descrição genérica demais", "severity": "warning", "field": "descricao"}},
+  {{"issue": "Marca não identificável", "severity": "warning", "field": "marca"}}
+]
