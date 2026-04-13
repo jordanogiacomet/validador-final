@@ -1,0 +1,26 @@
+tenant_id: default
+display_name: Default Tenant
+
+columns:
+  item: Item
+  placa_anterior: Placa Anterior
+  descricao: Descrição
+  marca: Marca
+  modelo: Modelo
+  ns: NS
+  local: Local
+  cc: CC
+  complemento: Complemento
+  observacao: Observação
+
+enabled_rules: []
+
+disabled_rules: []
+
+thresholds:
+  short_complement_max_words: 3
+
+categories: []
+
+llm:
+  enabled: false

@@ -1,0 +1,242 @@
+{
+  "project": "multi-tenant-inventory-validator",
+  "branchName": "ralph/multi-tenant-validator-foundation",
+  "description": "Multi-tenant Inventory Validator - Build a configurable inventory validation platform with canonical fields, tenant-specific rules, optional LLM audit, async jobs, and operational reports.",
+  "domain": {
+    "type": "inventory_validation",
+    "canonicalFields": [
+      "Item",
+      "Placa Anterior",
+      "Descrição",
+      "Marca",
+      "Modelo",
+      "NS",
+      "Local",
+      "CC",
+      "Complemento",
+      "Observação"
+    ],
+    "derivedFlags": [
+      "flag_item_coletado",
+      "flag_item_cadastrado_do_zero"
+    ],
+    "coreConcepts": [
+      "deterministic validation",
+      "tenant-specific rules",
+      "category classification",
+      "critical category checks",
+      "optional llm audit",
+      "async job processing",
+      "csv and pdf reports"
+    ]
+  },
+  "architectureGoals": [
+    "Keep one generic validation core for all companies",
+    "Allow each tenant to define its own rules, thresholds, categories, and prompts",
+    "Avoid hardcoded tenant conditionals spread across the codebase",
+    "Preserve the current inventory domain behavior while making configuration pluggable",
+    "Support safe iterative development with Claude Code and Ralph loop"
+  ],
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Create canonical inventory domain model",
+      "description": "As a developer, I need a canonical inventory model so all tenants use the same core fields and concepts.",
+      "acceptanceCriteria": [
+        "Define canonical inventory fields: Item, Placa Anterior, Descrição, Marca, Modelo, NS, Local, CC, Complemento, Observação",
+        "Define derived flags: flag_item_coletado and flag_item_cadastrado_do_zero",
+        "Document the semantics of collected item vs zero-created item",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "This must mirror the current domain rules before any tenant-specific customization."
+    },
+    {
+      "id": "US-002",
+      "title": "Create TenantConfig and tenant loader",
+      "description": "As a developer, I need tenant configuration loading so each company can customize validation without changing the core engine.",
+      "acceptanceCriteria": [
+        "Create TenantConfig structure for columns, thresholds, enabled rules, categories, and llm settings",
+        "Support loading tenant configuration from file-based definitions",
+        "Support a default tenant configuration",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Do not scatter tenant-specific if statements across the codebase."
+    },
+    {
+      "id": "US-003",
+      "title": "Create validation context and generic engine",
+      "description": "As a developer, I need a generic validation engine so all rules execute from normalized context instead of from legacy hardcoded flow.",
+      "acceptanceCriteria": [
+        "Create ValidationContext with tenant, dataframe/row data, normalized row data, and shared context",
+        "Create ValidationEngine that loads enabled rules from registry",
+        "Engine returns structured issues per row",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Engine must be tenant-aware through configuration, not branching logic."
+    },
+    {
+      "id": "US-004",
+      "title": "Implement deterministic integrity rules",
+      "description": "As a user, I need hard validation checks so invalid inventory rows are caught consistently.",
+      "acceptanceCriteria": [
+        "Implement duplicate Item validation",
+        "Implement flag consistency validation based on Placa Anterior",
+        "Issues include code, severity, message, and field",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "This preserves the current deterministic integrity behavior."
+    },
+    {
+      "id": "US-005",
+      "title": "Implement zero-item quality rules",
+      "description": "As an operator, I need warnings for low-quality zero-created inventory items so I can improve asset identification.",
+      "acceptanceCriteria": [
+        "Apply zero-item quality rules only when flag_item_cadastrado_do_zero = 1",
+        "Warn when Complemento is empty",
+        "Warn when Complemento is too short using configurable threshold",
+        "Warn when Marca is missing",
+        "Warn when Modelo is missing",
+        "Support relative complement quality comparison within same item type",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "This story must keep the idea of comparing complement quality against better real examples of the same tipo_item."
+    },
+    {
+      "id": "US-006",
+      "title": "Implement category classification and critical checks",
+      "description": "As a user, I need category-aware validation so certain assets are checked more strictly when identification details are essential.",
+      "acceptanceCriteria": [
+        "Support category classification from tenant-configured keywords",
+        "Support critical checks by category",
+        "Air conditioner category can require BTU-like pattern",
+        "TV category can require inches-like pattern",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "Category mapping must be configurable per tenant and not hardcoded globally."
+    },
+    {
+      "id": "US-007",
+      "title": "Implement optional LLM inventory audit",
+      "description": "As an operator, I want optional semantic review for ambiguous inventory items so the system can flag suspicious descriptions beyond deterministic rules.",
+      "acceptanceCriteria": [
+        "LLM audit is configurable per tenant",
+        "LLM audit applies detailed review only for zero-created items",
+        "LLM response is normalized into structured findings",
+        "LLM failures and timeouts are captured safely as warnings",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "Prompt and model settings must be tenant-configurable."
+    },
+    {
+      "id": "US-008",
+      "title": "Create async validation job pipeline",
+      "description": "As a user, I need file validation to run asynchronously so large inventory files can be processed safely.",
+      "acceptanceCriteria": [
+        "Create job record with status lifecycle",
+        "Persist file path, result path, report path, counters, and params",
+        "Support queued, running, completed, and failed states",
+        "Include tenant_id in job metadata",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "This should keep the current job-oriented processing idea while making it tenant-aware."
+    },
+    {
+      "id": "US-009",
+      "title": "Generate operational output reports",
+      "description": "As an operations team member, I need human-readable outputs so I can correct inventory issues quickly.",
+      "acceptanceCriteria": [
+        "Generate structured validation result output per row",
+        "Generate duplicate item section",
+        "Generate grouped problem section for operational review",
+        "Generate PDF report",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Reports must stay practical for non-technical staff."
+    },
+    {
+      "id": "US-010",
+      "title": "Expose validation API with tenant selection",
+      "description": "As an integrator, I need an API endpoint that accepts a file and tenant selection so each company can use its own validation profile.",
+      "acceptanceCriteria": [
+        "Create upload endpoint for inventory file validation",
+        "Accept tenant identifier in request",
+        "Start async validation job",
+        "Expose job status endpoint",
+        "Expose result download endpoints",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "API should be thin and delegate to the generic engine and job services."
+    },
+    {
+      "id": "US-011",
+      "title": "Create test coverage for core validation flows",
+      "description": "As a developer, I need reliable tests so tenant-specific changes do not break the shared engine.",
+      "acceptanceCriteria": [
+        "Test tenant loading",
+        "Test flag derivation from Placa Anterior",
+        "Test duplicate Item validation",
+        "Test zero-item rules",
+        "Test category critical checks",
+        "Test job creation and state transitions",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Tests should focus on behavior and regression safety."
+    }
+  ],
+  "nonFunctionalRequirements": {
+    "language": "pt-BR",
+    "apiStyle": "FastAPI",
+    "processingMode": "async_jobs",
+    "reportFormats": ["json", "csv", "pdf"],
+    "configurationStyle": "file-based tenant config",
+    "llmMode": "optional and tenant-configurable",
+    "designConstraints": [
+      "No tenant-specific business logic scattered through the core",
+      "No duplication of validation engine per company",
+      "No global hardcoded prompt as the only audit source",
+      "No mixing of API, validation rules, and report rendering in the same new abstraction"
+    ]
+  },
+  "seedTenants": [
+    {
+      "tenantId": "default",
+      "description": "Default tenant preserving the current canonical behavior as baseline."
+    },
+    {
+      "tenantId": "empresa_exemplo",
+      "description": "Example tenant with custom thresholds, categories, and enabled rules."
+    }
+  ],
+  "definitionOfDone": [
+    "Canonical field model exists",
+    "TenantConfig and loader exist",
+    "ValidationEngine exists",
+    "Rules are registry-based",
+    "At least one tenant-specific configuration works end-to-end",
+    "Async job flow works",
+    "Reports are generated",
+    "Tests and typecheck pass"
+  ]
+}

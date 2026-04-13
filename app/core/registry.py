@@ -1,0 +1,1 @@
+RULE_REGISTRY: dict[str, object] = {}

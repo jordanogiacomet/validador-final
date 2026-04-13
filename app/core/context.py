@@ -1,0 +1,10 @@
+from pydantic import BaseModel, Field
+
+from app.core.tenant_config import TenantConfig
+
+
+class ValidationContext(BaseModel):
+    tenant: TenantConfig
+    row_index: int
+    normalized_row: dict[str, str | int | float | None] = Field(default_factory=dict)
+    shared_context: dict = Field(default_factory=dict)
