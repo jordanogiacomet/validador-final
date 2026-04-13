@@ -22,6 +22,8 @@ Last Updated: 2026-04-13 00:00 BRT
 - Tenant configs use typed Pydantic sub-models (`CategoryConfig`, `LLMConfig`) — keep them in `app/core/tenant_config.py`.
 - Clear `RULE_REGISTRY` in test setup/teardown to avoid cross-test contamination.
 - Use `register_rule()` from `app.core.registry` to add rules; the engine resolves them by name from `TenantConfig.enabled_rules`.
+- Pydantic v2 copies dict values on model construction — pass shared_context between ValidationContext instances explicitly for cross-row caching.
+- Cross-row rules (e.g., duplicate detection) should cache computed data in `shared_context` to avoid re-computing per row.
 
 ---
 
@@ -116,4 +118,16 @@ Expected architectural direction:
   - Use `setup_function`/`teardown_function` to clear `RULE_REGISTRY` between tests to avoid cross-test contamination
   - `BaseRule` uses class attributes for `name` (not instance), so test rule subclasses declare `name: str = "rule_name"`
   - The engine skeletons from US-001/US-002 were mostly correct but needed typed rule references and batch support
+---
+
+## 2026-04-13 - US-004
+- Implemented `DuplicateItemRule` in `app/rules/integrity.py` — detects duplicate Item values across all rows using Counter cached in shared_context
+- Implemented `FlagConsistencyRule` in `app/rules/integrity.py` — validates that flag_item_coletado and flag_item_cadastrado_do_zero are consistent with Placa Anterior presence
+- Issues include code, severity, message, and field as required by acceptance criteria
+- Added 16 tests in `tests/test_integrity_rules.py` covering: applies logic, unique/duplicate items, cache behavior, None items, consistent/inconsistent flags, empty-string placa handling, issue field population, and engine integration
+- Files changed: `app/rules/integrity.py`, `tests/test_integrity_rules.py`
+- **Learnings for future iterations:**
+  - Pydantic v2 copies dict values when constructing models — shared_context passed to ValidationContext is a new dict, not the original reference. Use the context's own shared_context for caching, and pass it between contexts explicitly.
+  - The DuplicateItemRule caches counts in shared_context to avoid re-counting for every row — this pattern is important for cross-row rules.
+  - FlagConsistencyRule checks both directions: placa present with wrong flags AND placa absent with wrong flags, plus conflict states where both flags are set.
 ---
