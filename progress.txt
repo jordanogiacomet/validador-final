@@ -197,3 +197,20 @@ Expected architectural direction:
   - In-memory job storage is sufficient for now; can be swapped for persistent storage later without changing the service interface
   - Job state machine pattern: define valid transitions as a dict, enforce in a single `transition_to()` method
 ---
+
+## 2026-04-13 - US-009
+- Implemented `report_service.py` in `app/services/` with four core functions:
+  - `build_row_results()` — structured validation result per row with item, descricao, issues, has_errors, has_warnings
+  - `build_duplicate_section()` — groups duplicate items with row indices and counts
+  - `build_grouped_problems()` — groups issues by code for operational review
+  - `generate_pdf_report()` — produces A4 PDF with summary table, duplicates table, and grouped problems tables using reportlab
+- `build_full_report()` composes all sections with a summary (total_rows, rows_with_issues, error/warning counts)
+- PDF report includes: title, summary table, duplicate items section, and grouped problems by type (capped at 50 per group)
+- 20 tests in `tests/test_report_service.py` covering all functions including empty data, large datasets, string paths
+- Files changed: `app/services/report_service.py`, `tests/test_report_service.py`
+- **Learnings for future iterations:**
+  - reportlab is already in `pyproject.toml` dependencies — no need to add it
+  - `SimpleDocTemplate` + `platypus` flowables (Table, Paragraph, Spacer) is the standard pattern for PDF generation
+  - Report service is purely functional (no class state) — takes normalized rows + validation results, returns structured data or writes PDF
+  - Keep report rendering separate from validation logic — report functions only consume `ValidationIssue` models
+---
