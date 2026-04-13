@@ -7,4 +7,5 @@ class ValidationContext(BaseModel):
     tenant: TenantConfig
     row_index: int
     normalized_row: dict[str, str | int | float | None] = Field(default_factory=dict)
+    all_rows: list[dict[str, str | int | float | None]] = Field(default_factory=list)
     shared_context: dict = Field(default_factory=dict)

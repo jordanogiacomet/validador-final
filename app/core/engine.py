@@ -1,15 +1,17 @@
+from app.core.canonical_fields import normalize_row
 from app.core.context import ValidationContext
 from app.core.issue import ValidationIssue
 from app.core.registry import RULE_REGISTRY
 from app.core.tenant_config import TenantConfig
+from app.rules.base import BaseRule
 
 
 class ValidationEngine:
     def __init__(self, tenant: TenantConfig) -> None:
         self.tenant = tenant
 
-    def get_enabled_rules(self) -> list[object]:
-        rules: list[object] = []
+    def get_enabled_rules(self) -> list[BaseRule]:
+        rules: list[BaseRule] = []
 
         for rule_name in self.tenant.enabled_rules:
             if rule_name in self.tenant.disabled_rules:
@@ -25,22 +27,41 @@ class ValidationEngine:
         self,
         row_index: int,
         normalized_row: dict[str, str | int | float | None],
+        all_rows: list[dict[str, str | int | float | None]] | None = None,
         shared_context: dict | None = None,
     ) -> list[ValidationIssue]:
         context = ValidationContext(
             tenant=self.tenant,
             row_index=row_index,
             normalized_row=normalized_row,
+            all_rows=all_rows or [],
             shared_context=shared_context or {},
         )
 
         issues: list[ValidationIssue] = []
 
         for rule in self.get_enabled_rules():
-            applies = getattr(rule, "applies", None)
-            validate = getattr(rule, "validate", None)
-
-            if callable(applies) and callable(validate) and applies(context):
-                issues.extend(validate(context))
+            if rule.applies(context):
+                issues.extend(rule.validate(context))
 
         return issues
+
+    def validate_all(
+        self,
+        raw_rows: list[dict[str, object]],
+    ) -> dict[int, list[ValidationIssue]]:
+        normalized_rows = [normalize_row(row) for row in raw_rows]
+
+        shared_context: dict = {}
+
+        results: dict[int, list[ValidationIssue]] = {}
+        for idx, normalized in enumerate(normalized_rows):
+            issues = self.validate_row(
+                row_index=idx,
+                normalized_row=normalized,
+                all_rows=normalized_rows,
+                shared_context=shared_context,
+            )
+            results[idx] = issues
+
+        return results
