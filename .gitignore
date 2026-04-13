@@ -12,3 +12,5 @@ build/
 .pytest_cache/
 uploads/
 results/
+notebook_downloads/
+.ipynb_checkpoints/

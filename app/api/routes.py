@@ -1,8 +1,10 @@
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from app.api.frontend import build_frontend_html
 from app.core.job import JobStatus
 from app.core.tenant_loader import load_tenant_config
 from app.services.job_service import JobService
@@ -27,6 +29,11 @@ class JobStatusResponse(BaseModel):
     rows_with_issues: int
     total_issues: int
     error_message: str | None = None
+
+
+@router.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def frontend() -> HTMLResponse:
+    return HTMLResponse(build_frontend_html())
 
 
 @router.post("/validate", response_model=UploadResponse)

@@ -28,6 +28,14 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_frontend_page_renders_friendly_form():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Central de Correção Patrimonial" in response.text
+    assert "Como corrigir" in response.text
+    assert 'id="validation-form"' in response.text
+
+
 def test_upload_and_validate_creates_job():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
     response = client.post("/validate?tenant_id=default", files=files)
@@ -89,6 +97,39 @@ def test_download_result_completed():
     assert response.json()["summary"]["total_rows"] == 1
 
     Path(result_path).unlink(missing_ok=True)
+
+
+def test_validation_result_includes_item_and_descricao_metadata():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post("/validate?tenant_id=default", files=files)
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+    try:
+        assert job.result_path is not None
+        assert job.report_path is not None
+        assert job.file_path is not None
+
+        result_response = client.get(f"/jobs/{job_id}/result")
+        assert result_response.status_code == 200
+
+        payload = result_response.json()
+        first_row = payload["row_results"][0]
+        assert first_row["item"] == "001"
+        assert first_row["descricao"] == "Mesa"
+
+        grouped_issue = payload["grouped_problems"]["ZERO_ITEM_COMPLEMENTO_EMPTY"][0]
+        assert grouped_issue["item"] == "002"
+        assert grouped_issue["descricao"] == "Cadeira"
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
 
 
 def test_download_report_not_completed():

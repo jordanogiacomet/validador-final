@@ -214,3 +214,23 @@ Expected architectural direction:
   - Report service is purely functional (no class state) — takes normalized rows + validation results, returns structured data or writes PDF
   - Keep report rendering separate from validation logic — report functions only consume `ValidationIssue` models
 ---
+
+## 2026-04-13 - US-010
+- Implemented validation API with tenant selection in `app/api/routes.py`
+- POST `/validate` — accepts file upload + tenant_id query param, creates async validation job via BackgroundTasks
+- GET `/jobs/{job_id}` — returns job status with counters and error message
+- GET `/jobs/{job_id}/result` — downloads JSON result (requires completed job)
+- GET `/jobs/{job_id}/report` — downloads PDF report (requires completed job)
+- Created `app/services/validation_service.py` — orchestrates file parsing, engine execution, report generation, and job lifecycle
+- `ensure_rules_registered()` lazily registers all rules on first validation run
+- Updated `app/main.py` to include the API router
+- Added `uploads/` and `results/` to `.gitignore`
+- 16 tests in `tests/test_api.py` covering: upload, default tenant, invalid tenant, job status, result/report download (completed/not completed/missing), counters, error messages
+- Files changed: `app/api/routes.py`, `app/services/validation_service.py`, `app/main.py`, `.gitignore`, `tests/test_api.py`
+- **Learnings for future iterations:**
+  - FastAPI `BackgroundTasks` is sufficient for async job processing without external task queues
+  - Module-level `JobService()` in routes.py provides shared in-memory state across requests (single process)
+  - Rules are not auto-registered at module import — need explicit `ensure_rules_registered()` call before engine use
+  - Use `raise HTTPException(...) from None` inside except clauses to satisfy ruff B904
+  - TestClient executes BackgroundTasks synchronously, which simplifies testing async flows
+---

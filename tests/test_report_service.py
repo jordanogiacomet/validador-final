@@ -66,6 +66,7 @@ def test_duplicate_section_finds_duplicates():
     dups = build_duplicate_section(rows, {})
     assert len(dups) == 1
     assert dups[0]["item"] == "A001"
+    assert dups[0]["descricao"] == "Mesa"
     assert dups[0]["count"] == 2
     assert set(dups[0]["row_indices"]) == {0, 2}
 
@@ -91,28 +92,42 @@ def test_duplicate_section_multiple_groups():
 # --- build_grouped_problems ---
 
 def test_grouped_problems_groups_by_code():
+    rows = _sample_rows()
     results = {
         0: [_make_issue(code="DUP"), _make_issue(code="FLAG")],
         1: [_make_issue(code="DUP")],
     }
-    grouped = build_grouped_problems(results)
+    grouped = build_grouped_problems(rows, results)
     assert len(grouped["DUP"]) == 2
     assert len(grouped["FLAG"]) == 1
 
 
 def test_grouped_problems_empty():
-    grouped = build_grouped_problems({})
+    grouped = build_grouped_problems([], {})
     assert grouped == {}
 
 
 def test_grouped_problems_preserves_details():
+    rows = [{"item": "A001", "descricao": "Mesa"}]
     results = {5: [_make_issue(code="X", severity="warning", message="msg", field="f")]}
-    grouped = build_grouped_problems(results)
+    grouped = build_grouped_problems(rows, results)
     entry = grouped["X"][0]
     assert entry["row_index"] == 5
+    assert entry["item"] is None
+    assert entry["descricao"] is None
     assert entry["severity"] == "warning"
     assert entry["message"] == "msg"
     assert entry["field"] == "f"
+
+
+def test_grouped_problems_include_item_and_descricao():
+    rows = _sample_rows()
+    results = {1: [_make_issue(code="ZERO", severity="warning", message="Marca vazia")]}
+    grouped = build_grouped_problems(rows, results)
+
+    entry = grouped["ZERO"][0]
+    assert entry["item"] == "A002"
+    assert entry["descricao"] == "Cadeira"
 
 
 # --- build_full_report ---

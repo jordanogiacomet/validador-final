@@ -184,7 +184,7 @@
         "Typecheck passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "API should be thin and delegate to the generic engine and job services."
     },
     {

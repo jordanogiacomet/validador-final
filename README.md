@@ -194,3 +194,78 @@ TASKS.md
 Notes
 
 This project should optimize for maintainability, configurability, and safe iteration over ad-hoc speed.
+
+Running the API
+
+One local way to run the API is:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+uvicorn app.main:app --reload
+```
+
+The app will then be available at `http://127.0.0.1:8000`.
+
+Web Form for Operational Teams
+
+The API now exposes a browser-facing correction screen at `http://127.0.0.1:8000/`.
+
+This page is intended for patrimonial and inventory staff who need a friendlier view than the raw PDF:
+
+- upload a CSV without calling the API manually
+- follow job progress on screen
+- read grouped problems in plain Portuguese
+- see which spreadsheet line should be corrected
+- understand which field needs attention and what kind of fix is expected
+- download the PDF and raw JSON only when needed
+
+The UI converts the internal zero-based `row_index` into a human-friendly spreadsheet line number
+that already accounts for the header row.
+
+Notebook Frontend
+
+A Jupyter notebook client is available at `notebooks/api_frontend.ipynb`.
+
+Suggested setup:
+
+```bash
+source .venv/bin/activate
+pip install notebook
+jupyter notebook
+```
+
+Notebook workflow:
+
+1. Start the FastAPI app locally.
+2. Open `notebooks/api_frontend.ipynb`.
+3. Update `BASE_URL`, `TENANT_ID`, and `CSV_PATH`.
+4. Run the cells in order.
+
+What the notebook does:
+
+- checks `/health`
+- previews the selected CSV
+- uploads the file to `POST /validate`
+- polls `GET /jobs/{job_id}` until completion or failure
+- fetches `GET /jobs/{job_id}/result`
+- renders summary, row results, duplicates, and grouped problems as tables
+- downloads `GET /jobs/{job_id}/report` and saves both JSON and PDF locally
+
+Success and failure behavior:
+
+- if the job completes, the notebook renders the structured report and stores the JSON/PDF under `notebook_downloads/`
+- if the job fails, the polling cell raises an error with the API `error_message`
+
+Report Outputs
+
+The structured report returned by `GET /jobs/{job_id}/result` now includes:
+
+- `row_results[*].item`
+- `row_results[*].descricao`
+- `duplicates[*].descricao`
+- `grouped_problems[code][*].item`
+- `grouped_problems[code][*].descricao`
+
+The PDF report also shows `item` and `descricao` in the duplicates and grouped problems tables.

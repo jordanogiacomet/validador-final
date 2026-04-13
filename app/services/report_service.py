@@ -13,6 +13,49 @@ RowType = dict[str, str | int | float | None]
 ValidationResults = dict[int, list[ValidationIssue]]
 
 
+def _get_row_metadata(
+    normalized_rows: list[RowType],
+    row_index: int,
+) -> tuple[str | int | float | None, str | int | float | None]:
+    if row_index < 0 or row_index >= len(normalized_rows):
+        return None, None
+
+    row = normalized_rows[row_index]
+    return row.get("item"), row.get("descricao")
+
+
+def _get_duplicate_descricao(
+    normalized_rows: list[RowType],
+    row_indices: list[int],
+) -> str | None:
+    descriptions: list[str] = []
+    seen: set[str] = set()
+
+    for row_index in row_indices:
+        _, descricao = _get_row_metadata(normalized_rows, row_index)
+        if descricao is None:
+            continue
+
+        descricao_text = str(descricao).strip()
+        if not descricao_text or descricao_text in seen:
+            continue
+
+        seen.add(descricao_text)
+        descriptions.append(descricao_text)
+
+    if not descriptions:
+        return None
+
+    return " / ".join(descriptions)
+
+
+def _truncate_text(value: object, max_length: int) -> str:
+    text = "" if value is None else str(value)
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3]}..."
+
+
 def build_row_results(
     normalized_rows: list[RowType],
     validation_results: ValidationResults,
@@ -37,6 +80,7 @@ def build_duplicate_section(
     validation_results: ValidationResults,
 ) -> list[dict]:
     """Build section listing duplicate items and their row indices."""
+    _ = validation_results
     item_rows: dict[object, list[int]] = defaultdict(list)
     for idx, row in enumerate(normalized_rows):
         item_val = row.get("item")
@@ -48,6 +92,7 @@ def build_duplicate_section(
         if len(indices) > 1:
             duplicates.append({
                 "item": item_val,
+                "descricao": _get_duplicate_descricao(normalized_rows, indices),
                 "row_indices": indices,
                 "count": len(indices),
             })
@@ -55,14 +100,18 @@ def build_duplicate_section(
 
 
 def build_grouped_problems(
+    normalized_rows: list[RowType],
     validation_results: ValidationResults,
 ) -> dict[str, list[dict]]:
     """Group issues by issue code for operational review."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row_idx, issues in validation_results.items():
+        item, descricao = _get_row_metadata(normalized_rows, row_idx)
         for issue in issues:
             grouped[issue.code].append({
                 "row_index": row_idx,
+                "item": item,
+                "descricao": descricao,
                 "severity": issue.severity,
                 "message": issue.message,
                 "field": issue.field,
@@ -94,7 +143,7 @@ def build_full_report(
         },
         "row_results": build_row_results(normalized_rows, validation_results),
         "duplicates": build_duplicate_section(normalized_rows, validation_results),
-        "grouped_problems": build_grouped_problems(validation_results),
+        "grouped_problems": build_grouped_problems(normalized_rows, validation_results),
     }
 
 
@@ -152,11 +201,16 @@ def generate_pdf_report(
     duplicates = report_data["duplicates"]
     if duplicates:
         elements.append(Paragraph("Itens Duplicados", heading_style))
-        dup_data = [["Item", "Ocorrências", "Linhas"]]
+        dup_data = [["Item", "Descricao", "Ocorrencias", "Linhas"]]
         for dup in duplicates:
             row_indices_str = ", ".join(str(r) for r in dup["row_indices"])
-            dup_data.append([str(dup["item"]), str(dup["count"]), row_indices_str])
-        dup_table = Table(dup_data, colWidths=[120, 80, 200])
+            dup_data.append([
+                _truncate_text(dup["item"], 18),
+                _truncate_text(dup.get("descricao"), 36),
+                str(dup["count"]),
+                _truncate_text(row_indices_str, 40),
+            ])
+        dup_table = Table(dup_data, colWidths=[70, 140, 60, 180])
         dup_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -174,14 +228,16 @@ def generate_pdf_report(
             elements.append(Paragraph(
                 f"<b>{code}</b> ({len(occurrences)} ocorrências)", body_style
             ))
-            prob_data = [["Linha", "Severidade", "Mensagem"]]
+            prob_data = [["Linha", "Item", "Descricao", "Severidade", "Mensagem"]]
             for occ in occurrences[:50]:
                 prob_data.append([
                     str(occ["row_index"]),
-                    occ["severity"],
-                    occ["message"][:80],
+                    _truncate_text(occ.get("item"), 16),
+                    _truncate_text(occ.get("descricao"), 24),
+                    _truncate_text(occ["severity"], 12),
+                    _truncate_text(occ["message"], 72),
                 ])
-            prob_table = Table(prob_data, colWidths=[50, 70, 300])
+            prob_table = Table(prob_data, colWidths=[35, 60, 95, 60, 200])
             prob_table.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
