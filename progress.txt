@@ -131,3 +131,18 @@ Expected architectural direction:
   - The DuplicateItemRule caches counts in shared_context to avoid re-counting for every row — this pattern is important for cross-row rules.
   - FlagConsistencyRule checks both directions: placa present with wrong flags AND placa absent with wrong flags, plus conflict states where both flags are set.
 ---
+
+## 2026-04-13 - US-005
+- Implemented `ZeroItemQualityRule` in `app/rules/zero_item_quality.py`
+- Checks: empty Complemento, short Complemento (configurable threshold), missing Marca, missing Modelo
+- Relative complement quality comparison: compares word count against peer average for same item type (Descrição), warns when below 50% of average
+- Caches peer complement stats in shared_context for cross-row efficiency
+- Updated default tenant to enable all three rules (duplicate_item, flag_consistency, zero_item_quality)
+- Fixed pre-existing lint issue in tests/test_integrity_rules.py (line too long)
+- 20 tests added in `tests/test_zero_item_quality.py` covering applies logic, all warning types, configurable threshold, relative quality, caching, clean items, and engine integration
+- Files changed: `app/rules/zero_item_quality.py`, `tests/test_zero_item_quality.py`, `app/tenants/default/tenant.yaml`, `tests/test_integrity_rules.py`
+- **Learnings for future iterations:**
+  - Pydantic v2 shared_context gotcha still applies — tests must use `ctx.shared_context` not the original dict passed in
+  - Relative quality comparison uses Descrição as the grouping key (tipo_item) — this is the closest proxy for item type in canonical fields
+  - The threshold comparison uses `<=` (word_count <= threshold) meaning threshold is the max "short" count, not the minimum acceptable
+---

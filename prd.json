@@ -108,7 +108,7 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "This story must keep the idea of comparing complement quality against better real examples of the same tipo_item."
     },
     {
