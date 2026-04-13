@@ -2,9 +2,11 @@ from pathlib import Path
 
 from app.core.issue import ValidationIssue
 from app.services.report_service import (
+    _sorted_problem_groups,
     build_duplicate_section,
     build_full_report,
     build_grouped_problems,
+    build_partial_report,
     build_row_results,
     generate_pdf_report,
 )
@@ -57,6 +59,13 @@ def test_build_row_results_includes_descricao():
     rows = [{"item": "X", "descricao": "Impressora"}]
     output = build_row_results(rows, {})
     assert output[0]["descricao"] == "Impressora"
+
+
+def test_build_row_results_can_limit_to_processed_indices():
+    rows = _sample_rows()
+    results = {0: [_make_issue()], 2: [_make_issue(code="OTHER")]}
+    output = build_row_results(rows, results, row_indices=[0, 2])
+    assert [entry["row_index"] for entry in output] == [0, 2]
 
 
 # --- build_duplicate_section ---
@@ -174,6 +183,46 @@ def test_full_report_all_clean():
     assert report["summary"]["total_issues"] == 0
 
 
+def test_partial_report_limits_summary_and_rows_to_processed_slice():
+    rows = _sample_rows()
+    results = {
+        0: [_make_issue(code="DUPLICATE_ITEM", severity="error")],
+        1: [_make_issue(code="ZERO", severity="warning")],
+        2: [_make_issue(code="LATE", severity="warning")],
+    }
+
+    preview = build_partial_report(
+        rows,
+        results,
+        processed_row_indices=[0, 1],
+        partial_duplicates=[{"item": "A001", "row_indices": [0, 2], "count": 2}],
+    )
+
+    assert preview["partial_summary"]["total_rows"] == 3
+    assert preview["partial_summary"]["processed_rows"] == 2
+    assert preview["partial_summary"]["rows_with_issues"] == 2
+    assert preview["partial_summary"]["total_issues"] == 2
+    assert preview["partial_summary"]["error_count"] == 1
+    assert preview["partial_summary"]["warning_count"] == 1
+    assert [row["row_index"] for row in preview["row_results_preview"]] == [0, 1]
+    assert "LATE" not in preview["partial_grouped_problems"]
+    assert preview["partial_duplicates"][0]["item"] == "A001"
+
+
+def test_sorted_problem_groups_prioritize_errors_then_volume():
+    grouped = {
+        "WARN_BIG": [
+            {"severity": "warning"},
+            {"severity": "warning"},
+            {"severity": "warning"},
+        ],
+        "ERR_SMALL": [{"severity": "error"}],
+        "ERR_BIG": [{"severity": "error"}, {"severity": "error"}],
+    }
+    ordered = _sorted_problem_groups(grouped)
+    assert [code for code, _ in ordered] == ["ERR_BIG", "ERR_SMALL", "WARN_BIG"]
+
+
 # --- generate_pdf_report ---
 
 def test_pdf_report_creates_file(tmp_path):
@@ -213,6 +262,32 @@ def test_pdf_report_accepts_string_path(tmp_path):
     pdf_path = str(tmp_path / "str_path.pdf")
     generate_pdf_report([{"item": "A"}], {}, pdf_path)
     assert Path(pdf_path).exists()
+
+
+def test_pdf_report_accepts_metadata(tmp_path):
+    pdf_path = tmp_path / "metadata.pdf"
+    generate_pdf_report(
+        [{"item": "A001", "descricao": "Mesa"}],
+        {0: [_make_issue(code="DUPLICATE_ITEM", message="Duplicado")]},
+        pdf_path,
+        metadata={
+            "organization_name": "Empresa Exemplo",
+            "file_name": "lote.csv",
+            "job_id": "job-123",
+            "generated_at": "2026-04-13T12:00:00",
+        },
+    )
+    content = pdf_path.read_bytes()
+    assert b"Empresa Exemplo" in content
+    assert b"lote.csv" in content
+    assert b"job-123" in content
+
+
+def test_pdf_report_clean_lot_has_clean_copy(tmp_path):
+    pdf_path = tmp_path / "clean.pdf"
+    generate_pdf_report([{"item": "A001", "descricao": "Mesa"}], {0: []}, pdf_path)
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 0
 
 
 def test_pdf_report_many_issues(tmp_path):

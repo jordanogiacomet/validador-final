@@ -18,6 +18,19 @@ DERIVED_FLAGS = (
     "flag_item_cadastrado_do_zero",
 )
 
+DEFAULT_TENANT_COLUMNS: dict[str, str] = {
+    "item": "Item",
+    "placa_anterior": "Placa Anterior",
+    "descricao": "Descrição",
+    "marca": "Marca",
+    "modelo": "Modelo",
+    "ns": "NS",
+    "local": "Local",
+    "cc": "CC",
+    "complemento": "Complemento",
+    "observacao": "Observação",
+}
+
 
 class CanonicalInventoryRow(BaseModel):
     """Canonical representation of a single inventory row.
@@ -61,25 +74,23 @@ def derive_flags(placa_anterior: str | None) -> tuple[int, int]:
 
 
 CANONICAL_FIELD_MAP: dict[str, str] = {
-    "Item": "item",
-    "Placa Anterior": "placa_anterior",
-    "Descrição": "descricao",
-    "Marca": "marca",
-    "Modelo": "modelo",
-    "NS": "ns",
-    "Local": "local",
-    "CC": "cc",
-    "Complemento": "complemento",
-    "Observação": "observacao",
+    display_name: attr_name for attr_name, display_name in DEFAULT_TENANT_COLUMNS.items()
 }
 
 
-def normalize_row(raw_row: dict[str, object]) -> dict[str, str | int | float | None]:
-    """Normalize a raw row using canonical field mapping and derive flags."""
+def normalize_row(
+    raw_row: dict[str, object],
+    column_mapping: dict[str, str] | None = None,
+) -> dict[str, str | int | float | None]:
+    """Normalize a raw row using tenant column mapping and derive flags."""
     normalized: dict[str, str | int | float | None] = {}
-
-    for display_name, attr_name in CANONICAL_FIELD_MAP.items():
-        value = raw_row.get(display_name)
+    for attr_name, default_source_column in DEFAULT_TENANT_COLUMNS.items():
+        source_column = (
+            column_mapping.get(attr_name, default_source_column)
+            if column_mapping is not None
+            else default_source_column
+        )
+        value = raw_row.get(source_column)
         if value is None or (isinstance(value, str) and not value.strip()):
             normalized[attr_name] = None
         else:

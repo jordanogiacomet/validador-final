@@ -1,8 +1,10 @@
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.frontend import build_frontend_html
 from app.core.job import JobStatus
@@ -28,7 +30,22 @@ class JobStatusResponse(BaseModel):
     total_rows: int
     rows_with_issues: int
     total_issues: int
+    processed_rows: int = 0
+    batch_size: int = 0
     error_message: str | None = None
+    partial_summary: dict[str, Any] = Field(default_factory=dict)
+    is_partial_result_available: bool = False
+    partial_grouped_problems: dict[str, list[dict[str, Any]]] = Field(
+        default_factory=dict
+    )
+    partial_duplicates: list[dict[str, Any]] = Field(default_factory=list)
+    row_results_preview: list[dict[str, Any]] = Field(default_factory=list)
+    current_step: str | None = None
+    status_title: str | None = None
+    status_detail: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    file_name: str | None = None
 
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -50,13 +67,14 @@ async def upload_and_validate(
         ) from None
 
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    job = job_service.create_job(tenant_id=tenant_id)
+    job = job_service.create_job(tenant_id=tenant_id, file_name=file.filename)
     file_path = UPLOADS_DIR / f"{job.job_id}_{file.filename}"
 
     content = await file.read()
     file_path.write_bytes(content)
 
     job.file_path = str(file_path)
+    job.file_name = file.filename
 
     background_tasks.add_task(run_validation_job, job.job_id, job_service)
 
@@ -80,7 +98,20 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
         total_rows=job.total_rows,
         rows_with_issues=job.rows_with_issues,
         total_issues=job.total_issues,
+        processed_rows=job.processed_rows,
+        batch_size=job.batch_size,
         error_message=job.error_message,
+        partial_summary=job.partial_summary,
+        is_partial_result_available=job.is_partial_result_available,
+        partial_grouped_problems=job.partial_grouped_problems,
+        partial_duplicates=job.partial_duplicates,
+        row_results_preview=job.row_results_preview,
+        current_step=job.current_step,
+        status_title=job.status_title,
+        status_detail=job.status_detail,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        file_name=job.file_name,
     )
 
 

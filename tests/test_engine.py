@@ -39,6 +39,23 @@ class NeverAppliesRule(BaseRule):
         ]
 
 
+class RequiresDescricaoRule(BaseRule):
+    name: str = "requires_descricao"
+
+    def applies(self, context: ValidationContext) -> bool:
+        return context.normalized_row.get("descricao") is not None
+
+    def validate(self, context: ValidationContext) -> list[ValidationIssue]:
+        return [
+            ValidationIssue(
+                code="HAS_DESCRICAO",
+                severity="info",
+                message=str(context.normalized_row.get("descricao")),
+                field="descricao",
+            )
+        ]
+
+
 def _make_tenant(**overrides) -> TenantConfig:
     defaults = {
         "tenant_id": "test",
@@ -126,6 +143,37 @@ def test_validate_row_no_rules():
     assert issues == []
 
 
+def test_validate_row_persists_shared_context_mutations():
+    class SharedContextRule(BaseRule):
+        name: str = "shared_context_rule"
+
+        def applies(self, context: ValidationContext) -> bool:
+            return True
+
+        def validate(self, context: ValidationContext) -> list[ValidationIssue]:
+            context.shared_context["seen_rows"] = context.shared_context.get("seen_rows", 0) + 1
+            return []
+
+    register_rule(SharedContextRule())
+
+    tenant = _make_tenant(enabled_rules=["shared_context_rule"])
+    engine = ValidationEngine(tenant)
+    shared_context: dict[str, int] = {}
+
+    engine.validate_row(
+        row_index=0,
+        normalized_row={"item": "001"},
+        shared_context=shared_context,
+    )
+    engine.validate_row(
+        row_index=1,
+        normalized_row={"item": "002"},
+        shared_context=shared_context,
+    )
+
+    assert shared_context["seen_rows"] == 2
+
+
 def test_validate_all_processes_all_rows():
     register_rule(AlwaysFailRule())
 
@@ -154,6 +202,22 @@ def test_validate_all_normalizes_rows():
     results = engine.validate_all(raw_rows)
 
     assert 0 in results
+
+
+def test_validate_all_uses_tenant_column_mapping():
+    register_rule(RequiresDescricaoRule())
+
+    tenant = _make_tenant(
+        enabled_rules=["requires_descricao"],
+        columns={"descricao": "Espécie"},
+    )
+    engine = ValidationEngine(tenant)
+
+    raw_rows = [{"Espécie": "MESA", "Complemento": "02 tomadas 500x600x800"}]
+    results = engine.validate_all(raw_rows)
+
+    assert results[0][0].code == "HAS_DESCRICAO"
+    assert results[0][0].message == "MESA"
 
 
 def test_validate_row_passes_all_rows_in_context():

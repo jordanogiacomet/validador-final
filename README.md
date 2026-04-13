@@ -93,6 +93,10 @@ categories
 critical checks
 LLM settings
 prompt selection
+
+The `columns` mapping is applied during normalization. This means a tenant can point canonical
+fields to different source headers, such as mapping canonical `descricao` to a source column like
+`Espécie`.
 Validation engine
 
 The engine should:
@@ -269,3 +273,15 @@ The structured report returned by `GET /jobs/{job_id}/result` now includes:
 - `grouped_problems[code][*].descricao`
 
 The PDF report also shows `item` and `descricao` in the duplicates and grouped problems tables.
+
+Tenant Example: RedeSim
+
+The repository now includes a tenant example at `app/tenants/redesim/tenant.yaml` that demonstrates:
+
+- canonical `descricao` sourced from the tenant column `Espécie`
+- species-specific required fields such as `marca`, `modelo`, `complemento`, and `ns`
+- species-specific critical pattern checks such as polegadas, BTUs, portas, canais, and litros
+
+This tenant is intentionally conservative in ambiguous cases from the source matrix: the initial
+configuration encodes the clearest field expectations first and can be expanded safely as the
+organization confirms additional cases.

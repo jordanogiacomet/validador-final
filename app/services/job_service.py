@@ -9,11 +9,13 @@ class JobService:
         self,
         tenant_id: str,
         file_path: str | None = None,
+        file_name: str | None = None,
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> JobRecord:
         job = JobRecord(
             tenant_id=tenant_id,
             file_path=file_path,
+            file_name=file_name,
             params=params or {},
         )
         self._jobs[job.job_id] = job
@@ -55,6 +57,63 @@ class JobService:
     def fail_job(self, job_id: str, error_message: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         job.mark_failed(error_message)
+        return job
+
+    def update_progress(
+        self,
+        job_id: str,
+        current_step: str,
+        status_title: str,
+        status_detail: str,
+    ) -> JobRecord:
+        job = self._get_or_raise(job_id)
+        job.set_progress(
+            current_step=current_step,
+            status_title=status_title,
+            status_detail=status_detail,
+        )
+        return job
+
+    def update_partial_result(
+        self,
+        job_id: str,
+        *,
+        total_rows: int,
+        processed_rows: int,
+        batch_size: int,
+        partial_summary: dict | None = None,
+        partial_grouped_problems: dict | None = None,
+        partial_duplicates: list | None = None,
+        row_results_preview: list | None = None,
+        is_partial_result_available: bool | None = None,
+        current_step: str | None = None,
+        status_title: str | None = None,
+        status_detail: str | None = None,
+    ) -> JobRecord:
+        job = self._get_or_raise(job_id)
+
+        job.set_partial_result(
+            total_rows=total_rows,
+            processed_rows=processed_rows,
+            batch_size=batch_size,
+            partial_summary=partial_summary,
+            partial_grouped_problems=partial_grouped_problems,
+            partial_duplicates=partial_duplicates,
+            row_results_preview=row_results_preview,
+            is_partial_result_available=is_partial_result_available,
+        )
+
+        if (
+            current_step is not None
+            and status_title is not None
+            and status_detail is not None
+        ):
+            job.set_progress(
+                current_step=current_step,
+                status_title=status_title,
+                status_detail=status_detail,
+            )
+
         return job
 
     def _get_or_raise(self, job_id: str) -> JobRecord:

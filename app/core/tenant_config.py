@@ -3,8 +3,11 @@ from pydantic import BaseModel, Field
 
 class CategoryConfig(BaseModel):
     name: str
+    display_name: str = ""
     keywords: list[str] = Field(default_factory=list)
     critical_checks: list[str] = Field(default_factory=list)
+    required_fields: list[str] = Field(default_factory=list)
+    field_help: dict[str, str] = Field(default_factory=dict)
 
 
 class LLMConfig(BaseModel):

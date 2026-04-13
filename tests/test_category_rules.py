@@ -3,6 +3,7 @@ from app.core.registry import RULE_REGISTRY, register_rule
 from app.core.tenant_config import CategoryConfig, TenantConfig
 from app.rules.category_rules import (
     CategoryCriticalCheckRule,
+    CategoryRequiredFieldsRule,
     classify_category,
 )
 
@@ -17,22 +18,57 @@ def teardown_function():
 
 AC_CATEGORY = CategoryConfig(
     name="ar_condicionado",
+    display_name="AR CONDICIONADO",
     keywords=["ar condicionado", "split", "ar-condicionado"],
     critical_checks=["btu_pattern"],
 )
 
 TV_CATEGORY = CategoryConfig(
     name="tv",
+    display_name="TV",
     keywords=["televisor", "tv", "televisão"],
     critical_checks=["inches_pattern"],
 )
 
+SWITCH_CATEGORY = CategoryConfig(
+    name="switch",
+    display_name="SWITCH",
+    keywords=["switch"],
+    critical_checks=["ports_pattern"],
+)
 
-def _make_tenant(categories: list[CategoryConfig] | None = None) -> TenantConfig:
+DVR_CATEGORY = CategoryConfig(
+    name="dvr",
+    display_name="DVR",
+    keywords=["dvr"],
+    critical_checks=["channels_pattern"],
+)
+
+TANK_CATEGORY = CategoryConfig(
+    name="tanque_metalico",
+    display_name="TANQUE METALICO",
+    keywords=["tanque metalico"],
+    critical_checks=["liters_pattern"],
+)
+
+MONITOR_CATEGORY = CategoryConfig(
+    name="monitor",
+    display_name="MONITOR",
+    keywords=["monitor"],
+    required_fields=["marca", "modelo", "complemento"],
+    critical_checks=["inches_pattern"],
+    field_help={"complemento": "LED 19 POL"},
+)
+
+
+def _make_tenant(
+    categories: list[CategoryConfig] | None = None,
+    enabled_rules: list[str] | None = None,
+) -> TenantConfig:
     return TenantConfig(
         tenant_id="test",
         display_name="Test",
-        enabled_rules=["category_critical_check"],
+        enabled_rules=["category_critical_check"] if enabled_rules is None else enabled_rules,
         categories=[AC_CATEGORY, TV_CATEGORY] if categories is None else categories,
     )
 
@@ -69,6 +105,7 @@ def test_classify_category_no_match():
 def test_classify_category_first_match_wins():
     combined = CategoryConfig(
         name="combo",
+        display_name="COMBO",
         keywords=["tv"],
         critical_checks=[],
     )
@@ -107,7 +144,12 @@ def test_applies_false_when_descricao_not_in_any_category():
 
 def test_applies_false_when_category_has_no_critical_checks():
     rule = CategoryCriticalCheckRule()
-    no_checks_cat = CategoryConfig(name="other", keywords=["mesa"], critical_checks=[])
+    no_checks_cat = CategoryConfig(
+        name="other",
+        display_name="OTHER",
+        keywords=["mesa"],
+        critical_checks=[],
+    )
     tenant = _make_tenant(categories=[no_checks_cat])
     ctx = _make_context({"descricao": "Mesa grande"}, tenant=tenant)
     assert rule.applies(ctx) is False
@@ -211,6 +253,34 @@ def test_tv_inches_with_quote_mark():
     assert len(issues) == 0
 
 
+def test_switch_ports_pattern_in_complemento():
+    rule = CategoryCriticalCheckRule()
+    tenant = _make_tenant(categories=[SWITCH_CATEGORY])
+    ctx = _make_context({"descricao": "Switch", "complemento": "24 portas"}, tenant=tenant)
+    issues = rule.validate(ctx)
+    assert issues == []
+
+
+def test_dvr_channels_pattern_missing():
+    rule = CategoryCriticalCheckRule()
+    tenant = _make_tenant(categories=[DVR_CATEGORY])
+    ctx = _make_context({"descricao": "DVR", "complemento": "gravador"}, tenant=tenant)
+    issues = rule.validate(ctx)
+    assert len(issues) == 1
+    assert issues[0].code == "CATEGORY_DVR_CHANNELS_PATTERN_MISSING"
+
+
+def test_tank_liters_pattern_in_complemento():
+    rule = CategoryCriticalCheckRule()
+    tenant = _make_tenant(categories=[TANK_CATEGORY])
+    ctx = _make_context(
+        {"descricao": "Tanque metalico", "complemento": "etanol 1500 l"},
+        tenant=tenant,
+    )
+    issues = rule.validate(ctx)
+    assert issues == []
+
+
 # --- unknown critical check name is silently skipped ---
 
 
@@ -218,6 +288,7 @@ def test_unknown_critical_check_skipped():
     rule = CategoryCriticalCheckRule()
     unknown_cat = CategoryConfig(
         name="custom",
+        display_name="CUSTOM",
         keywords=["custom"],
         critical_checks=["nonexistent_check"],
     )
@@ -270,3 +341,83 @@ def test_none_complemento_and_modelo():
     issues = rule.validate(ctx)
     assert len(issues) == 1
     assert "BTU_PATTERN" in issues[0].code
+
+
+# --- required field rule ---
+
+
+def test_required_fields_rule_applies_when_category_has_required_fields():
+    rule = CategoryRequiredFieldsRule()
+    tenant = _make_tenant(
+        categories=[MONITOR_CATEGORY],
+        enabled_rules=["category_required_fields"],
+    )
+    ctx = _make_context({"descricao": "Monitor LED"}, tenant=tenant)
+    assert rule.applies(ctx) is True
+
+
+def test_required_fields_rule_skips_when_category_has_no_required_fields():
+    rule = CategoryRequiredFieldsRule()
+    tenant = _make_tenant(
+        categories=[TV_CATEGORY],
+        enabled_rules=["category_required_fields"],
+    )
+    ctx = _make_context({"descricao": "Televisor"}, tenant=tenant)
+    assert rule.applies(ctx) is False
+
+
+def test_required_fields_rule_emits_missing_fields_with_help():
+    rule = CategoryRequiredFieldsRule()
+    tenant = _make_tenant(
+        categories=[MONITOR_CATEGORY],
+        enabled_rules=["category_required_fields"],
+    )
+    ctx = _make_context(
+        {"descricao": "Monitor", "marca": "", "modelo": None, "complemento": ""},
+        tenant=tenant,
+    )
+
+    issues = rule.validate(ctx)
+
+    assert [issue.code for issue in issues] == [
+        "CATEGORY_MONITOR_MARCA_REQUIRED",
+        "CATEGORY_MONITOR_MODELO_REQUIRED",
+        "CATEGORY_MONITOR_COMPLEMENTO_REQUIRED",
+    ]
+    assert issues[-1].field == "complemento"
+    assert "LED 19 POL" in issues[-1].message
+
+
+def test_required_fields_rule_passes_when_all_fields_present():
+    rule = CategoryRequiredFieldsRule()
+    tenant = _make_tenant(
+        categories=[MONITOR_CATEGORY],
+        enabled_rules=["category_required_fields"],
+    )
+    ctx = _make_context(
+        {
+            "descricao": "Monitor",
+            "marca": "Dell",
+            "modelo": "P2419H",
+            "complemento": "LED 19 POL",
+        },
+        tenant=tenant,
+    )
+    assert rule.validate(ctx) == []
+
+
+def test_required_fields_engine_integration():
+    from app.core.engine import ValidationEngine
+
+    register_rule(CategoryRequiredFieldsRule())
+    tenant = _make_tenant(
+        categories=[MONITOR_CATEGORY],
+        enabled_rules=["category_required_fields"],
+    )
+    engine = ValidationEngine(tenant=tenant)
+
+    raw_rows = [{"Descrição": "Monitor", "Marca": "", "Modelo": "", "Complemento": ""}]
+    results = engine.validate_all(raw_rows)
+
+    assert len(results[0]) == 3
+    assert results[0][0].severity == "warning"

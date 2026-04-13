@@ -22,14 +22,20 @@ class TestTenantConfig:
             categories=[
                 CategoryConfig(
                     name="ar_condicionado",
+                    display_name="AR CONDICIONADO",
                     keywords=["ar condicionado", "split"],
                     critical_checks=["btu_pattern"],
+                    required_fields=["complemento"],
+                    field_help={"complemento": "capacidade 18000 btus"},
                 )
             ],
         )
         assert len(config.categories) == 1
         assert config.categories[0].name == "ar_condicionado"
+        assert config.categories[0].display_name == "AR CONDICIONADO"
         assert "btu_pattern" in config.categories[0].critical_checks
+        assert "complemento" in config.categories[0].required_fields
+        assert config.categories[0].field_help["complemento"] == "capacidade 18000 btus"
 
     def test_config_with_llm(self) -> None:
         config = TenantConfig(
@@ -59,6 +65,17 @@ class TestTenantLoader:
         assert config.llm.enabled is True
         assert config.thresholds["short_complement_max_words"] == 5
 
+    def test_load_redesim(self) -> None:
+        config = load_tenant_config("redesim")
+        assert config.tenant_id == "redesim"
+        assert config.columns["descricao"] == "Espécie"
+        assert "category_required_fields" in config.enabled_rules
+        assert len(config.categories) > 5
+        monitor = next(cat for cat in config.categories if cat.name == "monitor")
+        assert "complemento" in monitor.required_fields
+        assert "inches_pattern" in monitor.critical_checks
+        assert monitor.field_help["complemento"] == "LED 19 POL"
+
     def test_load_nonexistent_tenant_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             load_tenant_config("nonexistent_tenant_xyz")
@@ -67,6 +84,7 @@ class TestTenantLoader:
         tenants = list_tenants()
         assert "default" in tenants
         assert "empresa_exemplo" in tenants
+        assert "redesim" in tenants
 
     def test_default_tenant_has_columns(self) -> None:
         config = load_default_tenant_config()

@@ -30,12 +30,13 @@ class ValidationEngine:
         all_rows: list[dict[str, str | int | float | None]] | None = None,
         shared_context: dict | None = None,
     ) -> list[ValidationIssue]:
+        source_shared_context = shared_context if shared_context is not None else {}
         context = ValidationContext(
             tenant=self.tenant,
             row_index=row_index,
             normalized_row=normalized_row,
             all_rows=all_rows or [],
-            shared_context=shared_context or {},
+            shared_context=source_shared_context,
         )
 
         issues: list[ValidationIssue] = []
@@ -44,13 +45,19 @@ class ValidationEngine:
             if rule.applies(context):
                 issues.extend(rule.validate(context))
 
+        if shared_context is not None:
+            shared_context.clear()
+            shared_context.update(context.shared_context)
+
         return issues
 
     def validate_all(
         self,
         raw_rows: list[dict[str, object]],
     ) -> dict[int, list[ValidationIssue]]:
-        normalized_rows = [normalize_row(row) for row in raw_rows]
+        normalized_rows = [
+            normalize_row(row, self.tenant.columns) for row in raw_rows
+        ]
 
         shared_context: dict = {}
 
