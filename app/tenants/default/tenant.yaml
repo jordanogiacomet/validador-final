@@ -13,7 +13,10 @@ columns:
   complemento: Complemento
   observacao: Observação
 
-enabled_rules: []
+enabled_rules:
+  - duplicate_item
+  - flag_consistency
+  - zero_item_quality
 
 disabled_rules: []
 

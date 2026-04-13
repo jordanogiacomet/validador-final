@@ -88,7 +88,9 @@ class TestDuplicateItemRule:
         rule.validate(ctx0)
         assert "_duplicate_item_counts" in ctx0.shared_context
 
-        ctx1 = _make_context(rows[1], all_rows=rows, row_index=1, shared_context=ctx0.shared_context)
+        ctx1 = _make_context(
+            rows[1], all_rows=rows, row_index=1, shared_context=ctx0.shared_context
+        )
         issues = rule.validate(ctx1)
         assert len(issues) == 1
 
