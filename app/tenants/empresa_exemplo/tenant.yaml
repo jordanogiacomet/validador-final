@@ -17,6 +17,7 @@ enabled_rules:
   - duplicate_item
   - flag_consistency
   - zero_item_quality
+  - category_critical_check
 
 disabled_rules: []
 
