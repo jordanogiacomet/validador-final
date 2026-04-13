@@ -1,0 +1,74 @@
+import pytest
+
+from app.core.tenant_config import CategoryConfig, LLMConfig, TenantConfig
+from app.core.tenant_loader import list_tenants, load_default_tenant_config, load_tenant_config
+
+
+class TestTenantConfig:
+    def test_minimal_config(self) -> None:
+        config = TenantConfig(tenant_id="test", display_name="Test")
+        assert config.tenant_id == "test"
+        assert config.columns == {}
+        assert config.enabled_rules == []
+        assert config.disabled_rules == []
+        assert config.thresholds == {}
+        assert config.categories == []
+        assert config.llm.enabled is False
+
+    def test_config_with_categories(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            categories=[
+                CategoryConfig(
+                    name="ar_condicionado",
+                    keywords=["ar condicionado", "split"],
+                    critical_checks=["btu_pattern"],
+                )
+            ],
+        )
+        assert len(config.categories) == 1
+        assert config.categories[0].name == "ar_condicionado"
+        assert "btu_pattern" in config.categories[0].critical_checks
+
+    def test_config_with_llm(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            llm=LLMConfig(enabled=True, model="claude-sonnet-4-20250514"),
+        )
+        assert config.llm.enabled is True
+        assert config.llm.model == "claude-sonnet-4-20250514"
+
+
+class TestTenantLoader:
+    def test_load_default_tenant(self) -> None:
+        config = load_default_tenant_config()
+        assert config.tenant_id == "default"
+        assert config.display_name == "Default Tenant"
+        assert config.llm.enabled is False
+
+    def test_load_default_by_id(self) -> None:
+        config = load_tenant_config("default")
+        assert config.tenant_id == "default"
+
+    def test_load_empresa_exemplo(self) -> None:
+        config = load_tenant_config("empresa_exemplo")
+        assert config.tenant_id == "empresa_exemplo"
+        assert len(config.categories) == 2
+        assert config.llm.enabled is True
+        assert config.thresholds["short_complement_max_words"] == 5
+
+    def test_load_nonexistent_tenant_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_tenant_config("nonexistent_tenant_xyz")
+
+    def test_list_tenants(self) -> None:
+        tenants = list_tenants()
+        assert "default" in tenants
+        assert "empresa_exemplo" in tenants
+
+    def test_default_tenant_has_columns(self) -> None:
+        config = load_default_tenant_config()
+        assert config.columns["item"] == "Item"
+        assert config.columns["placa_anterior"] == "Placa Anterior"

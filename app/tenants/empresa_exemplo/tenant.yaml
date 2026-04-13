@@ -1,0 +1,48 @@
+tenant_id: empresa_exemplo
+display_name: Empresa Exemplo
+
+columns:
+  item: Item
+  placa_anterior: Placa Anterior
+  descricao: Descrição
+  marca: Marca
+  modelo: Modelo
+  ns: NS
+  local: Local
+  cc: CC
+  complemento: Complemento
+  observacao: Observação
+
+enabled_rules:
+  - duplicate_item
+  - flag_consistency
+  - zero_item_quality
+
+disabled_rules: []
+
+thresholds:
+  short_complement_max_words: 5
+
+categories:
+  - name: ar_condicionado
+    keywords:
+      - ar condicionado
+      - split
+      - ar-condicionado
+    critical_checks:
+      - btu_pattern
+
+  - name: tv
+    keywords:
+      - televisor
+      - tv
+      - televisão
+    critical_checks:
+      - inches_pattern
+
+llm:
+  enabled: true
+  model: claude-sonnet-4-20250514
+  temperature: 0.0
+  max_tokens: 1024
+  prompt_file: prompts/audit.txt
