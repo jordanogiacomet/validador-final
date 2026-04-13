@@ -77,7 +77,7 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Engine must be tenant-aware through configuration, not branching logic."
     },
     {
