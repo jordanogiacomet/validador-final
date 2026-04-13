@@ -16,6 +16,8 @@ Last Updated: 2026-04-13 00:00 BRT
 - Preserve the distinction between collected items and zero-created items as a core domain concept.
 - Use `progress.txt` to record assumptions, gotchas, and reusable learnings for future iterations.
 - Only mark a story as passed when implementation is complete and quality checks pass.
+- Quality gates are: `ruff check app/` (lint) and `pytest app/tests/` (tests). No mypy/pyright installed.
+- Run `ruff check --fix app/` to auto-fix import sorting issues before committing.
 
 ---
 
@@ -66,4 +68,21 @@ Expected architectural direction:
 - Do not scatter tenant names through the validation core.
 - Avoid refactoring unrelated areas during early foundation stories.
 
+---
+
+## 2026-04-13 - US-001
+- Implemented canonical inventory domain model in `app/core/canonical_fields.py`
+- Added `CanonicalInventoryRow` Pydantic model with all 10 canonical fields and 2 derived flags
+- Added `derive_flags(placa_anterior)` to compute `flag_item_coletado` and `flag_item_cadastrado_do_zero`
+- Added `CANONICAL_FIELD_MAP` for display-name-to-attribute mapping
+- Added `normalize_row()` to convert raw input rows to canonical form with derived flags
+- Documented collected item vs zero-created item semantics in model docstring
+- Added `pyyaml` dependency to `pyproject.toml` (was missing for tenant_loader)
+- Fixed ruff import sorting in 3 files
+- Files changed: `app/core/canonical_fields.py`, `pyproject.toml`, `.gitignore`
+- **Learnings for future iterations:**
+  - The project had no type checker (mypy/pyright) installed; ruff lint + pytest are the quality gates
+  - `pyyaml` was missing from dependencies despite `tenant_loader.py` importing yaml
+  - Ruff auto-fix (`--fix`) handles import sorting cleanly
+  - The `.gitignore` was empty at project start; populated it with Python defaults
 ---
