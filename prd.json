@@ -63,7 +63,7 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Do not scatter tenant-specific if statements across the codebase."
     },
     {

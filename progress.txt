@@ -18,6 +18,8 @@ Last Updated: 2026-04-13 00:00 BRT
 - Only mark a story as passed when implementation is complete and quality checks pass.
 - Quality gates are: `ruff check app/` (lint) and `pytest app/tests/` (tests). No mypy/pyright installed.
 - Run `ruff check --fix app/` to auto-fix import sorting issues before committing.
+- Use `Path(__file__).resolve().parent` for module-relative paths instead of hardcoded relative paths.
+- Tenant configs use typed Pydantic sub-models (`CategoryConfig`, `LLMConfig`) — keep them in `app/core/tenant_config.py`.
 
 ---
 
@@ -85,4 +87,18 @@ Expected architectural direction:
   - `pyyaml` was missing from dependencies despite `tenant_loader.py` importing yaml
   - Ruff auto-fix (`--fix`) handles import sorting cleanly
   - The `.gitignore` was empty at project start; populated it with Python defaults
+---
+
+## 2026-04-13 - US-002
+- Enhanced `TenantConfig` with typed `CategoryConfig` and `LLMConfig` sub-models instead of raw dicts
+- Added `DEFAULT_TENANT_ID` constant and `load_default_tenant_config()` helper
+- Added `list_tenants()` to discover available tenant configurations
+- Changed `TENANTS_DIR` to use `Path(__file__).resolve()` for reliable path resolution
+- Created `empresa_exemplo` seed tenant with categories (ar_condicionado, tv), critical checks, and LLM enabled
+- Added comprehensive tests in `tests/test_tenant.py` covering config construction, loading, default fallback, error case, and listing
+- Files changed: `app/core/tenant_config.py`, `app/core/tenant_loader.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `tests/test_tenant.py`
+- **Learnings for future iterations:**
+  - Use `Path(__file__).resolve().parent` for tenant directory paths to avoid CWD-dependent path issues
+  - Categories and LLM settings should use typed Pydantic sub-models, not raw dicts, for validation safety
+  - The `tests/` directory is at root level (not `app/tests/`) per `pyproject.toml` `testpaths` config, but `app/tests/` also exists with the health test
 ---
