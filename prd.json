@@ -138,7 +138,7 @@
         "Typecheck passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Prompt and model settings must be tenant-configurable."
     },
     {
@@ -153,7 +153,7 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "This should keep the current job-oriented processing idea while making it tenant-aware."
     },
     {

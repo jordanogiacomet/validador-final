@@ -24,6 +24,8 @@ Last Updated: 2026-04-13 00:00 BRT
 - Use `register_rule()` from `app.core.registry` to add rules; the engine resolves them by name from `TenantConfig.enabled_rules`.
 - Pydantic v2 copies dict values on model construction — pass shared_context between ValidationContext instances explicitly for cross-row caching.
 - Cross-row rules (e.g., duplicate detection) should cache computed data in `shared_context` to avoid re-computing per row.
+- Use Protocol-based abstractions for external service clients (e.g., LLM) to enable testability without mocking internals.
+- Tenant-specific prompt files live under `app/tenants/{tenant_id}/prompts/`; reference via `prompt_file` in tenant YAML.
 
 ---
 
@@ -160,4 +162,38 @@ Expected architectural direction:
   - Pattern search spans Descrição + Complemento + Modelo concatenated, so the pattern can appear in any of those fields
   - When using `x or default` with lists, remember empty list `[]` is falsy — use `if x is None` instead
   - Category classification is a simple keyword substring match; no NLP or fuzzy matching needed at this stage
+---
+
+## 2026-04-13 - US-007
+- Implemented `LLMAuditRule` in `app/rules/llm_audit.py` — optional LLM-based semantic audit for zero-created items
+- LLM audit is configurable per tenant via `LLMConfig` (model, temperature, max_tokens, prompt_file)
+- Rule only applies when `llm.enabled=true` AND `flag_item_cadastrado_do_zero=1`
+- Prompt template loaded from tenant-specific file (e.g., `prompts/audit.txt`), formatted with row fields
+- LLM response parsed via regex JSON extraction, normalized into structured `ValidationIssue` findings
+- All LLM failures (timeouts, API errors, missing prompts) captured as severity=warning issues, never crash
+- `LLMClient` protocol allows easy mocking; `AnthropicLLMClient` wraps the real SDK
+- Created prompt template at `app/tenants/empresa_exemplo/prompts/audit.txt`
+- Enabled `llm_audit` rule in empresa_exemplo tenant config
+- 21 tests in `tests/test_llm_audit.py` covering: applies logic, response parsing, normalization, prompt formatting, validate with mock client, failure handling, prompt not found, engine integration
+- Files changed: `app/rules/llm_audit.py`, `tests/test_llm_audit.py`, `app/tenants/empresa_exemplo/prompts/audit.txt`, `app/tenants/empresa_exemplo/tenant.yaml`
+- **Learnings for future iterations:**
+  - Use Protocol-based client abstraction for external service dependencies to enable easy testing without mocking internals
+  - LLM response parsing should be defensive — regex extract JSON array, handle malformed JSON gracefully
+  - Prompt files live under tenant directories (e.g., `app/tenants/{tenant_id}/prompts/`) for tenant-specific customization
+  - The `anthropic` package is not in dependencies (optional) — AnthropicLLMClient imports it lazily to avoid import errors when LLM is disabled
+---
+
+## 2026-04-13 - US-008
+- Implemented `JobRecord` model in `app/core/job.py` with full status lifecycle (queued → running → completed/failed)
+- `JobStatus` uses `StrEnum` for clean serialization; `JobRecord` persists file_path, result_path, report_path, counters, params, and tenant_id
+- State transitions enforced via `transition_to()` with explicit valid-transition map; invalid transitions raise `ValueError`
+- Convenience methods: `mark_running()`, `mark_completed()`, `mark_failed()`
+- Implemented `JobService` in `app/services/job_service.py` — in-memory job store with create, get, list (filterable by tenant), start, complete, fail
+- 26 tests in `tests/test_job.py` covering: default status, ID generation, tenant persistence, file/params persistence, all valid transitions, invalid transitions (completed→running, failed→running, queued→completed), updated_at changes, full lifecycle, service CRUD, tenant filtering, nonexistent job errors
+- Files changed: `app/core/job.py`, `app/services/job_service.py`, `tests/test_job.py`
+- **Learnings for future iterations:**
+  - Use `StrEnum` instead of `str, Enum` inheritance — ruff UP042 enforces this
+  - Use `datetime.UTC` alias instead of `timezone.utc` — ruff UP017 enforces this
+  - In-memory job storage is sufficient for now; can be swapped for persistent storage later without changing the service interface
+  - Job state machine pattern: define valid transitions as a dict, enforce in a single `transition_to()` method
 ---
