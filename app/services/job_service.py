@@ -41,6 +41,7 @@ class JobService:
         result_path: str | None = None,
         report_path: str | None = None,
         total_rows: int = 0,
+        source_total_rows: int | None = None,
         rows_with_issues: int = 0,
         total_issues: int = 0,
     ) -> JobRecord:
@@ -49,6 +50,7 @@ class JobService:
             result_path=result_path,
             report_path=report_path,
             total_rows=total_rows,
+            source_total_rows=source_total_rows,
             rows_with_issues=rows_with_issues,
             total_issues=total_issues,
         )
@@ -79,6 +81,7 @@ class JobService:
         job_id: str,
         *,
         total_rows: int,
+        source_total_rows: int | None = None,
         processed_rows: int,
         batch_size: int,
         partial_summary: dict | None = None,
@@ -94,6 +97,7 @@ class JobService:
 
         job.set_partial_result(
             total_rows=total_rows,
+            source_total_rows=source_total_rows,
             processed_rows=processed_rows,
             batch_size=batch_size,
             partial_summary=partial_summary,

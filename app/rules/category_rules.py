@@ -19,6 +19,14 @@ CRITICAL_CHECK_PATTERNS: dict[str, re.Pattern[str]] = {
     "liters_pattern": LITERS_PATTERN,
 }
 
+CRITICAL_CHECK_LABELS: dict[str, str] = {
+    "btu_pattern": "capacidade em BTU",
+    "inches_pattern": "polegadas",
+    "ports_pattern": "quantidade de portas",
+    "channels_pattern": "quantidade de canais",
+    "liters_pattern": "capacidade em litros",
+}
+
 FIELD_LABELS: dict[str, str] = {
     "item": "Item",
     "placa_anterior": "Placa Anterior",
@@ -61,6 +69,10 @@ def get_category_label(category: CategoryConfig) -> str:
     return category.name.replace("_", " ").upper()
 
 
+def get_critical_check_label(check_name: str) -> str:
+    return CRITICAL_CHECK_LABELS.get(check_name, "detalhe técnico obrigatório")
+
+
 class CategoryCriticalCheckRule(BaseRule):
     name: str = "category_critical_check"
 
@@ -87,13 +99,14 @@ class CategoryCriticalCheckRule(BaseRule):
                 continue
             if not pattern.search(searchable_text):
                 category_label = get_category_label(cat)
+                requirement_label = get_critical_check_label(check_name)
                 issues.append(
                     ValidationIssue(
                         code=f"CATEGORY_{cat.name.upper()}_{check_name.upper()}_MISSING",
                         severity="error",
                         message=(
-                            f"Categoria '{category_label}': padrão '{check_name}' não encontrado"
-                            f" em Descrição/Complemento/Modelo"
+                            f"Espécie '{category_label}': informar {requirement_label}"
+                            " em Descrição, Complemento ou Modelo"
                         ),
                         field="descricao",
                     )

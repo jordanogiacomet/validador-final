@@ -22,6 +22,7 @@ class JobRecord(BaseModel):
     result_path: str | None = None
     report_path: str | None = None
     total_rows: int = 0
+    source_total_rows: int = 0
     rows_with_issues: int = 0
     total_issues: int = 0
     processed_rows: int = 0
@@ -70,6 +71,7 @@ class JobRecord(BaseModel):
         result_path: str | None = None,
         report_path: str | None = None,
         total_rows: int = 0,
+        source_total_rows: int | None = None,
         rows_with_issues: int = 0,
         total_issues: int = 0,
     ) -> None:
@@ -79,6 +81,8 @@ class JobRecord(BaseModel):
         if report_path is not None:
             self.report_path = report_path
         self.total_rows = total_rows
+        if source_total_rows is not None:
+            self.source_total_rows = source_total_rows
         self.rows_with_issues = rows_with_issues
         self.total_issues = total_issues
         self.processed_rows = total_rows
@@ -107,6 +111,7 @@ class JobRecord(BaseModel):
         self,
         *,
         total_rows: int,
+        source_total_rows: int | None = None,
         processed_rows: int,
         batch_size: int,
         partial_summary: dict[str, Any] | None = None,
@@ -116,6 +121,8 @@ class JobRecord(BaseModel):
         is_partial_result_available: bool | None = None,
     ) -> None:
         self.total_rows = total_rows
+        if source_total_rows is not None:
+            self.source_total_rows = source_total_rows
         self.processed_rows = processed_rows
         self.batch_size = batch_size
 

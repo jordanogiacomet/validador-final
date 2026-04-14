@@ -218,6 +218,8 @@ def test_tv_missing_inches_pattern():
     issues = rule.validate(ctx)
     assert len(issues) == 1
     assert issues[0].code == "CATEGORY_TV_INCHES_PATTERN_MISSING"
+    assert "polegadas" in issues[0].message
+    assert "inches_pattern" not in issues[0].message
 
 
 def test_tv_inches_in_complemento():
@@ -268,6 +270,8 @@ def test_dvr_channels_pattern_missing():
     issues = rule.validate(ctx)
     assert len(issues) == 1
     assert issues[0].code == "CATEGORY_DVR_CHANNELS_PATTERN_MISSING"
+    assert "quantidade de canais" in issues[0].message
+    assert "channels_pattern" not in issues[0].message
 
 
 def test_tank_liters_pattern_in_complemento():

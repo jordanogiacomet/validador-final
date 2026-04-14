@@ -56,6 +56,14 @@ FIELD_LABELS: dict[str, str] = {
     "observacao": "Observação",
 }
 
+CATEGORY_CRITICAL_CHECK_LABELS: dict[str, str] = {
+    "btu_pattern": "capacidade em BTU",
+    "inches_pattern": "polegadas",
+    "ports_pattern": "quantidade de portas",
+    "channels_pattern": "quantidade de canais",
+    "liters_pattern": "capacidade em litros",
+}
+
 
 def _get_row_metadata(
     normalized_rows: list[RowType],
@@ -142,6 +150,65 @@ def _normalize_metadata(metadata: ReportMetadata | None) -> ReportMetadata:
     }
 
 
+def _build_scope_note(summary: dict[str, int]) -> str:
+    source_total_rows = summary.get("source_total_rows", summary["total_rows"])
+    if source_total_rows != summary["total_rows"]:
+        return (
+            "Somente itens cadastrados do zero entraram no resultado operacional. "
+            f"Arquivo com {source_total_rows} linhas."
+        )
+
+    return "Todas as linhas lidas entraram no escopo validado deste lote."
+
+
+def _humanize_category_name(category_token: str) -> str:
+    return category_token.replace("_", " ").upper()
+
+
+def _parse_category_required_issue(code: str) -> dict[str, str] | None:
+    if not (code.startswith("CATEGORY_") and code.endswith("_REQUIRED")):
+        return None
+
+    for field_name, field_label in FIELD_LABELS.items():
+        suffix = f"_{field_name.upper()}_REQUIRED"
+        if not code.endswith(suffix):
+            continue
+
+        category_token = code[len("CATEGORY_") : -len(suffix)]
+        if not category_token:
+            return None
+
+        return {
+            "category_label": _humanize_category_name(category_token),
+            "field_name": field_name,
+            "field_label": field_label,
+        }
+
+    return None
+
+
+def _parse_category_critical_issue(code: str) -> dict[str, str] | None:
+    if not (code.startswith("CATEGORY_") and code.endswith("_MISSING")):
+        return None
+
+    for check_name, requirement_label in CATEGORY_CRITICAL_CHECK_LABELS.items():
+        suffix = f"_{check_name.upper()}_MISSING"
+        if not code.endswith(suffix):
+            continue
+
+        category_token = code[len("CATEGORY_") : -len(suffix)]
+        if not category_token:
+            return None
+
+        return {
+            "category_label": _humanize_category_name(category_token),
+            "check_name": check_name,
+            "requirement_label": requirement_label,
+        }
+
+    return None
+
+
 def _describe_issue(code: str) -> dict[str, str]:
     if code == "DUPLICATE_ITEM":
         return {
@@ -219,37 +286,43 @@ def _describe_issue(code: str) -> dict[str, str]:
             ),
         }
 
-    if code.startswith("CATEGORY_") and code.endswith("_REQUIRED"):
+    category_required = _parse_category_required_issue(code)
+    if category_required is not None:
+        category_label = category_required["category_label"]
+        field_label = category_required["field_label"]
         return {
-            "title": "Campo esperado da espécie não preenchido",
+            "title": f"{category_label}: preencher {field_label}",
             "context": (
-                "Para esta espécie de bem, a organização exige um campo mínimo "
-                "para identificar o ativo com segurança."
+                f"Itens classificados como {category_label} precisam preencher "
+                f"{field_label} para identificação patrimonial adequada."
             ),
             "impact": (
-                "Sem esse campo, o registro continua operacionalmente fraco e "
-                "depende de interpretação manual para ser validado."
+                f"Sem {field_label}, o registro continua fraco para conferência "
+                "operacional e exige interpretação manual adicional."
             ),
             "action": (
-                "Preencha o campo destacado seguindo o padrão patrimonial usado "
-                "para essa espécie de bem."
+                f"Preencha {field_label} seguindo o padrão patrimonial adotado "
+                f"para itens da espécie {category_label}."
             ),
         }
 
-    if code.startswith("CATEGORY_"):
+    category_critical = _parse_category_critical_issue(code)
+    if category_critical is not None:
+        category_label = category_critical["category_label"]
+        requirement_label = category_critical["requirement_label"]
         return {
-            "title": "Informação crítica da espécie ausente",
+            "title": f"{category_label}: informar {requirement_label}",
             "context": (
-                "A classificação do bem exige um detalhe técnico mínimo, mas esse "
-                "padrão não foi encontrado nos campos avaliados."
+                f"Itens da espécie {category_label} precisam trazer "
+                f"{requirement_label} em Descrição, Complemento ou Modelo."
             ),
             "impact": (
-                "A linha avança com identificação incompleta e exige verificação "
-                "manual adicional para conciliação."
+                "Sem esse detalhe técnico, a identificação do bem fica incompleta "
+                "e a conciliação patrimonial exige verificação manual adicional."
             ),
             "action": (
-                "Inclua a característica técnica obrigatória no campo indicado, "
-                "como BTU, polegadas ou outro atributo essencial."
+                f"Inclua {requirement_label} em Descrição, Complemento ou Modelo, "
+                "conforme o padrão de cadastro usado para essa espécie."
             ),
         }
 
@@ -566,6 +639,16 @@ def _build_report_banner(
     styles: dict[str, ParagraphStyle],
 ) -> Table:
     clean_rows = max(summary["total_rows"] - summary["rows_with_issues"], 0)
+    banner_copy = (
+        f"{summary['error_count']} erros  •  {summary['warning_count']} avisos"
+        f"  •  {clean_rows} linhas em escopo sem ação"
+    )
+    source_total_rows = summary.get("source_total_rows", summary["total_rows"])
+    if source_total_rows != summary["total_rows"]:
+        banner_copy = (
+            f"{banner_copy}  •  escopo operacional: {summary['total_rows']} de "
+            f"{source_total_rows} linhas do arquivo"
+        )
 
     left_content = [
         _paragraph("RELATÓRIO OPERACIONAL", styles["hero_label"]),
@@ -582,16 +665,10 @@ def _build_report_banner(
     right_content = [
         _paragraph("VEREDITO DO LOTE", styles["hero_metric_label"]),
         _paragraph(
-            f"{summary['rows_with_issues']} linhas com revisão",
+            f"{summary['rows_with_issues']} linhas em escopo com revisão",
             styles["hero_metric_value"],
         ),
-        _paragraph(
-            (
-                f"{summary['error_count']} erros  •  {summary['warning_count']} avisos"
-                f"  •  {clean_rows} linhas sem ação"
-            ),
-            styles["hero_metric_copy"],
-        ),
+        _paragraph(banner_copy, styles["hero_metric_copy"]),
     ]
 
     banner = Table([[left_content, right_content]], colWidths=[334, 164])
@@ -653,9 +730,9 @@ def _build_summary_grid(
     clean_rows = max(summary["total_rows"] - summary["rows_with_issues"], 0)
     cards = [
         _metric_card(
-            "Linhas lidas",
+            "Linhas validadas",
             summary["total_rows"],
-            "Total de registros processados no lote atual.",
+            _build_scope_note(summary),
             styles,
             ACCENT,
         ),
@@ -716,8 +793,21 @@ def _build_verdict_panel(
     styles: dict[str, ParagraphStyle],
 ) -> Table:
     duplicate_count = len(duplicates)
+    source_total_rows = summary.get("source_total_rows", summary["total_rows"])
 
-    if summary["error_count"] > 0:
+    if summary["total_rows"] == 0:
+        title = "Nenhum item cadastrado do zero entrou no escopo operacional."
+        body = (
+            "O arquivo foi lido normalmente, mas nenhuma linha tinha "
+            "flag_item_cadastrado_do_zero = 1. Por isso, o resultado validado "
+            "não traz pendências operacionais."
+        )
+        highlight_label = "Itens em escopo"
+        highlight_value = 0
+        highlight_copy = f"Arquivo com {source_total_rows} linhas."
+        highlight_color = SUCCESS
+        highlight_bg = SUCCESS_SOFT
+    elif summary["error_count"] > 0:
         title = "Prioridade imediata: tratar erros antes do próximo reenvio."
         body = (
             "Os erros afetam consistência, identificação ou regras críticas do lote. "
@@ -746,8 +836,8 @@ def _build_verdict_panel(
             "como artefato institucional de conferências e registro."
         )
         highlight_label = "Lote liberado"
-        highlight_value = max(summary["total_rows"], 1)
-        highlight_copy = "Registros processados sem pendências."
+        highlight_value = summary["total_rows"]
+        highlight_copy = "Registros em escopo processados sem pendências."
         highlight_color = SUCCESS
         highlight_bg = SUCCESS_SOFT
 
@@ -883,7 +973,7 @@ def _build_problem_header(
             [
                 _paragraph(guide["title"], styles["problem_title"]),
                 _paragraph(
-                    f"{code} • {len(occurrences)} ocorrência(s) no lote atual",
+                    f"{len(occurrences)} ocorrência(s) no escopo validado",
                     styles["problem_meta"],
                 ),
             ],
@@ -991,21 +1081,27 @@ def _build_occurrences_table(
     return table
 
 
-def _build_clean_panel(styles: dict[str, ParagraphStyle]) -> Table:
+def _build_clean_panel(summary: dict[str, int], styles: dict[str, ParagraphStyle]) -> Table:
+    source_total_rows = summary.get("source_total_rows", summary["total_rows"])
+    title = "Nenhuma correção foi exigida neste processamento."
+    body = (
+        "O arquivo passou pela validação sem apontamentos abertos. "
+        "Use este PDF como artefato institucional de conferência e registro."
+    )
+
+    if summary["total_rows"] == 0 and source_total_rows > 0:
+        title = "Nenhum item cadastrado do zero entrou no escopo operacional."
+        body = (
+            "O arquivo foi lido normalmente, mas nenhuma linha tinha "
+            "flag_item_cadastrado_do_zero = 1. Este PDF registra que não houve "
+            "itens em escopo para consolidar no resultado operacional."
+        )
+
     panel = Table(
         [[[
             _paragraph("LOTE SEM PENDÊNCIAS", styles["detail_title"]),
-            _paragraph(
-                "Nenhuma correção foi exigida neste processamento.",
-                styles["verdict_title"],
-            ),
-            _paragraph(
-                (
-                    "O arquivo passou pela validação sem apontamentos abertos. "
-                    "Use este PDF como artefato institucional de conferência e registro."
-                ),
-                styles["verdict_body"],
-            ),
+            _paragraph(title, styles["verdict_title"]),
+            _paragraph(body, styles["verdict_body"]),
         ]]],
         colWidths=[498],
     )
@@ -1044,10 +1140,13 @@ def build_row_results(
 def build_duplicate_section(
     normalized_rows: list[RowType],
     validation_results: ValidationResults,
+    row_indices: list[int] | None = None,
 ) -> list[dict]:
     _ = validation_results
     item_rows: dict[object, list[int]] = defaultdict(list)
-    for idx, row in enumerate(normalized_rows):
+    indices = row_indices if row_indices is not None else list(range(len(normalized_rows)))
+    for idx in indices:
+        row = normalized_rows[idx]
         item_value = row.get("item")
         if item_value is not None:
             item_rows[item_value].append(idx)
@@ -1087,38 +1186,71 @@ def build_grouped_problems(
     return dict(grouped)
 
 
-def build_partial_report(
+def _resolve_validated_row_indices(
     normalized_rows: list[RowType],
+    validated_row_indices: list[int] | None,
+) -> list[int]:
+    if validated_row_indices is not None:
+        return list(validated_row_indices)
+    return list(range(len(normalized_rows)))
+
+
+def _build_summary_payload(
     validation_results: ValidationResults,
-    processed_row_indices: list[int],
-    partial_duplicates: list[dict] | None = None,
-) -> dict:
-    total_rows = len(normalized_rows)
-    processed_rows = len(processed_row_indices)
-    rows_with_issues = sum(
-        1 for idx in processed_row_indices if validation_results.get(idx)
-    )
-    total_issues = sum(
-        len(validation_results.get(idx, [])) for idx in processed_row_indices
-    )
+    row_indices: list[int],
+    *,
+    total_validated_rows: int,
+    source_total_rows: int,
+    processed_rows: int | None = None,
+) -> dict[str, int]:
+    rows_with_issues = sum(1 for idx in row_indices if validation_results.get(idx))
+    total_issues = sum(len(validation_results.get(idx, [])) for idx in row_indices)
     error_count = sum(
         1
-        for idx in processed_row_indices
+        for idx in row_indices
         for issue in validation_results.get(idx, [])
         if issue.severity == "error"
     )
     warning_count = total_issues - error_count
 
+    summary = {
+        "total_rows": total_validated_rows,
+        "validated_rows": total_validated_rows,
+        "source_total_rows": source_total_rows,
+        "rows_with_issues": rows_with_issues,
+        "total_issues": total_issues,
+        "error_count": error_count,
+        "warning_count": warning_count,
+    }
+    if processed_rows is not None:
+        summary["processed_rows"] = processed_rows
+
+    return summary
+
+
+def build_partial_report(
+    normalized_rows: list[RowType],
+    validation_results: ValidationResults,
+    processed_row_indices: list[int],
+    partial_duplicates: list[dict] | None = None,
+    validated_row_indices: list[int] | None = None,
+    source_total_rows: int | None = None,
+) -> dict:
+    validated_indices = _resolve_validated_row_indices(
+        normalized_rows, validated_row_indices
+    )
+    source_total_rows = (
+        len(normalized_rows) if source_total_rows is None else source_total_rows
+    )
     ordered_indices = sorted(processed_row_indices)
     return {
-        "partial_summary": {
-            "total_rows": total_rows,
-            "processed_rows": processed_rows,
-            "rows_with_issues": rows_with_issues,
-            "total_issues": total_issues,
-            "error_count": error_count,
-            "warning_count": warning_count,
-        },
+        "partial_summary": _build_summary_payload(
+            validation_results,
+            ordered_indices,
+            total_validated_rows=len(validated_indices),
+            source_total_rows=source_total_rows,
+            processed_rows=len(ordered_indices),
+        ),
         "row_results_preview": build_row_results(
             normalized_rows,
             validation_results,
@@ -1129,36 +1261,50 @@ def build_partial_report(
             validation_results,
             row_indices=ordered_indices,
         ),
-        "partial_duplicates": partial_duplicates or [],
+        "partial_duplicates": partial_duplicates
+        or build_duplicate_section(
+            normalized_rows,
+            validation_results,
+            row_indices=validated_indices,
+        ),
     }
 
 
 def build_full_report(
     normalized_rows: list[RowType],
     validation_results: ValidationResults,
+    validated_row_indices: list[int] | None = None,
+    source_total_rows: int | None = None,
 ) -> dict:
-    total_rows = len(normalized_rows)
-    rows_with_issues = sum(1 for idx in range(total_rows) if validation_results.get(idx))
-    total_issues = sum(len(issues) for issues in validation_results.values())
-    error_count = sum(
-        1
-        for issues in validation_results.values()
-        for issue in issues
-        if issue.severity == "error"
+    validated_indices = _resolve_validated_row_indices(
+        normalized_rows, validated_row_indices
     )
-    warning_count = total_issues - error_count
+    source_total_rows = (
+        len(normalized_rows) if source_total_rows is None else source_total_rows
+    )
 
     return {
-        "summary": {
-            "total_rows": total_rows,
-            "rows_with_issues": rows_with_issues,
-            "total_issues": total_issues,
-            "error_count": error_count,
-            "warning_count": warning_count,
-        },
-        "row_results": build_row_results(normalized_rows, validation_results),
-        "duplicates": build_duplicate_section(normalized_rows, validation_results),
-        "grouped_problems": build_grouped_problems(normalized_rows, validation_results),
+        "summary": _build_summary_payload(
+            validation_results,
+            validated_indices,
+            total_validated_rows=len(validated_indices),
+            source_total_rows=source_total_rows,
+        ),
+        "row_results": build_row_results(
+            normalized_rows,
+            validation_results,
+            row_indices=validated_indices,
+        ),
+        "duplicates": build_duplicate_section(
+            normalized_rows,
+            validation_results,
+            row_indices=validated_indices,
+        ),
+        "grouped_problems": build_grouped_problems(
+            normalized_rows,
+            validation_results,
+            row_indices=validated_indices,
+        ),
     }
 
 
@@ -1167,9 +1313,16 @@ def generate_pdf_report(
     validation_results: ValidationResults,
     output_path: str | Path,
     metadata: ReportMetadata | None = None,
+    validated_row_indices: list[int] | None = None,
+    source_total_rows: int | None = None,
 ) -> Path:
     output_path = Path(output_path)
-    report_data = build_full_report(normalized_rows, validation_results)
+    report_data = build_full_report(
+        normalized_rows,
+        validation_results,
+        validated_row_indices=validated_row_indices,
+        source_total_rows=source_total_rows,
+    )
     summary = report_data["summary"]
     duplicates = report_data["duplicates"]
     grouped_problems = report_data["grouped_problems"]
@@ -1245,7 +1398,7 @@ def generate_pdf_report(
     sorted_groups = _sorted_problem_groups(grouped_problems)
     if not sorted_groups:
         elements.append(Spacer(1, 7 * mm))
-        elements.append(_build_clean_panel(styles))
+        elements.append(_build_clean_panel(summary, styles))
     else:
         elements.append(PageBreak())
         elements.append(_paragraph("MAPA DE CORREÇÕES", styles["section_kicker"]))
@@ -1253,7 +1406,8 @@ def generate_pdf_report(
         elements.append(_paragraph(
             (
                 "Cada bloco abaixo descreve o contexto do problema, o impacto para "
-                "a operação patrimonial, a ação esperada e as linhas envolvidas no lote."
+                "a operação patrimonial, a ação esperada e as linhas envolvidas no "
+                "escopo validado."
             ),
             styles["section_body"],
         ))
