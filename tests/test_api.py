@@ -38,6 +38,7 @@ def test_frontend_page_renders_friendly_form():
     assert response.status_code == 200
     assert "Central de Correção Patrimonial" in response.text
     assert "Trilha de processamento" in response.text
+    assert "itens cadastrados do zero" in response.text
     assert 'id="validation-form"' in response.text
 
 
@@ -78,6 +79,7 @@ def test_get_job_status():
     assert data["status_detail"]
     assert data["processed_rows"] == 0
     assert data["batch_size"] == 0
+    assert data["source_total_rows"] == 0
     assert data["partial_summary"] == {}
     assert data["is_partial_result_available"] is False
     assert data["partial_grouped_problems"] == {}
@@ -101,10 +103,13 @@ def test_get_job_status_includes_partial_preview_payload():
     job_service.update_partial_result(
         job.job_id,
         total_rows=12,
+        source_total_rows=20,
         processed_rows=4,
         batch_size=4,
         partial_summary={
             "total_rows": 12,
+            "validated_rows": 12,
+            "source_total_rows": 20,
             "processed_rows": 4,
             "rows_with_issues": 2,
             "total_issues": 3,
@@ -124,8 +129,10 @@ def test_get_job_status_includes_partial_preview_payload():
     data = response.json()
     assert data["processed_rows"] == 4
     assert data["batch_size"] == 4
+    assert data["source_total_rows"] == 20
     assert data["is_partial_result_available"] is True
     assert data["partial_summary"]["processed_rows"] == 4
+    assert data["partial_summary"]["source_total_rows"] == 20
     assert data["partial_grouped_problems"]["DUPLICATE_ITEM"][0]["item"] == "001"
     assert data["partial_duplicates"][0]["count"] == 2
     assert data["row_results_preview"][0]["row_index"] == 0
@@ -177,9 +184,12 @@ def test_validation_result_includes_item_and_descricao_metadata():
         assert result_response.status_code == 200
 
         payload = result_response.json()
+        assert payload["summary"]["total_rows"] == 1
+        assert payload["summary"]["source_total_rows"] == 2
+        assert len(payload["row_results"]) == 1
         first_row = payload["row_results"][0]
-        assert first_row["item"] == "001"
-        assert first_row["descricao"] == "Mesa"
+        assert first_row["item"] == "002"
+        assert first_row["descricao"] == "Cadeira"
 
         grouped_issue = payload["grouped_problems"]["ZERO_ITEM_COMPLEMENTO_EMPTY"][0]
         assert grouped_issue["item"] == "002"
@@ -278,11 +288,17 @@ def test_upload_saves_file():
 def test_job_status_shows_counters_after_completion():
     job = job_service.create_job(tenant_id="default")
     job.mark_running()
-    job.mark_completed(total_rows=10, rows_with_issues=3, total_issues=5)
+    job.mark_completed(
+        total_rows=10,
+        source_total_rows=15,
+        rows_with_issues=3,
+        total_issues=5,
+    )
 
     response = client.get(f"/jobs/{job.job_id}")
     data = response.json()
     assert data["total_rows"] == 10
+    assert data["source_total_rows"] == 15
     assert data["rows_with_issues"] == 3
     assert data["total_issues"] == 5
     assert data["current_step"] == "report_ready"
@@ -300,3 +316,87 @@ def test_job_status_shows_error_after_failure():
     assert data["error_message"] == "Something went wrong"
     assert data["current_step"] == "failed"
     assert data["status_title"] == "Falha no processamento"
+
+
+def test_update_job_row_updates_csv():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.patch(
+        f"/jobs/{job.job_id}/rows/0",
+        json={"updates": {"descricao": "Mesa executiva"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["row_index"] == 0
+    assert payload["updated_row"]["Descrição"] == "Mesa executiva"
+
+    updated_csv = Path(csv_path).read_text()
+    assert "Mesa executiva" in updated_csv
+
+    Path(csv_path).unlink(missing_ok=True)
+
+
+def test_get_job_row_returns_current_value_and_mapping():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.get(f"/jobs/{job.job_id}/rows/0")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["row"]["Descrição"] == "Mesa"
+    assert payload["resolved_columns"]["descricao"] == "Descrição"
+
+    Path(csv_path).unlink(missing_ok=True)
+
+
+def test_reprocess_job_creates_new_job_from_corrected_csv():
+    job = job_service.create_job(tenant_id="default", file_name="corrigido.csv")
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa executiva,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(f"/jobs/{job.job_id}/reprocess")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] != job.job_id
+    assert payload["tenant_id"] == "default"
+
+    new_job = job_service.get_job(payload["job_id"])
+    assert new_job is not None
+    assert new_job.file_path is not None
+    assert new_job.file_path != csv_path
+    assert "Mesa executiva" in Path(new_job.file_path).read_text()
+
+    Path(csv_path).unlink(missing_ok=True)
+    Path(new_job.file_path).unlink(missing_ok=True)
+    if new_job.result_path:
+        Path(new_job.result_path).unlink(missing_ok=True)
+    if new_job.report_path:
+        Path(new_job.report_path).unlink(missing_ok=True)

@@ -83,7 +83,8 @@ def build_frontend_html() -> str:
 
     button,
     input,
-    select {
+    select,
+    textarea {
       font: inherit;
     }
 
@@ -937,6 +938,132 @@ def build_frontend_html() -> str:
       font-weight: 700;
     }
 
+    .edit-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(24, 33, 43, 0.12);
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--ink);
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 150ms ease, filter 150ms ease;
+    }
+
+    .edit-action:hover {
+      filter: brightness(0.98);
+      transform: translateY(-1px);
+    }
+
+    .edit-action:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+      transform: none;
+    }
+
+    .correction-card {
+      padding: 22px;
+      border: 1px solid rgba(21, 78, 74, 0.14);
+      background:
+        linear-gradient(140deg, rgba(255,255,255,0.88), rgba(255,255,255,0.76)),
+        linear-gradient(135deg, rgba(21, 78, 74, 0.05), rgba(255,255,255,0));
+    }
+
+    .correction-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(21, 78, 74, 0.18);
+      background: rgba(255,255,255,0.9);
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .action-button.primary {
+      border-color: rgba(21, 78, 74, 0.28);
+      background: linear-gradient(135deg, #154e4a 0%, #123f3c 100%);
+      color: #fff;
+      box-shadow: 0 18px 30px rgba(21, 78, 74, 0.16);
+    }
+
+    .action-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+      box-shadow: none;
+    }
+
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(24, 33, 43, 0.42);
+      backdrop-filter: blur(6px);
+    }
+
+    .modal-card {
+      width: min(760px, 100%);
+      padding: 24px;
+      border-radius: 28px;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.96), rgba(255,255,255,0.9)),
+        linear-gradient(135deg, rgba(21, 78, 74, 0.05), rgba(255,255,255,0));
+      border: 1px solid rgba(255,255,255,0.8);
+      box-shadow: 0 30px 80px rgba(24, 33, 43, 0.18);
+    }
+
+    .modal-grid {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .modal-grid .field {
+      gap: 6px;
+    }
+
+    .modal-grid input,
+    .modal-grid textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 13px 14px;
+      background: rgba(255,255,255,0.94);
+      color: var(--ink);
+      resize: vertical;
+    }
+
+    .modal-grid input[readonly],
+    .modal-grid textarea[readonly] {
+      background: rgba(232, 241, 239, 0.66);
+      color: var(--muted);
+    }
+
+    .modal-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+
     .empty-card,
     .clean-card {
       background:
@@ -1022,7 +1149,7 @@ def build_frontend_html() -> str:
         <h1>Transforme o retorno técnico em uma rotina clara de correção operacional.</h1>
         <p class="masthead-copy">
           Esta tela organiza o lote enviado, mostra o estado do processamento e apresenta as pendências em ordem de tratamento.
-          O objetivo é reduzir ambiguidade, acelerar a revisão da planilha e dar uma leitura institucional ao resultado.
+          O resultado operacional considera apenas itens cadastrados do zero; linhas coletadas continuam no CSV, mas ficam fora do resumo, dos agrupamentos e do PDF.
         </p>
       </div>
       <div class="masthead-points">
@@ -1045,7 +1172,7 @@ def build_frontend_html() -> str:
           <div class="panel-kicker">Entrada do lote</div>
           <h2 class="panel-title">Novo processamento</h2>
           <p class="panel-copy">
-            Selecione a organização correta, anexe a planilha CSV e acompanhe o lote até a publicação do resumo e do PDF.
+            Selecione a organização correta, anexe a planilha CSV e acompanhe o lote até a publicação do resumo e do PDF. O resultado operacional consolida apenas itens cadastrados do zero.
           </p>
 
           <form id="validation-form" class="form-grid">
@@ -1074,7 +1201,7 @@ def build_frontend_html() -> str:
           <div class="support-list">
             <div class="support-item">
               <strong>O que esta tela entrega</strong>
-              <span>Resumo executivo, trilha de processamento, blocos de correção priorizados e acesso aos artefatos finais.</span>
+              <span>Resumo executivo, trilha de processamento, blocos de correção priorizados e acesso aos artefatos finais apenas para itens cadastrados do zero.</span>
             </div>
             <div class="support-item">
               <strong>Uso recomendado</strong>
@@ -1145,6 +1272,15 @@ def build_frontend_html() -> str:
           </div>
         </section>
 
+        <section id="correction-section" class="panel correction-card hidden">
+          <div class="panel-kicker">Correções aplicadas</div>
+          <h2 class="panel-title">O CSV foi ajustado diretamente nesta sessão</h2>
+          <p class="panel-copy">Depois de revisar uma ou mais linhas, inicie um novo processamento para refletir as mudanças no resumo consolidado e no PDF final.</p>
+          <div class="correction-actions">
+            <button id="reprocess-button" class="action-button primary" type="button">Reprocessar lote</button>
+          </div>
+        </section>
+
         <section id="duplicates-section" class="panel duplicates-card hidden"></section>
 
         <section id="nav-section" class="panel nav-card hidden"></section>
@@ -1161,6 +1297,38 @@ def build_frontend_html() -> str:
           </p>
         </section>
       </main>
+    </div>
+  </div>
+
+  <div id="edit-modal" class="modal-shell hidden">
+    <div class="modal-card">
+      <div class="panel-kicker">Correção direta no CSV</div>
+      <h2 id="edit-modal-title" class="panel-title">Editar campo do lote</h2>
+      <p id="edit-modal-detail" class="panel-copy">O valor atual será carregado diretamente do CSV do job antes do salvamento.</p>
+
+      <div class="modal-grid">
+        <div class="field">
+          <label for="edit-field-display">Campo operacional</label>
+          <input id="edit-field-display" type="text" readonly />
+        </div>
+        <div class="field">
+          <label for="edit-source-column-display">Coluna no CSV</label>
+          <input id="edit-source-column-display" type="text" readonly />
+        </div>
+        <div class="field">
+          <label for="edit-current-value">Valor atual no arquivo</label>
+          <textarea id="edit-current-value" rows="3" readonly></textarea>
+        </div>
+        <div class="field">
+          <label for="edit-new-value">Novo valor</label>
+          <textarea id="edit-new-value" rows="4"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="edit-cancel-button" class="action-button" type="button">Cancelar</button>
+        <button id="edit-save-button" class="action-button primary" type="button">Salvar no CSV</button>
+      </div>
     </div>
   </div>
 
@@ -1213,6 +1381,14 @@ def build_frontend_html() -> str:
       cc: "CC",
     };
 
+    const CATEGORY_CHECK_LABELS = {
+      btu_pattern: "capacidade em BTU",
+      inches_pattern: "polegadas",
+      ports_pattern: "quantidade de portas",
+      channels_pattern: "quantidade de canais",
+      liters_pattern: "capacidade em litros",
+    };
+
     const form = document.getElementById("validation-form");
     const fileInput = document.getElementById("file");
     const fileName = document.getElementById("file-name");
@@ -1234,11 +1410,40 @@ def build_frontend_html() -> str:
     const emptyState = document.getElementById("empty-state");
     const downloadPdfLink = document.getElementById("download-pdf");
     const downloadJsonLink = document.getElementById("download-json");
+    const correctionSection = document.getElementById("correction-section");
+    const reprocessButton = document.getElementById("reprocess-button");
+    const editModal = document.getElementById("edit-modal");
+    const editModalTitle = document.getElementById("edit-modal-title");
+    const editModalDetail = document.getElementById("edit-modal-detail");
+    const editFieldDisplay = document.getElementById("edit-field-display");
+    const editSourceColumnDisplay = document.getElementById("edit-source-column-display");
+    const editCurrentValue = document.getElementById("edit-current-value");
+    const editNewValue = document.getElementById("edit-new-value");
+    const editCancelButton = document.getElementById("edit-cancel-button");
+    const editSaveButton = document.getElementById("edit-save-button");
+    let currentJobId = null;
+    let hasPendingCorrections = false;
+    let activeEditContext = null;
 
     const workspaceContext = {
       organizationLabel: tenantInput.options[tenantInput.selectedIndex]?.text || "-",
       fileName: null,
     };
+
+    function resolveEditableField(occurrence) {
+      if (!occurrence?.field) {
+        return null;
+      }
+
+      if (
+        occurrence.field === "flag_item_coletado"
+        || occurrence.field === "flag_item_cadastrado_do_zero"
+      ) {
+        return "placa_anterior";
+      }
+
+      return occurrence.field;
+    }
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -1260,11 +1465,86 @@ def build_frontend_html() -> str:
       return Number(rowIndex) + 2;
     }
 
+    function getValidatedTotalRows(summary = {}) {
+      return Number(summary.validated_rows ?? summary.total_rows ?? 0);
+    }
+
+    function getSourceTotalRows(summary = {}) {
+      return Number(summary.source_total_rows ?? getValidatedTotalRows(summary));
+    }
+
+    function buildScopeSummaryCopy(summary = {}) {
+      const validatedRows = getValidatedTotalRows(summary);
+      const sourceTotalRows = getSourceTotalRows(summary);
+
+      if (sourceTotalRows !== validatedRows) {
+        return `Somente itens cadastrados do zero entram na análise operacional. Arquivo com ${sourceTotalRows} linhas.`;
+      }
+
+      return "Todas as linhas lidas entraram no escopo validado deste lote.";
+    }
+
     function formatFieldName(field) {
       if (!field) {
         return "Revisão geral";
       }
       return FIELD_LABELS[field] || field;
+    }
+
+    function humanizeCategoryToken(categoryToken) {
+      return String(categoryToken || "").replaceAll("_", " ").trim().toUpperCase();
+    }
+
+    function parseCategoryRequiredCode(code) {
+      if (!code?.startsWith("CATEGORY_") || !code.endsWith("_REQUIRED")) {
+        return null;
+      }
+
+      for (const [fieldName, fieldLabel] of Object.entries(FIELD_LABELS)) {
+        const suffix = `_${fieldName.toUpperCase()}_REQUIRED`;
+        if (!code.endsWith(suffix)) {
+          continue;
+        }
+
+        const categoryToken = code.slice("CATEGORY_".length, -suffix.length);
+        if (!categoryToken) {
+          return null;
+        }
+
+        return {
+          categoryLabel: humanizeCategoryToken(categoryToken),
+          fieldName,
+          fieldLabel,
+        };
+      }
+
+      return null;
+    }
+
+    function parseCategoryCriticalCode(code) {
+      if (!code?.startsWith("CATEGORY_") || !code.endsWith("_MISSING")) {
+        return null;
+      }
+
+      for (const [checkName, requirementLabel] of Object.entries(CATEGORY_CHECK_LABELS)) {
+        const suffix = `_${checkName.toUpperCase()}_MISSING`;
+        if (!code.endsWith(suffix)) {
+          continue;
+        }
+
+        const categoryToken = code.slice("CATEGORY_".length, -suffix.length);
+        if (!categoryToken) {
+          return null;
+        }
+
+        return {
+          categoryLabel: humanizeCategoryToken(categoryToken),
+          checkName,
+          requirementLabel,
+        };
+      }
+
+      return null;
     }
 
     function formatDateTime(value) {
@@ -1322,6 +1602,115 @@ def build_frontend_html() -> str:
     function hideStateBanner() {
       stateBanner.classList.add("hidden");
       stateBanner.innerHTML = "";
+    }
+
+    function updateCorrectionSection() {
+      if (hasPendingCorrections) {
+        correctionSection.classList.remove("hidden");
+        return;
+      }
+
+      correctionSection.classList.add("hidden");
+    }
+
+    function markCorrectionsPending() {
+      hasPendingCorrections = true;
+      updateCorrectionSection();
+    }
+
+    function clearCorrectionsPending() {
+      hasPendingCorrections = false;
+      updateCorrectionSection();
+    }
+
+    function closeEditModal() {
+      activeEditContext = null;
+      editModal.classList.add("hidden");
+      editFieldDisplay.value = "";
+      editSourceColumnDisplay.value = "";
+      editCurrentValue.value = "";
+      editNewValue.value = "";
+      editSaveButton.disabled = false;
+      editSaveButton.textContent = "Salvar no CSV";
+    }
+
+    async function fetchJobRow(jobId, rowIndex) {
+      const response = await fetch(`/jobs/${jobId}/rows/${rowIndex}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Falha ao carregar a linha do CSV.");
+      }
+      return payload;
+    }
+
+    async function openEditModal(rowIndex, field, itemLabel) {
+      if (!currentJobId) {
+        throw new Error("Nenhum job ativo foi identificado para abrir a correção.");
+      }
+
+      const rowPayload = await fetchJobRow(currentJobId, rowIndex);
+      const sourceColumn = rowPayload.resolved_columns?.[field] || field;
+      const currentValue = rowPayload.row?.[sourceColumn] || "";
+
+      activeEditContext = {
+        rowIndex,
+        field,
+        sourceColumn,
+      };
+
+      editModalTitle.textContent = `Editar ${formatFieldName(field)} na linha ${lineNumber(rowIndex)}`;
+      editModalDetail.textContent = itemLabel
+        ? `O valor atual foi carregado do CSV do lote para o item ${itemLabel}.`
+        : "O valor atual foi carregado diretamente do CSV do lote.";
+      editFieldDisplay.value = formatFieldName(field);
+      editSourceColumnDisplay.value = sourceColumn;
+      editCurrentValue.value = currentValue;
+      editNewValue.value = currentValue;
+      editModal.classList.remove("hidden");
+      editNewValue.focus();
+      editNewValue.setSelectionRange(editNewValue.value.length, editNewValue.value.length);
+    }
+
+    async function saveEditModal() {
+      if (!activeEditContext || !currentJobId) {
+        return;
+      }
+
+      editSaveButton.disabled = true;
+      editSaveButton.textContent = "Salvando...";
+
+      try {
+        const response = await fetch(
+          `/jobs/${currentJobId}/rows/${activeEditContext.rowIndex}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              updates: { [activeEditContext.field]: editNewValue.value },
+            }),
+          }
+        );
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || "Falha ao atualizar o CSV.");
+        }
+
+        markCorrectionsPending();
+        closeEditModal();
+        renderStateBanner(
+          "success",
+          "Correção registrada",
+          "O CSV de entrada foi atualizado com o novo valor. Quando terminar as edições, reprocesse o lote para consolidar o resultado."
+        );
+      } catch (error) {
+        editSaveButton.disabled = false;
+        editSaveButton.textContent = "Salvar no CSV";
+        renderStateBanner(
+          "error",
+          "Falha ao corrigir",
+          error.message || "Não foi possível atualizar o CSV."
+        );
+      }
     }
 
     function getPreviewReportData(job) {
@@ -1383,21 +1772,23 @@ def build_frontend_html() -> str:
         };
       }
 
-      if (code.startsWith("CATEGORY_") && code.endsWith("_REQUIRED")) {
+      const categoryRequired = parseCategoryRequiredCode(code);
+      if (categoryRequired) {
         return {
-          title: "Campo esperado da espécie não preenchido",
-          context: "Para esta espécie de bem, a organização espera um campo obrigatório para identificar o ativo com segurança.",
-          impact: "Sem esse campo, a linha continua operacionalmente fraca e depende de interpretação manual para ser validada.",
-          action: "Preencha o campo destacado seguindo o padrão patrimonial adotado para essa espécie de bem.",
+          title: `${categoryRequired.categoryLabel}: preencher ${categoryRequired.fieldLabel}`,
+          context: `Itens classificados como ${categoryRequired.categoryLabel} precisam preencher ${categoryRequired.fieldLabel} para identificação patrimonial adequada.`,
+          impact: `Sem ${categoryRequired.fieldLabel}, o registro continua fraco para conferência operacional e exige interpretação manual adicional.`,
+          action: `Preencha ${categoryRequired.fieldLabel} seguindo o padrão patrimonial adotado para itens da espécie ${categoryRequired.categoryLabel}.`,
         };
       }
 
-      if (code.startsWith("CATEGORY_")) {
+      const categoryCritical = parseCategoryCriticalCode(code);
+      if (categoryCritical) {
         return {
-          title: "Informação crítica da espécie ausente",
-          context: "A classificação do bem exige um detalhe técnico mínimo, mas esse padrão não foi encontrado nos campos avaliados.",
-          impact: "O lote avança com identificação incompleta e a revisão passa a depender de verificação manual adicional.",
-          action: "Inclua a característica técnica obrigatória no campo indicado, como BTU, polegadas ou outro atributo essencial da espécie.",
+          title: `${categoryCritical.categoryLabel}: informar ${categoryCritical.requirementLabel}`,
+          context: `Itens da espécie ${categoryCritical.categoryLabel} precisam trazer ${categoryCritical.requirementLabel} em Descrição, Complemento ou Modelo.`,
+          impact: "Sem esse detalhe técnico, a identificação do bem fica incompleta e a conciliação patrimonial exige verificação manual adicional.",
+          action: `Inclua ${categoryCritical.requirementLabel} em Descrição, Complemento ou Modelo, conforme o padrão de cadastro usado para essa espécie.`,
         };
       }
 
@@ -1501,23 +1892,23 @@ def build_frontend_html() -> str:
 
     function renderSummary(summary, options = {}) {
       const isPartial = options.mode === "partial";
-      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? summary.total_rows ?? 0);
-      const totalRows = Number(summary.total_rows ?? 0);
+      const validatedRows = getValidatedTotalRows(summary);
+      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? validatedRows);
       const cleanRows = Math.max(
-        (isPartial ? processedRows : totalRows) - Number(summary.rows_with_issues ?? 0),
+        (isPartial ? processedRows : validatedRows) - Number(summary.rows_with_issues ?? 0),
         0,
       );
 
       const cards = isPartial
         ? [
             {
-              label: "Linhas do lote",
-              value: totalRows,
-              copy: "Base completa já indexada para suportar a prévia com contexto global.",
+              label: "Itens em escopo",
+              value: validatedRows,
+              copy: buildScopeSummaryCopy(summary),
               className: "",
             },
             {
-              label: "Linhas validadas",
+              label: "Itens já validados",
               value: processedRows,
               copy: "Parcela já consolidada na prévia operacional em atualização.",
               className: "",
@@ -1549,9 +1940,9 @@ def build_frontend_html() -> str:
           ]
         : [
             {
-              label: "Linhas lidas",
-              value: totalRows,
-              copy: "Total de registros processados no lote atual.",
+              label: "Itens em escopo",
+              value: validatedRows,
+              copy: buildScopeSummaryCopy(summary),
               className: "",
             },
             {
@@ -1600,8 +1991,9 @@ def build_frontend_html() -> str:
       const isPartial = options.mode === "partial";
       const { summary, duplicates } = reportData;
       const duplicateCount = (duplicates || []).length;
-      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? summary.total_rows ?? 0);
-      const totalRows = Number(summary.total_rows ?? 0);
+      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? getValidatedTotalRows(summary));
+      const validatedRows = getValidatedTotalRows(summary);
+      const sourceTotalRows = getSourceTotalRows(summary);
       let headline = "Nenhuma pendência crítica identificada.";
       let copy = "O lote pode seguir para conferência final ou arquivamento, sem necessidade de nova rodada de correção.";
       let checklist = [
@@ -1611,7 +2003,7 @@ def build_frontend_html() -> str:
 
       if (isPartial) {
         headline = "Prévia operacional em atualização.";
-        copy = `Os indicadores abaixo refletem ${processedRows} de ${totalRows} linhas já validadas com contexto completo. O PDF será liberado apenas após a consolidação final.`;
+        copy = `Os indicadores abaixo refletem ${processedRows} de ${validatedRows} itens em escopo já validados com contexto completo. ${sourceTotalRows !== validatedRows ? `O CSV original tem ${sourceTotalRows} linhas. ` : ""}O PDF será liberado apenas após a consolidação final.`;
         checklist = [
           "Usar esta prévia para antecipar a triagem do lote sem assumir que a execução já terminou.",
           "Acompanhar as próximas atualizações até o fechamento final do processamento.",
@@ -1631,6 +2023,13 @@ def build_frontend_html() -> str:
             "Aguardar o fechamento do lote para validar o quadro consolidado.",
           ];
         }
+      } else if (validatedRows === 0 && sourceTotalRows > 0) {
+        headline = "Nenhum item cadastrado do zero entrou no escopo operacional.";
+        copy = `O arquivo original tem ${sourceTotalRows} linhas, mas o resultado validado considera apenas itens com flag_item_cadastrado_do_zero = 1.`;
+        checklist = [
+          "Usar este processamento como registro de que não houve itens em escopo para consolidar.",
+          "Só reenviar a planilha se houver ajuste que mude o enquadramento dos itens ou outros dados do CSV.",
+        ];
       } else if (summary.error_count > 0) {
         headline = "Prioridade imediata: tratar erros antes de qualquer novo envio.";
         copy = "Os erros afetam consistência, identificação ou regras críticas do lote. Resolva esse grupo antes de atacar avisos de qualidade.";
@@ -1660,13 +2059,13 @@ def build_frontend_html() -> str:
         <div class="metric-stack">
           <div class="metric-tile">
             <small>${isPartial ? "Cobertura da prévia" : "Risco de consistência"}</small>
-            <strong>${escapeHtml(isPartial ? `${processedRows}/${totalRows}` : summary.error_count)}</strong>
-            <span>${isPartial ? "Linhas já validadas com contexto global dentro da execução atual." : summary.error_count > 0 ? "Existem erros que devem ser resolvidos antes do próximo lote." : "Não há erros críticos abertos neste processamento."}</span>
+            <strong>${escapeHtml(isPartial ? `${processedRows}/${validatedRows}` : summary.error_count)}</strong>
+            <span>${isPartial ? "Itens em escopo já validados com contexto global dentro da execução atual." : summary.error_count > 0 ? "Existem erros que devem ser resolvidos antes do próximo lote." : validatedRows === 0 && sourceTotalRows > 0 ? "Nenhum item cadastrado do zero entrou no escopo operacional." : "Não há erros críticos abertos neste processamento."}</span>
           </div>
           <div class="metric-tile">
             <small>Duplicidades</small>
             <strong>${escapeHtml(duplicateCount)}</strong>
-            <span>${duplicateCount > 0 ? "Itens repetidos exigem decisão patrimonial antes do reenvio." : isPartial ? "Nenhuma duplicidade confiável foi identificada após a indexação global." : "Nenhum item duplicado foi encontrado no lote atual."}</span>
+            <span>${duplicateCount > 0 ? "Itens repetidos exigem decisão patrimonial antes do reenvio." : isPartial ? "Nenhuma duplicidade confiável foi identificada dentro do escopo validado." : "Nenhum item duplicado foi encontrado dentro do escopo validado."}</span>
           </div>
           <div class="metric-tile">
             <small>Roteiro recomendado</small>
@@ -1687,8 +2086,8 @@ def build_frontend_html() -> str:
 
       duplicatesSection.innerHTML = `
         <div class="panel-kicker">Consistência cadastral</div>
-        <h2 class="panel-title">Itens com identificador repetido no lote</h2>
-        <p class="panel-copy">${isPartial ? "Esta seção já é confiável durante a execução porque depende da indexação global do lote inteiro. Revise este grupo antes de trabalhar detalhes complementares do cadastro." : "Cada item patrimonial deve aparecer uma única vez. Revise este grupo antes de trabalhar detalhes complementares do cadastro."}</p>
+        <h2 class="panel-title">Itens com identificador repetido no escopo validado</h2>
+        <p class="panel-copy">${isPartial ? "Esta seção já é confiável durante a execução porque depende da indexação global do lote inteiro, mas consolida apenas os itens cadastrados do zero. Revise este grupo antes de trabalhar detalhes complementares do cadastro." : "Cada item patrimonial em escopo deve aparecer uma única vez. Revise este grupo antes de trabalhar detalhes complementares do cadastro."}</p>
         <div class="duplicates-grid">
           ${duplicates.map((duplicate) => `
             <article class="duplicate-card">
@@ -1771,15 +2170,29 @@ def build_frontend_html() -> str:
         const severityLabel = severity === "error" ? "Erro" : "Aviso";
         const rows = [...occurrences]
           .sort((left, right) => left.row_index - right.row_index)
-          .map((occurrence) => `
-            <tr>
-              <td>${lineNumber(occurrence.row_index)}</td>
-              <td>${escapeHtml(occurrence.item || "Não informado")}</td>
-              <td>${escapeHtml(occurrence.descricao || "Não informado")}</td>
-              <td><span class="field-pill">${escapeHtml(formatFieldName(occurrence.field))}</span></td>
-              <td>${escapeHtml(occurrence.message)}</td>
-            </tr>
-          `)
+          .map((occurrence) => {
+            const editableField = resolveEditableField(occurrence);
+            return `
+              <tr>
+                <td>${lineNumber(occurrence.row_index)}</td>
+                <td>${escapeHtml(occurrence.item || "Não informado")}</td>
+                <td>${escapeHtml(occurrence.descricao || "Não informado")}</td>
+                <td><span class="field-pill">${escapeHtml(formatFieldName(editableField || occurrence.field))}</span></td>
+                <td>${escapeHtml(occurrence.message)}</td>
+                <td>
+                  <button
+                    class="edit-action"
+                    data-row-index="${escapeHtml(occurrence.row_index)}"
+                    data-field="${escapeHtml(editableField || "")}"
+                    data-item="${escapeHtml(occurrence.item || "")}"
+                    ${editableField ? "" : "disabled"}
+                  >
+                    Corrigir
+                  </button>
+                </td>
+              </tr>
+            `;
+          })
           .join("");
 
         return `
@@ -1788,7 +2201,7 @@ def build_frontend_html() -> str:
               <div>
                 <span class="problem-kicker">${severity === "error" ? "Prioridade alta" : "Qualidade e complemento"}</span>
                 <h3 class="problem-title">${escapeHtml(guide.title)}</h3>
-                <p class="problem-meta">${escapeHtml(code)} • ${escapeHtml(occurrences.length)} ocorrência(s) ${isPartial ? "na prévia atual" : "no lote atual"}</p>
+                <p class="problem-meta">${escapeHtml(occurrences.length)} ocorrência(s) ${isPartial ? "na prévia atual do escopo validado" : "no escopo validado"}</p>
               </div>
               <span class="status-chip ${severity === "error" ? "error" : "warning"}">${escapeHtml(severityLabel)}</span>
             </div>
@@ -1821,6 +2234,7 @@ def build_frontend_html() -> str:
                     <th>Nome do bem</th>
                     <th>Campo a revisar</th>
                     <th>Orientação do validador</th>
+                    <th>Ação</th>
                   </tr>
                 </thead>
                 <tbody>${rows}</tbody>
@@ -1830,11 +2244,17 @@ def build_frontend_html() -> str:
         `;
       }).join("");
       problemsSection.classList.remove("hidden");
+
+      problemsSection.querySelectorAll(".edit-action").forEach((button) => {
+        button.addEventListener("click", () => handleEditClick(button));
+      });
     }
 
     function renderCleanState(summary, options = {}) {
       const isPartial = options.mode === "partial";
-      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? summary.total_rows ?? 0);
+      const processedRows = Number(options.processedRows ?? summary.processed_rows ?? getValidatedTotalRows(summary));
+      const validatedRows = getValidatedTotalRows(summary);
+      const sourceTotalRows = getSourceTotalRows(summary);
 
       if (summary.rows_with_issues > 0) {
         cleanSection.classList.add("hidden");
@@ -1842,10 +2262,21 @@ def build_frontend_html() -> str:
         return;
       }
 
+      const title = !isPartial && validatedRows === 0 && sourceTotalRows > 0
+        ? "Nenhum item cadastrado do zero entrou no escopo deste processamento"
+        : isPartial
+          ? "Nenhuma pendência foi confirmada na prévia atual"
+          : "Nenhuma correção foi exigida neste processamento";
+      const detail = !isPartial && validatedRows === 0 && sourceTotalRows > 0
+        ? `O CSV original tem ${sourceTotalRows} linhas, mas nenhuma delas entrou no escopo operacional porque a análise considera apenas itens cadastrados do zero.`
+        : isPartial
+          ? `Os ${processedRows} itens em escopo já validados não geraram apontamentos até este momento. Continue acompanhando a execução até a consolidação final do lote.`
+          : "O arquivo passou pela validação sem pendências abertas. Ainda assim, preserve o PDF como artefato institucional do lote e mantenha esta versão da planilha como referência validada.";
+
       cleanSection.innerHTML = `
         <div class="panel-kicker">Resultado do lote</div>
-        <h2 class="panel-title">${isPartial ? "Nenhuma pendência foi confirmada na prévia atual" : "Nenhuma correção foi exigida neste processamento"}</h2>
-        <p>${isPartial ? `As ${processedRows} linhas já validadas não geraram apontamentos até este momento. Continue acompanhando a execução até a consolidação final do lote.` : "O arquivo passou pela validação sem pendências abertas. Ainda assim, preserve o PDF como artefato institucional do lote e mantenha esta versão da planilha como referência validada."}</p>
+        <h2 class="panel-title">${escapeHtml(title)}</h2>
+        <p>${escapeHtml(detail)}</p>
       `;
       cleanSection.classList.remove("hidden");
     }
@@ -1874,6 +2305,9 @@ def build_frontend_html() -> str:
     }
 
     function renderLiveJob(job) {
+      if (job?.job_id) {
+        currentJobId = job.job_id;
+      }
       renderProcessCard(job);
 
       if (job?.status === "failed") {
@@ -1892,10 +2326,13 @@ def build_frontend_html() -> str:
 
       const previewData = getPreviewReportData(job);
       if (previewData) {
+        const previewSummary = previewData.summary || {};
+        const previewValidatedRows = getValidatedTotalRows(previewSummary);
+        const previewSourceTotalRows = getSourceTotalRows(previewSummary);
         renderStateBanner(
           "warning",
           "Prévia em atualização",
-          `Os dados abaixo refletem ${job.processed_rows || 0} de ${job.total_rows || 0} linhas já validadas. O PDF permanece reservado para o fechamento final do lote.`
+          `Os dados abaixo refletem ${job.processed_rows || 0} de ${previewValidatedRows} itens em escopo já validados.${previewSourceTotalRows !== previewValidatedRows ? ` O CSV original tem ${previewSourceTotalRows} linhas.` : ""} O PDF permanece reservado para o fechamento final do lote.`
         );
         renderReportWorkspace(
           {
@@ -1931,16 +2368,131 @@ def build_frontend_html() -> str:
     }
 
     function renderFinalJob(job, reportData) {
+      if (job?.job_id) {
+        currentJobId = job.job_id;
+      }
       renderProcessCard(job);
       renderStateBanner(
         "success",
         "Resultado final consolidado",
-        "A execução foi concluída. O resumo operacional, os dados estruturados e o PDF institucional já estão disponíveis."
+        "A execução foi concluída. O resumo operacional considera apenas itens cadastrados do zero, e os dados estruturados e o PDF institucional já estão disponíveis."
       );
       renderReportWorkspace(reportData, { mode: "final", processedRows: reportData.summary?.total_rows });
       downloadPdfLink.href = `/jobs/${job.job_id}/report`;
       downloadJsonLink.href = `/jobs/${job.job_id}/result`;
       actionsSection.classList.remove("hidden");
+      updateCorrectionSection();
+    }
+
+    async function handleEditClick(button) {
+      const rowIndexRaw = button.getAttribute("data-row-index");
+      const field = button.getAttribute("data-field");
+      const itemLabel = button.getAttribute("data-item");
+
+      if (!currentJobId) {
+        renderStateBanner(
+          "error",
+          "Edição indisponível",
+          "Nenhum job ativo foi identificado para registrar a correção."
+        );
+        return;
+      }
+
+      if (!rowIndexRaw || !field) {
+        renderStateBanner(
+          "warning",
+          "Edição não permitida",
+          "Este apontamento não possui um campo editável associado no CSV."
+        );
+        return;
+      }
+
+      const rowIndex = Number(rowIndexRaw);
+      if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+        renderStateBanner(
+          "error",
+          "Edição inválida",
+          "O índice da linha não foi reconhecido pelo sistema."
+        );
+        return;
+      }
+
+      try {
+        await openEditModal(rowIndex, field, itemLabel);
+      } catch (error) {
+        renderStateBanner(
+          "error",
+          "Falha ao corrigir",
+          error.message || "Não foi possível carregar o valor atual no CSV."
+        );
+      }
+    }
+
+    async function fetchJobResult(jobId) {
+      const resultResponse = await fetch(`/jobs/${jobId}/result`);
+      const reportData = await resultResponse.json();
+      if (!resultResponse.ok) {
+        throw new Error(reportData.detail || "Falha ao carregar o resultado estruturado do lote.");
+      }
+      return reportData;
+    }
+
+    async function finalizeJob(jobId) {
+      const job = await waitForJob(jobId);
+      if (job.status !== "completed") {
+        throw new Error(job.error_message || job.status_detail || "O lote terminou com falha.");
+      }
+
+      const reportData = await fetchJobResult(jobId);
+      renderFinalJob(job, reportData);
+    }
+
+    async function startJobFlow(uploadPayload, fileNameOverride = null) {
+      renderLiveJob({
+        job_id: uploadPayload.job_id,
+        status: uploadPayload.status,
+        current_step: "file_received",
+        status_title: "Arquivo recebido",
+        status_detail: "O lote foi registrado e entrará na etapa de leitura em seguida.",
+        file_name: fileNameOverride || workspaceContext.fileName,
+        updated_at: new Date().toISOString(),
+      });
+
+      await finalizeJob(uploadPayload.job_id);
+    }
+
+    async function handleReprocessClick() {
+      if (!currentJobId || !hasPendingCorrections) {
+        return;
+      }
+
+      reprocessButton.disabled = true;
+      reprocessButton.textContent = "Reprocessando...";
+      closeEditModal();
+      resetResultWorkspace();
+      emptyState.classList.add("hidden");
+
+      try {
+        const response = await fetch(`/jobs/${currentJobId}/reprocess`, {
+          method: "POST",
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || "Falha ao iniciar o reprocessamento.");
+        }
+
+        clearCorrectionsPending();
+        await startJobFlow(payload, workspaceContext.fileName);
+      } catch (error) {
+        renderStateBanner(
+          "error",
+          "Falha ao reprocessar",
+          error.message || "Não foi possível iniciar um novo processamento para o lote corrigido."
+        );
+      } finally {
+        reprocessButton.disabled = false;
+        reprocessButton.textContent = "Reprocessar lote";
+      }
     }
 
     async function waitForJob(jobId) {
@@ -1965,6 +2517,16 @@ def build_frontend_html() -> str:
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
+
+    editCancelButton.addEventListener("click", closeEditModal);
+    editSaveButton.addEventListener("click", saveEditModal);
+    reprocessButton.addEventListener("click", handleReprocessClick);
+
+    editModal.addEventListener("click", (event) => {
+      if (event.target === editModal) {
+        closeEditModal();
+      }
+    });
 
     fileInput.addEventListener("change", () => {
       const selected = fileInput.files?.[0];
@@ -1993,6 +2555,8 @@ def build_frontend_html() -> str:
 
       workspaceContext.organizationLabel = tenantInput.options[tenantInput.selectedIndex]?.text || "-";
       workspaceContext.fileName = fileInput.files[0].name;
+      clearCorrectionsPending();
+      closeEditModal();
       resetResultWorkspace();
       emptyState.classList.add("hidden");
       submitButton.disabled = true;
@@ -2021,28 +2585,7 @@ def build_frontend_html() -> str:
           throw new Error(uploadPayload.detail || "Falha ao enviar o lote.");
         }
 
-        renderLiveJob({
-          job_id: uploadPayload.job_id,
-          status: uploadPayload.status,
-          current_step: "file_received",
-          status_title: "Arquivo recebido",
-          status_detail: "O lote foi registrado e entrará na etapa de leitura em seguida.",
-          file_name: workspaceContext.fileName,
-          updated_at: new Date().toISOString(),
-        });
-
-        const job = await waitForJob(uploadPayload.job_id);
-        if (job.status !== "completed") {
-          throw new Error(job.error_message || job.status_detail || "O lote terminou com falha.");
-        }
-
-        const resultResponse = await fetch(`/jobs/${uploadPayload.job_id}/result`);
-        const reportData = await resultResponse.json();
-        if (!resultResponse.ok) {
-          throw new Error(reportData.detail || "Falha ao carregar o resultado estruturado do lote.");
-        }
-
-        renderFinalJob(job, reportData);
+        await startJobFlow(uploadPayload, workspaceContext.fileName);
       } catch (error) {
         renderLiveJob({
           status: "failed",

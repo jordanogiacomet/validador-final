@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.core.issue import ValidationIssue
 from app.services.report_service import (
+    _describe_issue,
     _sorted_problem_groups,
     build_duplicate_section,
     build_full_report,
@@ -98,6 +99,12 @@ def test_duplicate_section_multiple_groups():
     assert len(dups) == 2
 
 
+def test_duplicate_section_can_limit_to_validated_scope():
+    rows = _sample_rows()
+    dups = build_duplicate_section(rows, {}, row_indices=[1])
+    assert dups == []
+
+
 # --- build_grouped_problems ---
 
 def test_grouped_problems_groups_by_code():
@@ -137,6 +144,23 @@ def test_grouped_problems_include_item_and_descricao():
     entry = grouped["ZERO"][0]
     assert entry["item"] == "A002"
     assert entry["descricao"] == "Cadeira"
+
+
+def test_describe_issue_for_category_required_is_specific():
+    guide = _describe_issue("CATEGORY_MONITOR_COMPLEMENTO_REQUIRED")
+
+    assert guide["title"] == "MONITOR: preencher Complemento"
+    assert "MONITOR" in guide["context"]
+    assert "Complemento" in guide["action"]
+
+
+def test_describe_issue_for_category_critical_uses_portuguese_requirement():
+    guide = _describe_issue("CATEGORY_TANQUE_METALICO_LITERS_PATTERN_MISSING")
+
+    assert guide["title"] == "TANQUE METALICO: informar capacidade em litros"
+    assert "capacidade em litros" in guide["context"]
+    assert "liters_pattern" not in guide["context"]
+    assert "capacidade em litros" in guide["action"]
 
 
 # --- build_full_report ---
@@ -183,6 +207,29 @@ def test_full_report_all_clean():
     assert report["summary"]["total_issues"] == 0
 
 
+def test_full_report_can_limit_to_scope_and_keep_source_total_rows():
+    rows = _sample_rows()
+    results = {
+        0: [_make_issue(code="OUT_OF_SCOPE")],
+        1: [_make_issue(code="ZERO_SCOPE")],
+        2: [_make_issue(code="OUT_OF_SCOPE_2")],
+    }
+
+    report = build_full_report(
+        rows,
+        results,
+        validated_row_indices=[1],
+        source_total_rows=3,
+    )
+
+    assert report["summary"]["total_rows"] == 1
+    assert report["summary"]["validated_rows"] == 1
+    assert report["summary"]["source_total_rows"] == 3
+    assert [row["row_index"] for row in report["row_results"]] == [1]
+    assert list(report["grouped_problems"]) == ["ZERO_SCOPE"]
+    assert report["duplicates"] == []
+
+
 def test_partial_report_limits_summary_and_rows_to_processed_slice():
     rows = _sample_rows()
     results = {
@@ -207,6 +254,30 @@ def test_partial_report_limits_summary_and_rows_to_processed_slice():
     assert [row["row_index"] for row in preview["row_results_preview"]] == [0, 1]
     assert "LATE" not in preview["partial_grouped_problems"]
     assert preview["partial_duplicates"][0]["item"] == "A001"
+
+
+def test_partial_report_can_limit_to_scope_and_keep_source_total_rows():
+    rows = _sample_rows()
+    results = {
+        0: [_make_issue(code="OUT_OF_SCOPE")],
+        1: [_make_issue(code="ZERO_SCOPE", severity="warning")],
+    }
+
+    preview = build_partial_report(
+        rows,
+        results,
+        processed_row_indices=[1],
+        validated_row_indices=[1],
+        source_total_rows=3,
+    )
+
+    assert preview["partial_summary"]["total_rows"] == 1
+    assert preview["partial_summary"]["validated_rows"] == 1
+    assert preview["partial_summary"]["source_total_rows"] == 3
+    assert preview["partial_summary"]["processed_rows"] == 1
+    assert [row["row_index"] for row in preview["row_results_preview"]] == [1]
+    assert list(preview["partial_grouped_problems"]) == ["ZERO_SCOPE"]
+    assert preview["partial_duplicates"] == []
 
 
 def test_sorted_problem_groups_prioritize_errors_then_volume():

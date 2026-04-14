@@ -5,6 +5,8 @@ from app.core.registry import RULE_REGISTRY
 from app.core.tenant_config import TenantConfig
 from app.rules.base import BaseRule
 
+RowType = dict[str, str | int | float | None]
+
 
 class ValidationEngine:
     def __init__(self, tenant: TenantConfig) -> None:
@@ -51,24 +53,48 @@ class ValidationEngine:
 
         return issues
 
-    def validate_all(
+    def normalize_rows(
         self,
         raw_rows: list[dict[str, object]],
-    ) -> dict[int, list[ValidationIssue]]:
-        normalized_rows = [
-            normalize_row(row, self.tenant.columns) for row in raw_rows
+    ) -> list[RowType]:
+        return [normalize_row(row, self.tenant.columns) for row in raw_rows]
+
+    def is_row_in_scope(self, normalized_row: RowType) -> bool:
+        return normalized_row.get("flag_item_cadastrado_do_zero") == 1
+
+    def get_scoped_row_indices(
+        self,
+        normalized_rows: list[RowType],
+    ) -> list[int]:
+        return [
+            idx
+            for idx, normalized_row in enumerate(normalized_rows)
+            if self.is_row_in_scope(normalized_row)
         ]
 
-        shared_context: dict = {}
+    def validate_normalized_rows(
+        self,
+        normalized_rows: list[RowType],
+    ) -> dict[int, list[ValidationIssue]]:
+        scope_row_indices = self.get_scoped_row_indices(normalized_rows)
+        scope_rows = [normalized_rows[idx] for idx in scope_row_indices]
 
+        shared_context: dict = {}
         results: dict[int, list[ValidationIssue]] = {}
-        for idx, normalized in enumerate(normalized_rows):
+        for idx in scope_row_indices:
             issues = self.validate_row(
                 row_index=idx,
-                normalized_row=normalized,
-                all_rows=normalized_rows,
+                normalized_row=normalized_rows[idx],
+                all_rows=scope_rows,
                 shared_context=shared_context,
             )
             results[idx] = issues
 
         return results
+
+    def validate_all(
+        self,
+        raw_rows: list[dict[str, object]],
+    ) -> dict[int, list[ValidationIssue]]:
+        normalized_rows = self.normalize_rows(raw_rows)
+        return self.validate_normalized_rows(normalized_rows)

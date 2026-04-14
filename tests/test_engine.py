@@ -174,7 +174,7 @@ def test_validate_row_persists_shared_context_mutations():
     assert shared_context["seen_rows"] == 2
 
 
-def test_validate_all_processes_all_rows():
+def test_validate_all_processes_only_rows_in_scope():
     register_rule(AlwaysFailRule())
 
     tenant = _make_tenant(enabled_rules=["always_fail"])
@@ -187,8 +187,8 @@ def test_validate_all_processes_all_rows():
 
     results = engine.validate_all(raw_rows)
 
-    assert len(results) == 2
-    assert len(results[0]) == 1
+    assert len(results) == 1
+    assert 0 not in results
     assert len(results[1]) == 1
 
 
@@ -198,7 +198,7 @@ def test_validate_all_normalizes_rows():
     tenant = _make_tenant(enabled_rules=["always_fail"])
     engine = ValidationEngine(tenant)
 
-    raw_rows = [{"Item": "001", "Placa Anterior": "ABC"}]
+    raw_rows = [{"Item": "001", "Placa Anterior": ""}]
     results = engine.validate_all(raw_rows)
 
     assert 0 in results
@@ -220,6 +220,22 @@ def test_validate_all_uses_tenant_column_mapping():
     assert results[0][0].message == "MESA"
 
 
+def test_validate_all_accepts_small_header_variations_for_tenant_mapping():
+    register_rule(RequiresDescricaoRule())
+
+    tenant = _make_tenant(
+        enabled_rules=["requires_descricao"],
+        columns={"descricao": "Espécie"},
+    )
+    engine = ValidationEngine(tenant)
+
+    raw_rows = [{"ESPECIE ": "MESA", "Complemento": "02 tomadas 500x600x800"}]
+    results = engine.validate_all(raw_rows)
+
+    assert results[0][0].code == "HAS_DESCRICAO"
+    assert results[0][0].message == "MESA"
+
+
 def test_validate_row_passes_all_rows_in_context():
     class CheckAllRowsRule(BaseRule):
         name: str = "check_all_rows"
@@ -228,7 +244,7 @@ def test_validate_row_passes_all_rows_in_context():
             return True
 
         def validate(self, context: ValidationContext) -> list[ValidationIssue]:
-            if len(context.all_rows) > 1:
+            if context.all_rows:
                 return [
                     ValidationIssue(
                         code="MULTI_ROW",
@@ -245,11 +261,26 @@ def test_validate_row_passes_all_rows_in_context():
 
     raw_rows = [
         {"Item": "001", "Placa Anterior": "A"},
-        {"Item": "002", "Placa Anterior": "B"},
+        {"Item": "002", "Placa Anterior": ""},
     ]
 
     results = engine.validate_all(raw_rows)
-    assert results[0][0].code == "MULTI_ROW"
+    assert 0 not in results
+    assert results[1][0].code == "MULTI_ROW"
+    assert results[1][0].message == "Has 1 rows"
+
+
+def test_get_scoped_row_indices_uses_canonical_zero_flag():
+    tenant = _make_tenant()
+    engine = ValidationEngine(tenant)
+
+    normalized_rows = [
+        {"item": "001", "flag_item_cadastrado_do_zero": 0},
+        {"item": "002", "flag_item_cadastrado_do_zero": 1},
+        {"item": "003", "flag_item_cadastrado_do_zero": 1},
+    ]
+
+    assert engine.get_scoped_row_indices(normalized_rows) == [1, 2]
 
 
 def test_validation_context_has_required_fields():

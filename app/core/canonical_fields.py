@@ -1,3 +1,6 @@
+import unicodedata
+from collections.abc import Collection
+
 from pydantic import BaseModel, Field
 
 CANONICAL_FIELDS = (
@@ -30,6 +33,42 @@ DEFAULT_TENANT_COLUMNS: dict[str, str] = {
     "complemento": "Complemento",
     "observacao": "Observação",
 }
+
+
+def _normalize_source_column_key(value: str) -> str:
+    text = value.removeprefix("\ufeff").strip()
+    text = " ".join(text.split())
+    if not text:
+        return ""
+
+    normalized = unicodedata.normalize("NFKD", text)
+    without_accents = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return unicodedata.normalize("NFKC", without_accents).casefold()
+
+
+def build_source_column_lookup(available_columns: Collection[str]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for column_name in available_columns:
+        lookup.setdefault(_normalize_source_column_key(column_name), column_name)
+    return lookup
+
+
+def resolve_source_column_name(
+    source_column: str,
+    available_columns: Collection[str],
+    column_lookup: dict[str, str] | None = None,
+) -> str | None:
+    if source_column in available_columns:
+        return source_column
+
+    lookup = (
+        column_lookup
+        if column_lookup is not None
+        else build_source_column_lookup(available_columns)
+    )
+    return lookup.get(_normalize_source_column_key(source_column))
 
 
 class CanonicalInventoryRow(BaseModel):
@@ -84,13 +123,19 @@ def normalize_row(
 ) -> dict[str, str | int | float | None]:
     """Normalize a raw row using tenant column mapping and derive flags."""
     normalized: dict[str, str | int | float | None] = {}
+    column_lookup = build_source_column_lookup(raw_row.keys())
     for attr_name, default_source_column in DEFAULT_TENANT_COLUMNS.items():
         source_column = (
             column_mapping.get(attr_name, default_source_column)
             if column_mapping is not None
             else default_source_column
         )
-        value = raw_row.get(source_column)
+        resolved_source_column = resolve_source_column_name(
+            source_column,
+            raw_row.keys(),
+            column_lookup,
+        )
+        value = raw_row.get(resolved_source_column) if resolved_source_column else None
         if value is None or (isinstance(value, str) and not value.strip()):
             normalized[attr_name] = None
         else:

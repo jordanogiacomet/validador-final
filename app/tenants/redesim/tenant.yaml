@@ -4,7 +4,7 @@ display_name: RedeSim
 columns:
   item: Item
   placa_anterior: Placa Anterior
-  descricao: Espécie
+  descricao: Descrição
   marca: Marca
   modelo: Modelo
   ns: NS
