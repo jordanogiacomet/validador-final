@@ -1,8 +1,10 @@
 import csv
 import json
 import math
+import re
 import shutil
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 import pandas as pd
@@ -12,10 +14,15 @@ from app.core.canonical_fields import (
     resolve_source_column_name,
 )
 from app.core.engine import ValidationEngine
-from app.core.job import JobRecord
+from app.core.job import JobRecord, JobStatus
 from app.core.registry import register_rule
 from app.core.tenant_config import TenantConfig
 from app.core.tenant_loader import load_tenant_config
+from app.core.validation_scope import (
+    VALIDATION_SCOPE_PARAM,
+    ValidationScope,
+    parse_validation_scope,
+)
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
 from app.rules.llm_audit import LLMAuditRule
@@ -23,8 +30,10 @@ from app.rules.zero_item_quality import ZeroItemQualityRule
 from app.services.job_service import JobService
 from app.services.report_service import (
     build_duplicate_section,
+    build_duplicates_export_csv,
     build_full_report,
     build_partial_report,
+    build_problem_group_export_csv,
     generate_pdf_report,
 )
 
@@ -83,10 +92,19 @@ def _dataframe_to_raw_rows(df: pd.DataFrame) -> list[dict[str, object]]:
     ]
 
 
-def _get_job_csv_context(
+class JobCancellationRequestedError(Exception):
+    pass
+
+
+class OperationalExportKind(StrEnum):
+    DUPLICATES = "duplicates"
+    PROBLEM_GROUP = "problem_group"
+
+
+def _get_job_csv_file(
     job_id: str,
     job_service: JobService,
-) -> tuple[JobRecord, Path, TenantConfig, pd.DataFrame]:
+) -> tuple[JobRecord, Path]:
     job = job_service.get_job(job_id)
     if job is None:
         raise KeyError(f"Job not found: {job_id}")
@@ -98,9 +116,110 @@ def _get_job_csv_context(
     if not file_path.exists():
         raise FileNotFoundError("CSV file not found for this job")
 
+    return job, file_path
+
+
+def _get_job_csv_context(
+    job_id: str,
+    job_service: JobService,
+) -> tuple[JobRecord, Path, TenantConfig, pd.DataFrame]:
+    job, file_path = _get_job_csv_file(job_id, job_service)
     tenant_config = load_tenant_config(job.tenant_id)
     df = _read_tenant_csv(file_path, tenant_config)
     return job, file_path, tenant_config, df
+
+
+def _build_corrected_csv_name(job: JobRecord, file_path: Path) -> str:
+    original_name = job.file_name or file_path.name
+    original_path = Path(original_name)
+    suffix = original_path.suffix or ".csv"
+    stem = original_path.stem or "lote"
+
+    if stem.endswith("_corrigido"):
+        return f"{stem}{suffix}"
+
+    return f"{stem}_corrigido{suffix}"
+
+
+def get_job_csv_download(
+    job_id: str,
+    job_service: JobService,
+) -> tuple[Path, str]:
+    job, file_path = _get_job_csv_file(job_id, job_service)
+    return file_path, _build_corrected_csv_name(job, file_path)
+
+
+def _get_job_result_data(
+    job_id: str,
+    job_service: JobService,
+) -> tuple[JobRecord, dict]:
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+
+    if job.status != JobStatus.COMPLETED:
+        raise ValueError(f"Job not completed: {job.status.value}")
+
+    if not job.result_path or not Path(job.result_path).exists():
+        raise FileNotFoundError("Result file not found")
+
+    return job, json.loads(Path(job.result_path).read_text(encoding="utf-8"))
+
+
+def _sanitize_export_token(value: str) -> str:
+    sanitized = re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower()
+    return sanitized or "grupo"
+
+
+def _build_operational_export_name(
+    job: JobRecord,
+    export_kind: OperationalExportKind,
+    problem_code: str | None = None,
+) -> str:
+    original_name = job.file_name or "lote.csv"
+    original_path = Path(original_name)
+    stem = original_path.stem or "lote"
+    suffix = original_path.suffix or ".csv"
+
+    if export_kind == OperationalExportKind.DUPLICATES:
+        return f"{stem}_duplicados{suffix}"
+
+    if problem_code is None:
+        raise ValueError("problem_code is required for problem_group exports")
+
+    return f"{stem}_{_sanitize_export_token(problem_code)}{suffix}"
+
+
+def get_job_operational_export(
+    job_id: str,
+    job_service: JobService,
+    *,
+    export_kind: OperationalExportKind,
+    problem_code: str | None = None,
+) -> tuple[str, str]:
+    job, report_data = _get_job_result_data(job_id, job_service)
+
+    if export_kind == OperationalExportKind.DUPLICATES:
+        duplicates = report_data.get("duplicates") or []
+        if not duplicates:
+            raise KeyError("No duplicate rows available for export")
+        return (
+            build_duplicates_export_csv(duplicates),
+            _build_operational_export_name(job, export_kind),
+        )
+
+    if problem_code is None:
+        raise ValueError("problem_code is required for problem_group exports")
+
+    grouped_problems = report_data.get("grouped_problems") or {}
+    occurrences = grouped_problems.get(problem_code)
+    if not occurrences:
+        raise KeyError(f"Problem group not found: {problem_code}")
+
+    return (
+        build_problem_group_export_csv(problem_code, occurrences),
+        _build_operational_export_name(job, export_kind, problem_code),
+    )
 
 
 def _resolve_source_column(
@@ -146,6 +265,71 @@ def update_job_csv_row(
 
     _write_tenant_csv(df, file_path, tenant_config)
     return df.iloc[row_index].to_dict()  # type: ignore[return-value]
+
+
+def delete_job_csv_rows(
+    job_id: str,
+    job_service: JobService,
+    *,
+    row_indices: list[int],
+) -> int:
+    normalized_indices = sorted(set(row_indices))
+    if not normalized_indices:
+        raise ValueError("At least one row index must be provided")
+    if normalized_indices[0] < 0:
+        raise ValueError(f"Invalid row index: {normalized_indices[0]}")
+
+    _, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
+    if normalized_indices[-1] >= len(df):
+        raise ValueError(f"Row index out of range: {normalized_indices[-1]}")
+
+    df = df.drop(index=normalized_indices).reset_index(drop=True)
+    _write_tenant_csv(df, file_path, tenant_config)
+    return len(df)
+
+
+def rerun_job_validation(
+    job_id: str,
+    job_service: JobService,
+) -> JobRecord:
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    if job.status != JobStatus.COMPLETED:
+        raise ValueError("Only completed jobs can be revalidated in place")
+
+    run_validation_job(job_id, job_service)
+
+    refreshed_job = job_service.get_job(job_id)
+    if refreshed_job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    if refreshed_job.status != JobStatus.COMPLETED:
+        raise RuntimeError(
+            refreshed_job.error_message
+            or "Failed to rebuild the current job artifacts"
+        )
+    return refreshed_job
+
+
+def delete_job_csv_rows_and_refresh(
+    job_id: str,
+    job_service: JobService,
+    *,
+    row_indices: list[int],
+) -> int:
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    if job.status != JobStatus.COMPLETED:
+        raise ValueError("Only completed jobs can delete rows and refresh the job")
+
+    remaining_rows = delete_job_csv_rows(
+        job_id,
+        job_service,
+        row_indices=row_indices,
+    )
+    rerun_job_validation(job_id, job_service)
+    return remaining_rows
 
 
 def read_job_csv_row(
@@ -217,11 +401,24 @@ def _resolve_batch_size(total_rows: int) -> int:
 def _build_indexing_status_detail(
     validated_rows: int,
     source_total_rows: int,
+    validation_scope: ValidationScope,
 ) -> str:
     if validated_rows == 0:
+        if validation_scope == ValidationScope.ALL_ITEMS:
+            return (
+                "A indexação global foi concluída. O arquivo foi lido, mas não "
+                "há linhas de dados para validar neste lote."
+            )
         return (
             "A indexação global foi concluída. O arquivo foi lido, mas nenhuma linha "
             "entrou no escopo operacional porque não há itens cadastrados do zero."
+        )
+
+    if validation_scope == ValidationScope.ALL_ITEMS:
+        return (
+            "A indexação global foi concluída. O arquivo tem "
+            f"{source_total_rows} linhas e todas entrarão na validação operacional "
+            "e na prévia."
         )
 
     return (
@@ -244,18 +441,70 @@ def _build_validation_status_detail(
     )
 
 
-def run_validation_job(job_id: str, job_service: JobService) -> None:
+def _get_job_validation_scope(job: JobRecord) -> ValidationScope:
+    return parse_validation_scope(job.params.get(VALIDATION_SCOPE_PARAM))
+
+
+def _build_scope_indexing_detail(validation_scope: ValidationScope) -> str:
+    if validation_scope == ValidationScope.ALL_ITEMS:
+        return (
+            "O sistema está mapeando o conjunto completo do arquivo para "
+            "confirmar que todas as linhas do lote entram no resultado "
+            "operacional e liberar apenas prévias compatíveis com esse escopo."
+        )
+
+    return (
+        "O sistema está mapeando o conjunto completo do arquivo para "
+        "identificar quais itens cadastrados do zero entram no resultado "
+        "operacional e liberar apenas prévias compatíveis com esse escopo."
+    )
+
+
+def _build_scope_artifact_detail(validation_scope: ValidationScope) -> str:
+    if validation_scope == ValidationScope.ALL_ITEMS:
+        return (
+            "O sistema está montando o resumo executivo, os dados estruturados "
+            "e o relatório PDF com todas as linhas que entraram no escopo "
+            "validado deste lote."
+        )
+
+    return (
+        "O sistema está montando o resumo executivo, os dados estruturados "
+        "e o relatório PDF apenas com os itens cadastrados do zero que "
+        "entraram no escopo validado."
+    )
+
+
+def _raise_if_cancellation_requested(
+    job_id: str,
+    job_service: JobService,
+) -> None:
     job = job_service.get_job(job_id)
     if job is None:
+        raise JobCancellationRequestedError(
+            "O lote foi interrompido porque o job deixou de existir."
+        )
+    if job.status == JobStatus.CANCELED or job.cancel_requested:
+        raise JobCancellationRequestedError(
+            "O processamento foi cancelado por solicitação do usuário."
+        )
+
+
+def run_validation_job(job_id: str, job_service: JobService) -> None:
+    job = job_service.get_job(job_id)
+    if job is None or job.status == JobStatus.CANCELED:
         return
 
     try:
+        _raise_if_cancellation_requested(job_id, job_service)
         job_service.start_job(job_id)
+        _raise_if_cancellation_requested(job_id, job_service)
 
         ensure_rules_registered()
 
         tenant_config = load_tenant_config(job.tenant_id)
         engine = ValidationEngine(tenant=tenant_config)
+        validation_scope = _get_job_validation_scope(job)
 
         file_path = Path(job.file_path)  # type: ignore[arg-type]
         df = _read_tenant_csv(file_path, tenant_config)
@@ -265,15 +514,15 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             job_id=job_id,
             current_step="indexing_global",
             status_title="Indexação global do lote",
-            status_detail=(
-                "O sistema está mapeando o conjunto completo do arquivo para "
-                "identificar quais itens cadastrados do zero entram no resultado "
-                "operacional e liberar apenas prévias compatíveis com esse escopo."
-            ),
+            status_detail=_build_scope_indexing_detail(validation_scope),
         )
+        _raise_if_cancellation_requested(job_id, job_service)
         normalized_rows = engine.normalize_rows(raw_rows)
         source_total_rows = len(normalized_rows)
-        scoped_row_indices = engine.get_scoped_row_indices(normalized_rows)
+        scoped_row_indices = engine.get_scoped_row_indices(
+            normalized_rows,
+            validation_scope=validation_scope,
+        )
         scoped_rows = [normalized_rows[idx] for idx in scoped_row_indices]
         total_rows = len(scoped_row_indices)
         batch_size = _resolve_batch_size(total_rows)
@@ -309,14 +558,21 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             is_partial_result_available=bool(partial_duplicates),
             current_step="validating_batches",
             status_title="Validação em batches iniciada",
-            status_detail=_build_indexing_status_detail(total_rows, source_total_rows),
+            status_detail=_build_indexing_status_detail(
+                total_rows,
+                source_total_rows,
+                validation_scope,
+            ),
         )
+        _raise_if_cancellation_requested(job_id, job_service)
 
         for start in range(0, total_rows, batch_size):
+            _raise_if_cancellation_requested(job_id, job_service)
             stop = min(start + batch_size, total_rows)
             batch_indices = scoped_row_indices[start:stop]
 
             for idx in batch_indices:
+                _raise_if_cancellation_requested(job_id, job_service)
                 validation_results[idx] = engine.validate_row(
                     row_index=idx,
                     normalized_row=normalized_rows[idx],
@@ -332,6 +588,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                 partial_duplicates=partial_duplicates,
                 validated_row_indices=scoped_row_indices,
                 source_total_rows=source_total_rows,
+                include_row_results_preview=False,
             )
 
             job_service.update_partial_result(
@@ -345,7 +602,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                 partial_duplicates=partial_report["partial_duplicates"],
                 row_results_preview=partial_report["row_results_preview"],
                 is_partial_result_available=bool(
-                    partial_report["row_results_preview"]
+                    len(processed_row_indices) > 0
                     or partial_report["partial_grouped_problems"]
                     or partial_report["partial_duplicates"]
                 ),
@@ -357,6 +614,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                     source_total_rows,
                 ),
             )
+            _raise_if_cancellation_requested(job_id, job_service)
 
         report_data = build_full_report(
             normalized_rows,
@@ -364,17 +622,15 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             validated_row_indices=scoped_row_indices,
             source_total_rows=source_total_rows,
         )
+        _raise_if_cancellation_requested(job_id, job_service)
 
         job_service.update_progress(
             job_id=job_id,
             current_step="building_artifacts",
             status_title="Consolidação dos artefatos",
-            status_detail=(
-                "O sistema está montando o resumo executivo, os dados estruturados "
-                "e o relatório PDF apenas com os itens cadastrados do zero que "
-                "entraram no escopo validado."
-            ),
+            status_detail=_build_scope_artifact_detail(validation_scope),
         )
+        _raise_if_cancellation_requested(job_id, job_service)
 
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -395,6 +651,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             validated_row_indices=scoped_row_indices,
             source_total_rows=source_total_rows,
         )
+        _raise_if_cancellation_requested(job_id, job_service)
 
         summary = report_data["summary"]
         job_service.complete_job(
@@ -407,5 +664,11 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             total_issues=summary["total_issues"],
         )
 
+    except JobCancellationRequestedError as exc:
+        current_job = job_service.get_job(job_id)
+        if current_job is not None and current_job.status != JobStatus.CANCELED:
+            job_service.cancel_job(job_id, str(exc))
     except Exception as exc:
-        job_service.fail_job(job_id, str(exc))
+        current_job = job_service.get_job(job_id)
+        if current_job is not None and current_job.status != JobStatus.CANCELED:
+            job_service.fail_job(job_id, str(exc))

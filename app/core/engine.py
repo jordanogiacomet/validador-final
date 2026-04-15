@@ -3,6 +3,7 @@ from app.core.context import ValidationContext
 from app.core.issue import ValidationIssue
 from app.core.registry import RULE_REGISTRY
 from app.core.tenant_config import TenantConfig
+from app.core.validation_scope import DEFAULT_VALIDATION_SCOPE, ValidationScope
 from app.rules.base import BaseRule
 
 RowType = dict[str, str | int | float | None]
@@ -59,24 +60,36 @@ class ValidationEngine:
     ) -> list[RowType]:
         return [normalize_row(row, self.tenant.columns) for row in raw_rows]
 
-    def is_row_in_scope(self, normalized_row: RowType) -> bool:
+    def is_row_in_scope(
+        self,
+        normalized_row: RowType,
+        validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+    ) -> bool:
+        if validation_scope == ValidationScope.ALL_ITEMS:
+            return True
+
         return normalized_row.get("flag_item_cadastrado_do_zero") == 1
 
     def get_scoped_row_indices(
         self,
         normalized_rows: list[RowType],
+        validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     ) -> list[int]:
         return [
             idx
             for idx, normalized_row in enumerate(normalized_rows)
-            if self.is_row_in_scope(normalized_row)
+            if self.is_row_in_scope(normalized_row, validation_scope=validation_scope)
         ]
 
     def validate_normalized_rows(
         self,
         normalized_rows: list[RowType],
+        validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     ) -> dict[int, list[ValidationIssue]]:
-        scope_row_indices = self.get_scoped_row_indices(normalized_rows)
+        scope_row_indices = self.get_scoped_row_indices(
+            normalized_rows,
+            validation_scope=validation_scope,
+        )
         scope_rows = [normalized_rows[idx] for idx in scope_row_indices]
 
         shared_context: dict = {}
@@ -95,6 +108,10 @@ class ValidationEngine:
     def validate_all(
         self,
         raw_rows: list[dict[str, object]],
+        validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     ) -> dict[int, list[ValidationIssue]]:
         normalized_rows = self.normalize_rows(raw_rows)
-        return self.validate_normalized_rows(normalized_rows)
+        return self.validate_normalized_rows(
+            normalized_rows,
+            validation_scope=validation_scope,
+        )

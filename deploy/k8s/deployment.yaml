@@ -17,7 +17,7 @@ spec:
       containers:
         - name: api
           image: IMAGE_PLACEHOLDER
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000

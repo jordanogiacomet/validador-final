@@ -285,6 +285,43 @@ def build_frontend_html() -> str:
       line-height: 1.45;
     }
 
+    .scope-options {
+      display: grid;
+      gap: 10px;
+    }
+
+    .scope-option {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.92);
+      cursor: pointer;
+    }
+
+    .scope-option-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .scope-option input {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .scope-option strong {
+      font-size: 0.95rem;
+    }
+
+    .scope-option span {
+      padding-left: 28px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+
     .file-picker {
       border: 1px solid var(--line);
       border-radius: 18px;
@@ -389,6 +426,73 @@ def build_frontend_html() -> str:
       color: var(--muted);
       font-size: 0.9rem;
       line-height: 1.45;
+    }
+
+    .job-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .job-item {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(24, 33, 43, 0.08);
+    }
+
+    .job-item-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .job-item-head strong {
+      display: block;
+      font-size: 0.98rem;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .job-item-head small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .job-item-meta {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }
+
+    .job-item-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .job-item-actions .action-button {
+      min-height: 38px;
+      padding: 0 14px;
+      font-size: 0.82rem;
+    }
+
+    .job-empty {
+      margin: 0;
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.78);
+      border: 1px dashed rgba(24, 33, 43, 0.14);
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
     }
 
     .main {
@@ -719,6 +823,40 @@ def build_frontend_html() -> str:
       font-weight: 700;
     }
 
+    .export-actions {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(24, 33, 43, 0.08);
+    }
+
+    .export-actions-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+
+    .export-card {
+      display: grid;
+      gap: 8px;
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(24, 33, 43, 0.08);
+      background: rgba(255,255,255,0.82);
+    }
+
+    .export-card strong {
+      font-size: 1rem;
+      letter-spacing: -0.01em;
+    }
+
+    .export-card p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
     .metric-stack {
       display: grid;
       gap: 12px;
@@ -812,6 +950,19 @@ def build_frontend_html() -> str:
       margin-top: 5px;
     }
 
+    .duplicate-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .duplicate-manage-button {
+      min-height: 38px;
+      padding: 0 14px;
+      font-size: 0.82rem;
+    }
+
     .problems {
       display: grid;
       gap: 16px;
@@ -892,6 +1043,28 @@ def build_frontend_html() -> str:
       border-radius: 20px;
       border: 1px solid rgba(24, 33, 43, 0.08);
       background: rgba(255,255,255,0.92);
+    }
+
+    .problem-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 0 4px;
+    }
+
+    .problem-pagination p {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    .problem-load-more {
+      min-height: 38px;
+      padding: 0 14px;
+      font-size: 0.82rem;
+      white-space: nowrap;
     }
 
     table {
@@ -1064,6 +1237,92 @@ def build_frontend_html() -> str:
       margin-top: 20px;
     }
 
+    .duplicate-resolution-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+      max-height: min(420px, 58vh);
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .duplicate-resolution-option {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid rgba(24, 33, 43, 0.12);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.92);
+    }
+
+    .duplicate-resolution-option-head {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .duplicate-resolution-option input {
+      margin-top: 3px;
+      accent-color: var(--accent);
+    }
+
+    .duplicate-resolution-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .duplicate-resolution-title strong {
+      font-size: 1rem;
+    }
+
+    .duplicate-resolution-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .duplicate-resolution-note {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .duplicate-resolution-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 14px;
+      padding-left: 30px;
+    }
+
+    .duplicate-resolution-meta div {
+      display: grid;
+      gap: 4px;
+    }
+
+    .duplicate-resolution-meta small {
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .duplicate-resolution-meta span {
+      font-size: 0.92rem;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
     .empty-card,
     .clean-card {
       background:
@@ -1112,6 +1371,7 @@ def build_frontend_html() -> str:
 
       .masthead,
       .control-card,
+      .jobs-card,
       .process-card,
       .priority-card,
       .actions-card,
@@ -1126,8 +1386,13 @@ def build_frontend_html() -> str:
 
       .summary-grid,
       .problem-layout,
-      .lot-card dl {
+      .lot-card dl,
+      .duplicate-resolution-meta {
         grid-template-columns: 1fr;
+      }
+
+      .duplicate-resolution-meta {
+        padding-left: 0;
       }
 
       .process-header,
@@ -1149,7 +1414,7 @@ def build_frontend_html() -> str:
         <h1>Transforme o retorno técnico em uma rotina clara de correção operacional.</h1>
         <p class="masthead-copy">
           Esta tela organiza o lote enviado, mostra o estado do processamento e apresenta as pendências em ordem de tratamento.
-          O resultado operacional considera apenas itens cadastrados do zero; linhas coletadas continuam no CSV, mas ficam fora do resumo, dos agrupamentos e do PDF.
+          Você pode processar apenas itens cadastrados do zero ou todo o lote; o resumo, os agrupamentos e o PDF sempre acompanham o escopo escolhido no envio.
         </p>
       </div>
       <div class="masthead-points">
@@ -1172,7 +1437,7 @@ def build_frontend_html() -> str:
           <div class="panel-kicker">Entrada do lote</div>
           <h2 class="panel-title">Novo processamento</h2>
           <p class="panel-copy">
-            Selecione a organização correta, anexe a planilha CSV e acompanhe o lote até a publicação do resumo e do PDF. O resultado operacional consolida apenas itens cadastrados do zero.
+            Selecione a organização correta, defina o escopo da análise, anexe a planilha CSV e acompanhe o lote até a publicação do resumo e do PDF.
           </p>
 
           <form id="validation-form" class="form-grid">
@@ -1195,13 +1460,34 @@ def build_frontend_html() -> str:
               </div>
             </div>
 
+            <div class="field">
+              <label>Escopo da análise</label>
+              <div class="scope-options">
+                <label class="scope-option" for="validation-scope-zero">
+                  <div class="scope-option-head">
+                    <input id="validation-scope-zero" name="validation_scope" type="radio" value="zero_items" checked />
+                    <strong>Apenas itens cadastrados do zero</strong>
+                  </div>
+                  <span>Preserva o fluxo operacional atual e mantém linhas coletadas fora do resumo, dos agrupamentos e do PDF.</span>
+                </label>
+                <label class="scope-option" for="validation-scope-all">
+                  <div class="scope-option-head">
+                    <input id="validation-scope-all" name="validation_scope" type="radio" value="all_items" />
+                    <strong>Todos os itens</strong>
+                  </div>
+                  <span>Inclui também linhas coletadas no resultado estruturado, nos agrupamentos e no relatório final.</span>
+                </label>
+              </div>
+              <small>Essa escolha vale para o processamento atual e é preservada no reprocessamento do mesmo lote.</small>
+            </div>
+
             <button id="submit-button" class="cta" type="submit">Processar lote</button>
           </form>
 
           <div class="support-list">
             <div class="support-item">
               <strong>O que esta tela entrega</strong>
-              <span>Resumo executivo, trilha de processamento, blocos de correção priorizados e acesso aos artefatos finais apenas para itens cadastrados do zero.</span>
+              <span>Resumo executivo, trilha de processamento, blocos de correção priorizados e acesso aos artefatos finais conforme o escopo escolhido no envio.</span>
             </div>
             <div class="support-item">
               <strong>Uso recomendado</strong>
@@ -1211,6 +1497,17 @@ def build_frontend_html() -> str:
               <strong>Artefatos disponíveis</strong>
               <span>Relatório PDF institucional para registro e dados estruturados para consulta detalhada quando necessário.</span>
             </div>
+          </div>
+        </section>
+
+        <section id="jobs-card" class="panel control-card jobs-card">
+          <div class="panel-kicker">Jobs do servidor</div>
+          <h2 class="panel-title">Processamentos em andamento</h2>
+          <p class="panel-copy">
+            Esta fila mostra os jobs ativos desta instância. Você pode interromper um lote em andamento sem sair da tela operacional.
+          </p>
+          <div id="jobs-list" class="job-list">
+            <p class="job-empty">Nenhum job em processamento no momento.</p>
           </div>
         </section>
       </aside>
@@ -1265,18 +1562,20 @@ def build_frontend_html() -> str:
         <section id="actions-section" class="panel actions-card hidden">
           <div class="panel-kicker">Artefatos do lote</div>
           <h2 class="panel-title">Saídas consolidadas para consulta e registro</h2>
-          <p class="panel-copy">Use o PDF para distribuição institucional e o arquivo estruturado apenas quando precisar aprofundar a análise do lote.</p>
+          <p class="panel-copy">Use o PDF para distribuição institucional, o arquivo estruturado para auditoria completa e os recortes CSV quando precisar tratar um grupo operacional específico.</p>
           <div class="actions">
             <a id="download-pdf" class="action-link" href="#" target="_blank" rel="noopener noreferrer">Baixar relatório PDF</a>
             <a id="download-json" class="action-link" href="#" target="_blank" rel="noopener noreferrer">Baixar dados estruturados</a>
           </div>
+          <div id="operational-exports" class="export-actions hidden"></div>
         </section>
 
         <section id="correction-section" class="panel correction-card hidden">
           <div class="panel-kicker">Correções aplicadas</div>
           <h2 class="panel-title">O CSV foi ajustado diretamente nesta sessão</h2>
-          <p class="panel-copy">Depois de revisar uma ou mais linhas, inicie um novo processamento para refletir as mudanças no resumo consolidado e no PDF final.</p>
+          <p class="panel-copy">Baixe a planilha corrigida no mesmo formato do arquivo de entrada ou inicie um novo processamento para refletir as mudanças no resumo consolidado e no PDF final.</p>
           <div class="correction-actions">
+            <a id="download-corrected-csv" class="action-link" href="#">Baixar CSV corrigido</a>
             <button id="reprocess-button" class="action-button primary" type="button">Reprocessar lote</button>
           </div>
         </section>
@@ -1328,6 +1627,21 @@ def build_frontend_html() -> str:
       <div class="modal-actions">
         <button id="edit-cancel-button" class="action-button" type="button">Cancelar</button>
         <button id="edit-save-button" class="action-button primary" type="button">Salvar no CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="duplicate-modal" class="modal-shell hidden">
+    <div class="modal-card">
+      <div class="panel-kicker">Resolução de duplicidade</div>
+      <h2 id="duplicate-modal-title" class="panel-title">Escolher linha para manter</h2>
+      <p id="duplicate-modal-detail" class="panel-copy">Selecione a ocorrência que deve permanecer no CSV. As demais linhas com o mesmo Item serão removidas do arquivo corrigido.</p>
+
+      <div id="duplicate-modal-options" class="duplicate-resolution-list"></div>
+
+      <div class="modal-actions">
+        <button id="duplicate-cancel-button" class="action-button" type="button">Cancelar</button>
+        <button id="duplicate-save-button" class="action-button primary" type="button">Excluir duplicados no CSV</button>
       </div>
     </div>
   </div>
@@ -1389,10 +1703,17 @@ def build_frontend_html() -> str:
       liters_pattern: "capacidade em litros",
     };
 
+    const INITIAL_PROBLEM_OCCURRENCES = 20;
+    const PROBLEM_OCCURRENCES_STEP = 20;
+
     const form = document.getElementById("validation-form");
     const fileInput = document.getElementById("file");
     const fileName = document.getElementById("file-name");
     const tenantInput = document.getElementById("tenant");
+    const jobsList = document.getElementById("jobs-list");
+    const validationScopeInputs = Array.from(
+      document.querySelectorAll('input[name="validation_scope"]')
+    );
     const submitButton = document.getElementById("submit-button");
     const statusTitle = document.getElementById("status-title");
     const statusDetail = document.getElementById("status-detail");
@@ -1403,6 +1724,7 @@ def build_frontend_html() -> str:
     const summarySection = document.getElementById("summary-section");
     const prioritySection = document.getElementById("priority-section");
     const actionsSection = document.getElementById("actions-section");
+    const operationalExports = document.getElementById("operational-exports");
     const duplicatesSection = document.getElementById("duplicates-section");
     const navSection = document.getElementById("nav-section");
     const cleanSection = document.getElementById("clean-section");
@@ -1410,6 +1732,7 @@ def build_frontend_html() -> str:
     const emptyState = document.getElementById("empty-state");
     const downloadPdfLink = document.getElementById("download-pdf");
     const downloadJsonLink = document.getElementById("download-json");
+    const downloadCorrectedCsvLink = document.getElementById("download-corrected-csv");
     const correctionSection = document.getElementById("correction-section");
     const reprocessButton = document.getElementById("reprocess-button");
     const editModal = document.getElementById("edit-modal");
@@ -1421,14 +1744,54 @@ def build_frontend_html() -> str:
     const editNewValue = document.getElementById("edit-new-value");
     const editCancelButton = document.getElementById("edit-cancel-button");
     const editSaveButton = document.getElementById("edit-save-button");
+    const duplicateModal = document.getElementById("duplicate-modal");
+    const duplicateModalTitle = document.getElementById("duplicate-modal-title");
+    const duplicateModalDetail = document.getElementById("duplicate-modal-detail");
+    const duplicateModalOptions = document.getElementById("duplicate-modal-options");
+    const duplicateCancelButton = document.getElementById("duplicate-cancel-button");
+    const duplicateSaveButton = document.getElementById("duplicate-save-button");
     let currentJobId = null;
     let hasPendingCorrections = false;
     let activeEditContext = null;
+    let activeDuplicateContext = null;
+    let visibleProblemOccurrencesByCode = {};
+    let jobsRefreshInFlight = false;
 
     const workspaceContext = {
       organizationLabel: tenantInput.options[tenantInput.selectedIndex]?.text || "-",
       fileName: null,
+      validationScope: "zero_items",
     };
+
+    function normalizeValidationScope(value) {
+      return value === "all_items" ? "all_items" : "zero_items";
+    }
+
+    function getSelectedValidationScope() {
+      return normalizeValidationScope(
+        validationScopeInputs.find((input) => input.checked)?.value
+      );
+    }
+
+    function isAllItemsScope(scope = workspaceContext.validationScope) {
+      return normalizeValidationScope(scope) === "all_items";
+    }
+
+    function getValidationScopeLabel(scope = workspaceContext.validationScope) {
+      return isAllItemsScope(scope)
+        ? "Todos os itens"
+        : "Itens cadastrados do zero";
+    }
+
+    function buildFinalScopeCopy(scope = workspaceContext.validationScope) {
+      if (isAllItemsScope(scope)) {
+        return "A execução foi concluída. O resumo operacional considera todos os itens do lote, e os dados estruturados e o PDF institucional já estão disponíveis.";
+      }
+
+      return "A execução foi concluída. O resumo operacional considera apenas itens cadastrados do zero, e os dados estruturados e o PDF institucional já estão disponíveis.";
+    }
+
+    workspaceContext.validationScope = getSelectedValidationScope();
 
     function resolveEditableField(occurrence) {
       if (!occurrence?.field) {
@@ -1564,9 +1927,15 @@ def build_frontend_html() -> str:
     }
 
     function formatStatusChip(job) {
+      if (job?.cancel_requested) {
+        return { label: "Cancelando", kind: "warning" };
+      }
       const status = job?.status;
       if (status === "queued") {
         return { label: "Recebido", kind: "info" };
+      }
+      if (status === "canceled") {
+        return { label: "Cancelado", kind: "warning" };
       }
       if (status === "completed") {
         return { label: "Consolidado", kind: "success" };
@@ -1578,6 +1947,222 @@ def build_frontend_html() -> str:
         return { label: "Prévia em atualização", kind: "warning" };
       }
       return { label: "Em processamento", kind: "info" };
+    }
+
+    function describeJobScope(job) {
+      return getValidationScopeLabel(job?.validation_scope || workspaceContext.validationScope);
+    }
+
+    function describeJobProgress(job) {
+      if (job?.cancel_requested) {
+        return job.status_detail || "O sistema está interrompendo este processamento.";
+      }
+      if (job?.status === "queued") {
+        return "Aguardando início do processamento automático.";
+      }
+      if (job?.status === "running") {
+        const processed = Number(job?.processed_rows || 0);
+        const total = Number(job?.total_rows || 0);
+        if (total > 0) {
+          return `${processed} de ${total} item(ns) em escopo já passaram pela etapa atual.`;
+        }
+        return job?.status_detail || "O lote está em processamento.";
+      }
+      if (job?.status === "canceled") {
+        return job?.status_detail || "O lote foi interrompido antes da consolidação final.";
+      }
+      return job?.status_detail || "Sem detalhes adicionais.";
+    }
+
+    async function fetchJobs() {
+      const response = await fetch("/jobs?active_only=true");
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Falha ao listar os jobs ativos.");
+      }
+      return payload;
+    }
+
+    function renderJobsPanel(jobs = []) {
+      if (!jobs.length) {
+        jobsList.innerHTML = '<p class="job-empty">Nenhum job em processamento no momento.</p>';
+        return;
+      }
+
+      jobsList.innerHTML = jobs.map((job) => {
+        const chip = formatStatusChip(job);
+        const canCancel = (job.status === "queued" || job.status === "running") && !job.cancel_requested;
+        return `
+          <article class="job-item">
+            <div class="job-item-head">
+              <div>
+                <strong>${escapeHtml(job.file_name || "Arquivo não identificado")}</strong>
+                <small>${escapeHtml(job.tenant_id)} • ${escapeHtml(describeJobScope(job))}</small>
+              </div>
+              <span class="status-chip ${chip.kind}">${escapeHtml(chip.label)}</span>
+            </div>
+            <div class="job-item-meta">
+              <span><b>Job:</b> ${escapeHtml(job.job_id)}</span>
+              <span><b>Atualizado:</b> ${escapeHtml(formatDateTime(job.updated_at))}</span>
+              <span><b>Etapa:</b> ${escapeHtml(job.status_title || "Processamento em andamento")}</span>
+              <span>${escapeHtml(describeJobProgress(job))}</span>
+            </div>
+            <div class="job-item-actions">
+              <button
+                class="action-button job-open-button"
+                type="button"
+                data-job-open="${escapeHtml(job.job_id)}"
+              >
+                Acompanhar
+              </button>
+              <button
+                class="action-button ${canCancel ? "" : "primary"} job-cancel-button"
+                type="button"
+                data-job-cancel="${escapeHtml(job.job_id)}"
+                ${canCancel ? "" : "disabled"}
+              >
+                ${job.cancel_requested ? "Cancelando..." : "Cancelar job"}
+              </button>
+            </div>
+          </article>
+        `;
+      }).join("");
+
+      jobsList.querySelectorAll(".job-open-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const jobId = button.getAttribute("data-job-open");
+          if (!jobId) {
+            return;
+          }
+
+          openJob(jobId).catch((error) => {
+            renderStateBanner(
+              "error",
+              "Falha ao abrir o job",
+              error.message || "Não foi possível carregar o job selecionado."
+            );
+          });
+        });
+      });
+
+      jobsList.querySelectorAll(".job-cancel-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const jobId = button.getAttribute("data-job-cancel");
+          if (!jobId || button.disabled) {
+            return;
+          }
+
+          cancelJob(jobId).catch((error) => {
+            renderStateBanner(
+              "error",
+              "Falha ao cancelar o job",
+              error.message || "Não foi possível interromper o job selecionado."
+            );
+          });
+        });
+      });
+    }
+
+    async function refreshJobsPanel() {
+      if (jobsRefreshInFlight) {
+        return;
+      }
+
+      jobsRefreshInFlight = true;
+      try {
+        const jobs = await fetchJobs();
+        renderJobsPanel(jobs);
+      } finally {
+        jobsRefreshInFlight = false;
+      }
+    }
+
+    function syncCorrectedCsvDownload(jobId = currentJobId) {
+      downloadCorrectedCsvLink.href = jobId ? `/jobs/${jobId}/csv` : "#";
+    }
+
+    function buildOperationalExportUrl(kind, problemCode = null) {
+      if (!currentJobId) {
+        return "#";
+      }
+
+      const params = new URLSearchParams({ kind });
+      if (problemCode) {
+        params.set("problem_code", problemCode);
+      }
+      return `/jobs/${currentJobId}/exports/csv?${params.toString()}`;
+    }
+
+    function renderOperationalExports(reportData) {
+      const duplicates = reportData?.duplicates || [];
+      const groupedProblems = reportData?.grouped_problems || {};
+      const groups = Object.entries(groupedProblems)
+        .map(([code, occurrences]) => ({ code, occurrences }))
+        .sort((left, right) => {
+          const leftHasError = left.occurrences.some((occurrence) => occurrence.severity === "error");
+          const rightHasError = right.occurrences.some((occurrence) => occurrence.severity === "error");
+          if (leftHasError !== rightHasError) {
+            return leftHasError ? -1 : 1;
+          }
+          if (left.occurrences.length !== right.occurrences.length) {
+            return right.occurrences.length - left.occurrences.length;
+          }
+          return left.code.localeCompare(right.code);
+        });
+
+      const cards = [];
+      if (duplicates.length) {
+        cards.push(`
+          <article class="export-card">
+            <small>Duplicidades</small>
+            <strong>CSV apenas com itens duplicados</strong>
+            <p>${escapeHtml(duplicates.length)} agrupamento(s) com Item repetido dentro do escopo validado.</p>
+            <a class="action-link" href="${escapeHtml(buildOperationalExportUrl("duplicates"))}">Baixar duplicados em CSV</a>
+          </article>
+        `);
+      }
+
+      groups.forEach(({ code, occurrences }) => {
+        const guide = describeIssue(code);
+        cards.push(`
+          <article class="export-card">
+            <small>${escapeHtml(code)}</small>
+            <strong>${escapeHtml(guide.title)}</strong>
+            <p>${escapeHtml(occurrences.length)} ocorrência(s) deste grupo em formato operacional para tratamento em lote.</p>
+            <a class="action-link" href="${escapeHtml(buildOperationalExportUrl("problem_group", code))}">Baixar este grupo em CSV</a>
+          </article>
+        `);
+      });
+
+      if (!cards.length) {
+        operationalExports.classList.add("hidden");
+        operationalExports.innerHTML = "";
+        return;
+      }
+
+      operationalExports.innerHTML = `
+        <div>
+          <div class="panel-kicker">Exportações operacionais</div>
+          <p class="panel-copy">Cada link abaixo gera um CSV focado em um recorte de tratamento, como duplicidades ou um tipo específico de apontamento.</p>
+        </div>
+        <div class="export-actions-grid">
+          ${cards.join("")}
+        </div>
+      `;
+      operationalExports.classList.remove("hidden");
+    }
+
+    function resetProblemVisibilityState() {
+      visibleProblemOccurrencesByCode = {};
+    }
+
+    function getVisibleProblemOccurrences(code) {
+      return visibleProblemOccurrencesByCode[code] || INITIAL_PROBLEM_OCCURRENCES;
+    }
+
+    function showMoreProblemOccurrences(code) {
+      visibleProblemOccurrencesByCode[code] =
+        getVisibleProblemOccurrences(code) + PROBLEM_OCCURRENCES_STEP;
     }
 
     function setEmptyState(title, detail) {
@@ -1634,6 +2219,14 @@ def build_frontend_html() -> str:
       editSaveButton.textContent = "Salvar no CSV";
     }
 
+    function closeDuplicateModal() {
+      activeDuplicateContext = null;
+      duplicateModal.classList.add("hidden");
+      duplicateModalOptions.innerHTML = "";
+      duplicateSaveButton.disabled = false;
+      duplicateSaveButton.textContent = "Excluir duplicados no CSV";
+    }
+
     async function fetchJobRow(jobId, rowIndex) {
       const response = await fetch(`/jobs/${jobId}/rows/${rowIndex}`);
       const payload = await response.json();
@@ -1641,6 +2234,11 @@ def build_frontend_html() -> str:
         throw new Error(payload.detail || "Falha ao carregar a linha do CSV.");
       }
       return payload;
+    }
+
+    function getCanonicalFieldValue(rowPayload, field) {
+      const sourceColumn = rowPayload?.resolved_columns?.[field] || field;
+      return rowPayload?.row?.[sourceColumn] || "";
     }
 
     async function openEditModal(rowIndex, field, itemLabel) {
@@ -1669,6 +2267,94 @@ def build_frontend_html() -> str:
       editModal.classList.remove("hidden");
       editNewValue.focus();
       editNewValue.setSelectionRange(editNewValue.value.length, editNewValue.value.length);
+    }
+
+    async function openDuplicateModal(duplicate) {
+      if (!currentJobId) {
+        throw new Error("Nenhum job ativo foi identificado para resolver a duplicidade.");
+      }
+
+      const rowIndices = (duplicate?.row_indices || [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value >= 0)
+        .sort((left, right) => left - right);
+
+      if (rowIndices.length < 2) {
+        throw new Error("Esta duplicidade não possui linhas suficientes para resolução.");
+      }
+
+      const suggestedKeepRowIndex = rowIndices[rowIndices.length - 1];
+      const rows = await Promise.all(
+        rowIndices.map(async (rowIndex) => ({
+          rowIndex,
+          rowPayload: await fetchJobRow(currentJobId, rowIndex),
+        }))
+      );
+
+      activeDuplicateContext = {
+        duplicate,
+        rows,
+        suggestedKeepRowIndex,
+      };
+
+      duplicateModalTitle.textContent = `Escolher linha para manter do item ${duplicate.item || "sem identificação"}`;
+      duplicateModalDetail.textContent = "Selecione a ocorrência que deve permanecer no CSV. Como o sistema ainda não registra alteração por linha, a última ocorrência no arquivo aparece destacada como referência prática.";
+      duplicateModalOptions.innerHTML = rows.map(({ rowIndex, rowPayload }) => {
+        const descricao = getCanonicalFieldValue(rowPayload, "descricao") || "Não informado";
+        const placa = getCanonicalFieldValue(rowPayload, "placa_anterior") || "Sem placa anterior";
+        const marca = getCanonicalFieldValue(rowPayload, "marca") || "Não informado";
+        const modelo = getCanonicalFieldValue(rowPayload, "modelo") || "Não informado";
+        const ns = getCanonicalFieldValue(rowPayload, "ns") || "Não informado";
+        const complemento = getCanonicalFieldValue(rowPayload, "complemento") || "Não informado";
+        const isSuggested = rowIndex === suggestedKeepRowIndex;
+
+        return `
+          <label class="duplicate-resolution-option" for="duplicate-keep-${rowIndex}">
+            <div class="duplicate-resolution-option-head">
+              <input
+                id="duplicate-keep-${rowIndex}"
+                name="duplicate_keep_row"
+                type="radio"
+                value="${rowIndex}"
+                ${isSuggested ? "checked" : ""}
+              />
+              <div>
+                <div class="duplicate-resolution-title">
+                  <strong>Linha ${lineNumber(rowIndex)}</strong>
+                  ${isSuggested ? '<span class="duplicate-resolution-badge">Última ocorrência no CSV</span>' : ""}
+                </div>
+                <div class="duplicate-resolution-note">
+                  Item ${escapeHtml(duplicate.item || "-")} | ${escapeHtml(descricao)}
+                </div>
+              </div>
+            </div>
+            <div class="duplicate-resolution-meta">
+              <div>
+                <small>Placa Anterior</small>
+                <span>${escapeHtml(placa)}</span>
+              </div>
+              <div>
+                <small>Marca</small>
+                <span>${escapeHtml(marca)}</span>
+              </div>
+              <div>
+                <small>Modelo</small>
+                <span>${escapeHtml(modelo)}</span>
+              </div>
+              <div>
+                <small>NS</small>
+                <span>${escapeHtml(ns)}</span>
+              </div>
+              <div style="grid-column: 1 / -1;">
+                <small>Complemento</small>
+                <span>${escapeHtml(complemento)}</span>
+              </div>
+            </div>
+          </label>
+        `;
+      }).join("");
+
+      duplicateModal.classList.remove("hidden");
     }
 
     async function saveEditModal() {
@@ -1708,6 +2394,63 @@ def build_frontend_html() -> str:
         renderStateBanner(
           "error",
           "Falha ao corrigir",
+          error.message || "Não foi possível atualizar o CSV."
+        );
+      }
+    }
+
+    async function saveDuplicateModal() {
+      if (!activeDuplicateContext || !currentJobId) {
+        return;
+      }
+
+      const selectedKeepInput = duplicateModal.querySelector('input[name="duplicate_keep_row"]:checked');
+      if (!selectedKeepInput) {
+        renderStateBanner(
+          "warning",
+          "Seleção pendente",
+          "Escolha a linha que deve permanecer no CSV antes de excluir as demais ocorrências."
+        );
+        return;
+      }
+
+      duplicateSaveButton.disabled = true;
+      duplicateSaveButton.textContent = "Atualizando lote...";
+
+      try {
+        const keepRowIndex = Number(selectedKeepInput.value);
+        const response = await fetch(
+          `/jobs/${currentJobId}/duplicates/resolve`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              row_indices: activeDuplicateContext.rows.map((entry) => entry.rowIndex),
+              keep_row_index: keepRowIndex,
+            }),
+          }
+        );
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || "Falha ao excluir as linhas duplicadas do CSV.");
+        }
+
+        closeDuplicateModal();
+        clearCorrectionsPending();
+        resetResultWorkspace();
+        emptyState.classList.add("hidden");
+        await finalizeJob(currentJobId);
+        renderStateBanner(
+          "success",
+          "Lote atualizado no mesmo processamento",
+          `A linha ${lineNumber(payload.kept_row_index)} foi mantida e as demais ocorrências duplicadas foram excluídas do arquivo corrigido. Resumo, agrupamentos, JSON e PDF já refletem esta exclusão no mesmo job.`
+        );
+      } catch (error) {
+        duplicateSaveButton.disabled = false;
+        duplicateSaveButton.textContent = "Excluir duplicados no CSV";
+        renderStateBanner(
+          "error",
+          "Falha ao excluir duplicados",
           error.message || "Não foi possível atualizar o CSV."
         );
       }
@@ -1822,6 +2565,9 @@ def build_frontend_html() -> str:
       const organization = workspaceContext.organizationLabel || "-";
       const fileLabel = job?.file_name || workspaceContext.fileName || "-";
       const updatedAt = formatDateTime(job?.updated_at);
+      const validationScopeLabel = getValidationScopeLabel(
+        job?.validation_scope || workspaceContext.validationScope
+      );
 
       lotMetadata.innerHTML = `
         <div>
@@ -1839,6 +2585,10 @@ def build_frontend_html() -> str:
         <div>
           <dt>Atualizado em</dt>
           <dd>${escapeHtml(updatedAt)}</dd>
+        </div>
+        <div>
+          <dt>Escopo</dt>
+          <dd>${escapeHtml(validationScopeLabel)}</dd>
         </div>
       `;
     }
@@ -1990,6 +2740,8 @@ def build_frontend_html() -> str:
     function renderPriority(reportData, options = {}) {
       const isPartial = options.mode === "partial";
       const { summary, duplicates } = reportData;
+      const validationScope = workspaceContext.validationScope;
+      const isZeroItemsOnly = !isAllItemsScope(validationScope);
       const duplicateCount = (duplicates || []).length;
       const processedRows = Number(options.processedRows ?? summary.processed_rows ?? getValidatedTotalRows(summary));
       const validatedRows = getValidatedTotalRows(summary);
@@ -2023,7 +2775,7 @@ def build_frontend_html() -> str:
             "Aguardar o fechamento do lote para validar o quadro consolidado.",
           ];
         }
-      } else if (validatedRows === 0 && sourceTotalRows > 0) {
+      } else if (isZeroItemsOnly && validatedRows === 0 && sourceTotalRows > 0) {
         headline = "Nenhum item cadastrado do zero entrou no escopo operacional.";
         copy = `O arquivo original tem ${sourceTotalRows} linhas, mas o resultado validado considera apenas itens com flag_item_cadastrado_do_zero = 1.`;
         checklist = [
@@ -2060,7 +2812,7 @@ def build_frontend_html() -> str:
           <div class="metric-tile">
             <small>${isPartial ? "Cobertura da prévia" : "Risco de consistência"}</small>
             <strong>${escapeHtml(isPartial ? `${processedRows}/${validatedRows}` : summary.error_count)}</strong>
-            <span>${isPartial ? "Itens em escopo já validados com contexto global dentro da execução atual." : summary.error_count > 0 ? "Existem erros que devem ser resolvidos antes do próximo lote." : validatedRows === 0 && sourceTotalRows > 0 ? "Nenhum item cadastrado do zero entrou no escopo operacional." : "Não há erros críticos abertos neste processamento."}</span>
+            <span>${isPartial ? "Itens em escopo já validados com contexto global dentro da execução atual." : summary.error_count > 0 ? "Existem erros que devem ser resolvidos antes do próximo lote." : isZeroItemsOnly && validatedRows === 0 && sourceTotalRows > 0 ? "Nenhum item cadastrado do zero entrou no escopo operacional." : "Não há erros críticos abertos neste processamento."}</span>
           </div>
           <div class="metric-tile">
             <small>Duplicidades</small>
@@ -2078,6 +2830,8 @@ def build_frontend_html() -> str:
 
     function renderDuplicates(duplicates, options = {}) {
       const isPartial = options.mode === "partial";
+      const isZeroItemsOnly = !isAllItemsScope(workspaceContext.validationScope);
+      const canResolveDuplicates = !isPartial;
       if (!duplicates.length) {
         duplicatesSection.classList.add("hidden");
         duplicatesSection.innerHTML = "";
@@ -2087,19 +2841,43 @@ def build_frontend_html() -> str:
       duplicatesSection.innerHTML = `
         <div class="panel-kicker">Consistência cadastral</div>
         <h2 class="panel-title">Itens com identificador repetido no escopo validado</h2>
-        <p class="panel-copy">${isPartial ? "Esta seção já é confiável durante a execução porque depende da indexação global do lote inteiro, mas consolida apenas os itens cadastrados do zero. Revise este grupo antes de trabalhar detalhes complementares do cadastro." : "Cada item patrimonial em escopo deve aparecer uma única vez. Revise este grupo antes de trabalhar detalhes complementares do cadastro."}</p>
+        <p class="panel-copy">${isPartial && isZeroItemsOnly ? "Esta seção já é confiável durante a execução porque depende da indexação global do lote inteiro, mas consolida apenas os itens cadastrados do zero. Revise este grupo antes de trabalhar detalhes complementares do cadastro." : isPartial ? "Esta seção já é confiável durante a execução porque depende da indexação global do lote inteiro e já reflete as duplicidades do escopo escolhido. Revise este grupo antes de trabalhar detalhes complementares do cadastro." : "Cada item patrimonial em escopo deve aparecer uma única vez. Revise este grupo antes de trabalhar detalhes complementares do cadastro."}</p>
         <div class="duplicates-grid">
-          ${duplicates.map((duplicate) => `
+          ${duplicates.map((duplicate, duplicateIndex) => `
             <article class="duplicate-card">
               <strong>${escapeHtml(duplicate.item)}</strong>
               <p><b>Nome do bem:</b> ${escapeHtml(duplicate.descricao || "Não informado")}</p>
               <p><b>Ocorrências:</b> ${escapeHtml(duplicate.count)}</p>
               <p><b>Linhas envolvidas:</b> ${duplicate.row_indices.map((rowIndex) => lineNumber(rowIndex)).join(", ")}</p>
+              <div class="duplicate-card-actions">
+                <button
+                  class="action-button duplicate-manage-button duplicate-resolve-action"
+                  type="button"
+                  data-duplicate-index="${duplicateIndex}"
+                  ${canResolveDuplicates ? "" : "disabled"}
+                >
+                  ${canResolveDuplicates ? "Escolher linha para manter" : "Disponível após conclusão"}
+                </button>
+              </div>
             </article>
           `).join("")}
         </div>
       `;
       duplicatesSection.classList.remove("hidden");
+      duplicatesSection.querySelectorAll(".duplicate-resolve-action").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const duplicateIndex = Number(button.getAttribute("data-duplicate-index"));
+          try {
+            await openDuplicateModal(duplicates[duplicateIndex]);
+          } catch (error) {
+            renderStateBanner(
+              "error",
+              "Falha ao abrir a resolução",
+              error.message || "Não foi possível carregar as linhas duplicadas no CSV."
+            );
+          }
+        });
+      });
     }
 
     function renderNav(groups) {
@@ -2168,8 +2946,14 @@ def build_frontend_html() -> str:
         const guide = describeIssue(code);
         const severity = occurrences.some((occurrence) => occurrence.severity === "error") ? "error" : "warning";
         const severityLabel = severity === "error" ? "Erro" : "Aviso";
-        const rows = [...occurrences]
+        const visibleCount = Math.min(
+          occurrences.length,
+          getVisibleProblemOccurrences(code)
+        );
+        const visibleOccurrences = [...occurrences]
           .sort((left, right) => left.row_index - right.row_index)
+          .slice(0, visibleCount);
+        const rows = visibleOccurrences
           .map((occurrence) => {
             const editableField = resolveEditableField(occurrence);
             return `
@@ -2240,6 +3024,18 @@ def build_frontend_html() -> str:
                 <tbody>${rows}</tbody>
               </table>
             </div>
+            ${visibleCount < occurrences.length ? `
+              <div class="problem-pagination">
+                <p>Mostrando ${escapeHtml(visibleCount)} de ${escapeHtml(occurrences.length)} ocorrência(s) deste grupo para manter a tela responsiva.</p>
+                <button
+                  class="action-button problem-load-more"
+                  type="button"
+                  data-problem-code="${escapeHtml(code)}"
+                >
+                  Carregar mais
+                </button>
+              </div>
+            ` : ""}
           </article>
         `;
       }).join("");
@@ -2248,6 +3044,17 @@ def build_frontend_html() -> str:
       problemsSection.querySelectorAll(".edit-action").forEach((button) => {
         button.addEventListener("click", () => handleEditClick(button));
       });
+      problemsSection.querySelectorAll(".problem-load-more").forEach((button) => {
+        button.addEventListener("click", () => {
+          const code = button.getAttribute("data-problem-code");
+          if (!code) {
+            return;
+          }
+
+          showMoreProblemOccurrences(code);
+          renderProblems(groupedProblems, options);
+        });
+      });
     }
 
     function renderCleanState(summary, options = {}) {
@@ -2255,6 +3062,7 @@ def build_frontend_html() -> str:
       const processedRows = Number(options.processedRows ?? summary.processed_rows ?? getValidatedTotalRows(summary));
       const validatedRows = getValidatedTotalRows(summary);
       const sourceTotalRows = getSourceTotalRows(summary);
+      const isZeroItemsOnly = !isAllItemsScope(workspaceContext.validationScope);
 
       if (summary.rows_with_issues > 0) {
         cleanSection.classList.add("hidden");
@@ -2262,12 +3070,12 @@ def build_frontend_html() -> str:
         return;
       }
 
-      const title = !isPartial && validatedRows === 0 && sourceTotalRows > 0
+      const title = !isPartial && isZeroItemsOnly && validatedRows === 0 && sourceTotalRows > 0
         ? "Nenhum item cadastrado do zero entrou no escopo deste processamento"
         : isPartial
           ? "Nenhuma pendência foi confirmada na prévia atual"
           : "Nenhuma correção foi exigida neste processamento";
-      const detail = !isPartial && validatedRows === 0 && sourceTotalRows > 0
+      const detail = !isPartial && isZeroItemsOnly && validatedRows === 0 && sourceTotalRows > 0
         ? `O CSV original tem ${sourceTotalRows} linhas, mas nenhuma delas entrou no escopo operacional porque a análise considera apenas itens cadastrados do zero.`
         : isPartial
           ? `Os ${processedRows} itens em escopo já validados não geraram apontamentos até este momento. Continue acompanhando a execução até a consolidação final do lote.`
@@ -2282,13 +3090,16 @@ def build_frontend_html() -> str:
     }
 
     function resetResultWorkspace() {
+      resetProblemVisibilityState();
       summarySection.classList.add("hidden");
       prioritySection.classList.add("hidden");
       actionsSection.classList.add("hidden");
+      operationalExports.classList.add("hidden");
       duplicatesSection.classList.add("hidden");
       navSection.classList.add("hidden");
       cleanSection.classList.add("hidden");
       problemsSection.classList.add("hidden");
+      operationalExports.innerHTML = "";
       duplicatesSection.innerHTML = "";
       navSection.innerHTML = "";
       cleanSection.innerHTML = "";
@@ -2307,8 +3118,40 @@ def build_frontend_html() -> str:
     function renderLiveJob(job) {
       if (job?.job_id) {
         currentJobId = job.job_id;
+        syncCorrectedCsvDownload(job.job_id);
+      }
+      if (job?.validation_scope) {
+        workspaceContext.validationScope = normalizeValidationScope(job.validation_scope);
       }
       renderProcessCard(job);
+
+      if (job?.status === "canceled") {
+        resetResultWorkspace();
+        renderStateBanner(
+          "warning",
+          "Processamento cancelado",
+          job?.status_detail || "O lote foi interrompido antes da consolidação final."
+        );
+        setEmptyState(
+          "O lote foi cancelado",
+          "Nenhum artefato final foi consolidado para este processamento. Você pode reenviar o arquivo quando quiser iniciar um novo lote."
+        );
+        return;
+      }
+
+      if (job?.cancel_requested) {
+        resetResultWorkspace();
+        renderStateBanner(
+          "warning",
+          "Cancelamento solicitado",
+          job?.status_detail || "O lote será interrompido assim que a etapa segura atual terminar."
+        );
+        setEmptyState(
+          "Encerrando o lote atual",
+          "O sistema está finalizando a etapa segura em andamento antes de interromper o processamento e remover este job da fila ativa."
+        );
+        return;
+      }
 
       if (job?.status === "failed") {
         resetResultWorkspace();
@@ -2370,16 +3213,21 @@ def build_frontend_html() -> str:
     function renderFinalJob(job, reportData) {
       if (job?.job_id) {
         currentJobId = job.job_id;
+        syncCorrectedCsvDownload(job.job_id);
+      }
+      if (job?.validation_scope) {
+        workspaceContext.validationScope = normalizeValidationScope(job.validation_scope);
       }
       renderProcessCard(job);
       renderStateBanner(
         "success",
         "Resultado final consolidado",
-        "A execução foi concluída. O resumo operacional considera apenas itens cadastrados do zero, e os dados estruturados e o PDF institucional já estão disponíveis."
+        buildFinalScopeCopy(workspaceContext.validationScope)
       );
       renderReportWorkspace(reportData, { mode: "final", processedRows: reportData.summary?.total_rows });
       downloadPdfLink.href = `/jobs/${job.job_id}/report`;
       downloadJsonLink.href = `/jobs/${job.job_id}/result`;
+      renderOperationalExports(reportData);
       actionsSection.classList.remove("hidden");
       updateCorrectionSection();
     }
@@ -2428,6 +3276,48 @@ def build_frontend_html() -> str:
       }
     }
 
+    async function fetchJobStatus(jobId) {
+      const response = await fetch(`/jobs/${jobId}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Falha ao carregar o estado do job.");
+      }
+      return payload;
+    }
+
+    async function openJob(jobId) {
+      const job = await fetchJobStatus(jobId);
+      if (job.status === "completed") {
+        const reportData = await fetchJobResult(jobId);
+        renderFinalJob(job, reportData);
+        return;
+      }
+
+      renderLiveJob(job);
+    }
+
+    async function cancelJob(jobId) {
+      const response = await fetch(`/jobs/${jobId}/cancel`, {
+        method: "POST",
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Falha ao solicitar o cancelamento do job.");
+      }
+
+      if (jobId === currentJobId) {
+        renderLiveJob(payload);
+      }
+
+      renderStateBanner(
+        "warning",
+        payload.status === "canceled" ? "Processamento cancelado" : "Cancelamento solicitado",
+        payload.status_detail || "O lote será interrompido em uma etapa segura."
+      );
+      await refreshJobsPanel();
+      return payload;
+    }
+
     async function fetchJobResult(jobId) {
       const resultResponse = await fetch(`/jobs/${jobId}/result`);
       const reportData = await resultResponse.json();
@@ -2439,6 +3329,10 @@ def build_frontend_html() -> str:
 
     async function finalizeJob(jobId) {
       const job = await waitForJob(jobId);
+      if (job.status === "canceled") {
+        renderLiveJob(job);
+        return;
+      }
       if (job.status !== "completed") {
         throw new Error(job.error_message || job.status_detail || "O lote terminou com falha.");
       }
@@ -2448,9 +3342,14 @@ def build_frontend_html() -> str:
     }
 
     async function startJobFlow(uploadPayload, fileNameOverride = null) {
+      workspaceContext.validationScope = normalizeValidationScope(
+        uploadPayload.validation_scope || workspaceContext.validationScope
+      );
+      await refreshJobsPanel();
       renderLiveJob({
         job_id: uploadPayload.job_id,
         status: uploadPayload.status,
+        validation_scope: workspaceContext.validationScope,
         current_step: "file_received",
         status_title: "Arquivo recebido",
         status_detail: "O lote foi registrado e entrará na etapa de leitura em seguida.",
@@ -2469,6 +3368,7 @@ def build_frontend_html() -> str:
       reprocessButton.disabled = true;
       reprocessButton.textContent = "Reprocessando...";
       closeEditModal();
+      closeDuplicateModal();
       resetResultWorkspace();
       emptyState.classList.add("hidden");
 
@@ -2508,6 +3408,11 @@ def build_frontend_html() -> str:
           return payload;
         }
 
+        if (payload.status === "canceled") {
+          renderLiveJob(payload);
+          return payload;
+        }
+
         if (payload.status === "completed") {
           return payload;
         }
@@ -2520,11 +3425,19 @@ def build_frontend_html() -> str:
 
     editCancelButton.addEventListener("click", closeEditModal);
     editSaveButton.addEventListener("click", saveEditModal);
+    duplicateCancelButton.addEventListener("click", closeDuplicateModal);
+    duplicateSaveButton.addEventListener("click", saveDuplicateModal);
     reprocessButton.addEventListener("click", handleReprocessClick);
 
     editModal.addEventListener("click", (event) => {
       if (event.target === editModal) {
         closeEditModal();
+      }
+    });
+
+    duplicateModal.addEventListener("click", (event) => {
+      if (event.target === duplicateModal) {
+        closeDuplicateModal();
       }
     });
 
@@ -2537,6 +3450,12 @@ def build_frontend_html() -> str:
     tenantInput.addEventListener("change", () => {
       workspaceContext.organizationLabel = tenantInput.options[tenantInput.selectedIndex]?.text || "-";
       renderLiveJob();
+    });
+
+    validationScopeInputs.forEach((input) => {
+      input.addEventListener("change", () => {
+        workspaceContext.validationScope = getSelectedValidationScope();
+      });
     });
 
     form.addEventListener("submit", async (event) => {
@@ -2555,8 +3474,10 @@ def build_frontend_html() -> str:
 
       workspaceContext.organizationLabel = tenantInput.options[tenantInput.selectedIndex]?.text || "-";
       workspaceContext.fileName = fileInput.files[0].name;
+      workspaceContext.validationScope = getSelectedValidationScope();
       clearCorrectionsPending();
       closeEditModal();
+      closeDuplicateModal();
       resetResultWorkspace();
       emptyState.classList.add("hidden");
       submitButton.disabled = true;
@@ -2568,6 +3489,7 @@ def build_frontend_html() -> str:
         status_title: "Arquivo recebido",
         status_detail: "O lote foi registrado e aguardará o início do processamento automático.",
         file_name: workspaceContext.fileName,
+        validation_scope: workspaceContext.validationScope,
         updated_at: new Date().toISOString(),
       });
 
@@ -2575,7 +3497,7 @@ def build_frontend_html() -> str:
       formData.append("file", fileInput.files[0]);
 
       try {
-        const uploadResponse = await fetch(`/validate?tenant_id=${encodeURIComponent(tenantInput.value)}`, {
+        const uploadResponse = await fetch(`/validate?tenant_id=${encodeURIComponent(tenantInput.value)}&validation_scope=${encodeURIComponent(workspaceContext.validationScope)}`, {
           method: "POST",
           body: formData,
         });
@@ -2598,8 +3520,14 @@ def build_frontend_html() -> str:
       } finally {
         submitButton.disabled = false;
         submitButton.textContent = "Processar lote";
+        refreshJobsPanel().catch(() => {});
       }
     });
+
+    refreshJobsPanel().catch(() => {});
+    setInterval(() => {
+      refreshJobsPanel().catch(() => {});
+    }, 2000);
 
     renderLiveJob();
   </script>

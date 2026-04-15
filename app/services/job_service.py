@@ -1,4 +1,4 @@
-from app.core.job import JobRecord
+from app.core.job import JobRecord, JobStatus
 
 
 class JobService:
@@ -24,10 +24,22 @@ class JobService:
     def get_job(self, job_id: str) -> JobRecord | None:
         return self._jobs.get(job_id)
 
-    def list_jobs(self, tenant_id: str | None = None) -> list[JobRecord]:
+    def list_jobs(
+        self,
+        tenant_id: str | None = None,
+        *,
+        active_only: bool = False,
+    ) -> list[JobRecord]:
         jobs = list(self._jobs.values())
         if tenant_id is not None:
             jobs = [j for j in jobs if j.tenant_id == tenant_id]
+        if active_only:
+            jobs = [
+                j
+                for j in jobs
+                if j.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+                or j.cancel_requested
+            ]
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
     def start_job(self, job_id: str) -> JobRecord:
@@ -59,6 +71,27 @@ class JobService:
     def fail_job(self, job_id: str, error_message: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         job.mark_failed(error_message)
+        return job
+
+    def request_job_cancellation(self, job_id: str) -> JobRecord:
+        job = self._get_or_raise(job_id)
+        if job.status == JobStatus.QUEUED:
+            job.mark_canceled("O lote foi cancelado antes do início do processamento.")
+            return job
+        if job.status == JobStatus.RUNNING:
+            job.request_cancellation()
+            return job
+        if job.status == JobStatus.CANCELED:
+            return job
+        raise ValueError("Only queued or running jobs can be canceled")
+
+    def cancel_job(self, job_id: str, detail: str | None = None) -> JobRecord:
+        job = self._get_or_raise(job_id)
+        if job.status == JobStatus.CANCELED:
+            return job
+        if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
+            raise ValueError("Only queued or running jobs can be canceled")
+        job.mark_canceled(detail)
         return job
 
     def update_progress(

@@ -11,6 +11,7 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELED = "canceled"
 
 
 class JobRecord(BaseModel):
@@ -31,6 +32,7 @@ class JobRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_message: str | None = None
+    cancel_requested: bool = False
     partial_summary: dict[str, Any] = Field(default_factory=dict)
     is_partial_result_available: bool = False
     partial_grouped_problems: dict[str, list[dict[str, Any]]] = Field(
@@ -44,10 +46,15 @@ class JobRecord(BaseModel):
 
     def transition_to(self, new_status: JobStatus) -> None:
         valid_transitions: dict[JobStatus, list[JobStatus]] = {
-            JobStatus.QUEUED: [JobStatus.RUNNING, JobStatus.FAILED],
-            JobStatus.RUNNING: [JobStatus.COMPLETED, JobStatus.FAILED],
-            JobStatus.COMPLETED: [],
+            JobStatus.QUEUED: [JobStatus.RUNNING, JobStatus.FAILED, JobStatus.CANCELED],
+            JobStatus.RUNNING: [
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELED,
+            ],
+            JobStatus.COMPLETED: [JobStatus.RUNNING],
             JobStatus.FAILED: [],
+            JobStatus.CANCELED: [],
         }
         allowed = valid_transitions.get(self.status, [])
         if new_status not in allowed:
@@ -59,6 +66,12 @@ class JobRecord(BaseModel):
 
     def mark_running(self) -> None:
         self.transition_to(JobStatus.RUNNING)
+        self.total_rows = 0
+        self.source_total_rows = 0
+        self.rows_with_issues = 0
+        self.total_issues = 0
+        self.error_message = None
+        self.cancel_requested = False
         self._clear_partial_preview()
         self.set_progress(
             current_step="reading_lot",
@@ -87,6 +100,7 @@ class JobRecord(BaseModel):
         self.total_issues = total_issues
         self.processed_rows = total_rows
         self.error_message = None
+        self.cancel_requested = False
         self._clear_partial_preview(reset_progress_metrics=False)
         self.set_progress(
             current_step="report_ready",
@@ -100,11 +114,38 @@ class JobRecord(BaseModel):
     def mark_failed(self, error_message: str) -> None:
         self.transition_to(JobStatus.FAILED)
         self.error_message = error_message
+        self.cancel_requested = False
         self._clear_partial_preview(reset_progress_metrics=False)
         self.set_progress(
             current_step="failed",
             status_title="Falha no processamento",
             status_detail=error_message or "Não foi possível concluir o processamento do lote.",
+        )
+
+    def request_cancellation(self) -> None:
+        if self.status != JobStatus.RUNNING:
+            raise ValueError(
+                "Cancellation can only be requested for jobs that are running"
+            )
+        self.cancel_requested = True
+        self.updated_at = datetime.now(UTC)
+        self.set_progress(
+            current_step=self.current_step or "reading_lot",
+            status_title="Cancelamento solicitado",
+            status_detail=(
+                "O lote será interrompido assim que a etapa segura atual terminar."
+            ),
+        )
+
+    def mark_canceled(self, detail: str | None = None) -> None:
+        self.transition_to(JobStatus.CANCELED)
+        self.error_message = None
+        self.cancel_requested = False
+        self._clear_partial_preview(reset_progress_metrics=False)
+        self.set_progress(
+            current_step=self.current_step or "file_received",
+            status_title="Processamento cancelado",
+            status_detail=detail or "O lote foi cancelado a pedido do usuário.",
         )
 
     def set_partial_result(
@@ -136,8 +177,11 @@ class JobRecord(BaseModel):
             self.row_results_preview = row_results_preview
 
         if is_partial_result_available is None:
+            processed_rows = self.partial_summary.get("processed_rows", 0)
             self.is_partial_result_available = bool(
-                self.partial_grouped_problems
+                processed_rows
+                or self.partial_summary
+                or self.partial_grouped_problems
                 or self.partial_duplicates
                 or self.row_results_preview
             )

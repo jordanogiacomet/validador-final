@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import job_service
 from app.main import app
+from app.services.validation_service import run_validation_job
 
 client = TestClient(app)
 
@@ -22,8 +23,8 @@ CSV_CONTENT = (
 )
 
 REDESIM_CSV_CONTENT = (
-    "Espécie,Marca,Modelo,Complemento,NS\n"
-    "MONITOR,Dell,P2419H,,SN1\n"
+    "Item,Descrição,Marca,Modelo,Complemento,NS\n"
+    "001,MONITOR,Dell,P2419H,,SN1\n"
 )
 
 
@@ -38,7 +39,13 @@ def test_frontend_page_renders_friendly_form():
     assert response.status_code == 200
     assert "Central de Correção Patrimonial" in response.text
     assert "Trilha de processamento" in response.text
+    assert "Processamentos em andamento" in response.text
+    assert "Baixar CSV corrigido" in response.text
+    assert "Carregar mais" in response.text
+    assert "Exportações operacionais" in response.text
     assert "itens cadastrados do zero" in response.text
+    assert "Todos os itens" in response.text
+    assert 'name="validation_scope"' in response.text
     assert 'id="validation-form"' in response.text
 
 
@@ -49,6 +56,7 @@ def test_upload_and_validate_creates_job():
     data = response.json()
     assert "job_id" in data
     assert data["tenant_id"] == "default"
+    assert data["validation_scope"] == "zero_items"
     assert data["status"] == "queued"
 
 
@@ -57,6 +65,14 @@ def test_upload_default_tenant():
     response = client.post("/validate", files=files)
     assert response.status_code == 200
     assert response.json()["tenant_id"] == "default"
+    assert response.json()["validation_scope"] == "zero_items"
+
+
+def test_upload_can_request_all_items_scope():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    assert response.status_code == 200
+    assert response.json()["validation_scope"] == "all_items"
 
 
 def test_upload_invalid_tenant():
@@ -74,6 +90,7 @@ def test_get_job_status():
     assert data["job_id"] == job.job_id
     assert data["status"] == "queued"
     assert data["tenant_id"] == "default"
+    assert data["validation_scope"] == "zero_items"
     assert data["current_step"] == "file_received"
     assert data["status_title"] == "Arquivo recebido"
     assert data["status_detail"]
@@ -87,6 +104,62 @@ def test_get_job_status():
     assert data["row_results_preview"] == []
     assert data["created_at"]
     assert data["updated_at"]
+    assert data["cancel_requested"] is False
+
+
+def test_list_jobs_can_filter_active_only():
+    queued_job = job_service.create_job(tenant_id="default", file_name="queued.csv")
+    running_job = job_service.create_job(tenant_id="default", file_name="running.csv")
+    completed_job = job_service.create_job(tenant_id="default", file_name="done.csv")
+
+    running_job.mark_running()
+    completed_job.mark_running()
+    completed_job.mark_completed(total_rows=1)
+
+    response = client.get("/jobs?active_only=true")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert [job["job_id"] for job in payload] == [
+        running_job.job_id,
+        queued_job.job_id,
+    ]
+    assert all(job["status"] in {"queued", "running"} for job in payload)
+
+
+def test_cancel_job_marks_queued_job_as_canceled():
+    job = job_service.create_job(tenant_id="default", file_name="lote.csv")
+
+    response = client.post(f"/jobs/{job.job_id}/cancel")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["status"] == "canceled"
+    assert payload["cancel_requested"] is False
+    assert payload["status_title"] == "Processamento cancelado"
+
+
+def test_cancel_job_marks_running_job_as_cancel_requested():
+    job = job_service.create_job(tenant_id="default", file_name="lote.csv")
+    job.mark_running()
+
+    response = client.post(f"/jobs/{job.job_id}/cancel")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["status"] == "running"
+    assert payload["cancel_requested"] is True
+    assert payload["status_title"] == "Cancelamento solicitado"
+
+
+def test_cancel_job_rejects_completed_job():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+    job.mark_completed(total_rows=1)
+
+    response = client.post(f"/jobs/{job.job_id}/cancel")
+    assert response.status_code == 400
+    assert "queued or running" in response.json()["detail"]
 
 
 def test_get_job_status_includes_file_name_metadata():
@@ -203,7 +276,32 @@ def test_validation_result_includes_item_and_descricao_metadata():
             Path(job.report_path).unlink(missing_ok=True)
 
 
-def test_redesim_tenant_uses_species_column_and_rules():
+def test_validation_result_can_include_all_items_scope():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+    try:
+        result_response = client.get(f"/jobs/{job_id}/result")
+        assert result_response.status_code == 200
+
+        payload = result_response.json()
+        assert payload["summary"]["total_rows"] == 2
+        assert payload["summary"]["source_total_rows"] == 2
+        assert [row["item"] for row in payload["row_results"]] == ["001", "002"]
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_redesim_tenant_uses_configured_descricao_column_and_rules():
     files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
     response = client.post("/validate?tenant_id=redesim", files=files)
     assert response.status_code == 200
@@ -262,6 +360,105 @@ def test_download_report_completed():
     Path(report_path).unlink(missing_ok=True)
 
 
+def test_download_job_csv_returns_current_corrected_file():
+    job = job_service.create_job(tenant_id="default", file_name="inventario.csv")
+
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa corrigida,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.get(f"/jobs/{job.job_id}/csv")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert 'filename="inventario_corrigido.csv"' in response.headers["content-disposition"]
+    assert "Mesa corrigida" in response.text
+
+    Path(csv_path).unlink(missing_ok=True)
+
+
+def test_download_job_csv_file_missing():
+    job = job_service.create_job(tenant_id="default", file_name="inventario.csv")
+    job.file_path = "/nonexistent/inventario.csv"
+
+    response = client.get(f"/jobs/{job.job_id}/csv")
+    assert response.status_code == 404
+    assert "CSV file not found" in response.json()["detail"]
+
+
+def test_download_duplicates_export_csv_for_completed_job():
+    duplicate_csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa reserva,MarcaX,ModeloY,SN2,Sala1,CC1,Detalhe,Obs\n"
+    )
+    files = {
+        "file": (
+            "duplicados.csv",
+            BytesIO(duplicate_csv_content.encode()),
+            "text/csv",
+        )
+    }
+    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+
+    try:
+        export_response = client.get(f"/jobs/{job_id}/exports/csv?kind=duplicates")
+        assert export_response.status_code == 200
+        assert export_response.headers["content-type"].startswith("text/csv")
+        assert 'filename="duplicados_duplicados.csv"' in (
+            export_response.headers["content-disposition"]
+        )
+        assert "Quantidade de Ocorrências" in export_response.text
+        assert "001" in export_response.text
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_download_problem_group_export_csv_for_completed_job():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post("/validate?tenant_id=default", files=files)
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+
+    try:
+        export_response = client.get(
+            f"/jobs/{job_id}/exports/csv?kind=problem_group&problem_code=ZERO_ITEM_COMPLEMENTO_EMPTY"
+        )
+        assert export_response.status_code == 200
+        assert export_response.headers["content-type"].startswith("text/csv")
+        assert 'filename="test_zero_item_complemento_empty.csv"' in (
+            export_response.headers["content-disposition"]
+        )
+        assert "Código,Linha,Item,Descrição,Severidade,Campo,Mensagem" in export_response.text
+        assert "ZERO_ITEM_COMPLEMENTO_EMPTY" in export_response.text
+        assert "Cadeira" in export_response.text
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
 def test_download_result_not_found():
     response = client.get("/jobs/nonexistent/result")
     assert response.status_code == 404
@@ -269,6 +466,11 @@ def test_download_result_not_found():
 
 def test_download_report_not_found():
     response = client.get("/jobs/nonexistent/report")
+    assert response.status_code == 404
+
+
+def test_download_job_csv_not_found():
+    response = client.get("/jobs/nonexistent/csv")
     assert response.status_code == 404
 
 
@@ -370,6 +572,110 @@ def test_get_job_row_returns_current_value_and_mapping():
     Path(csv_path).unlink(missing_ok=True)
 
 
+def test_resolve_duplicate_rows_deletes_unselected_occurrences_from_csv():
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa reserva,MarcaX,ModeloY,SN2,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa antiga,MarcaX,ModeloY,SN3,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_path=csv_path,
+        file_name="duplicados.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, job_service)
+
+    response = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1, 2], "keep_row_index": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["kept_row_index"] == 1
+    assert payload["deleted_row_indices"] == [0, 2]
+    assert payload["remaining_rows"] == 1
+
+    updated_csv = Path(csv_path).read_text(encoding="utf-8")
+    assert "Mesa reserva" in updated_csv
+    assert "Mesa antiga" not in updated_csv
+    assert "MarcaX" in updated_csv
+    assert "Mesa," not in updated_csv
+
+    result_response = client.get(f"/jobs/{job.job_id}/result")
+    assert result_response.status_code == 200
+    result_payload = result_response.json()
+    assert result_payload["summary"]["total_rows"] == 1
+    assert result_payload["duplicates"] == []
+    assert [row["descricao"] for row in result_payload["row_results"]] == ["Mesa reserva"]
+
+    Path(csv_path).unlink(missing_ok=True)
+    refreshed_job = job_service.get_job(job.job_id)
+    if refreshed_job and refreshed_job.result_path:
+        Path(refreshed_job.result_path).unlink(missing_ok=True)
+    if refreshed_job and refreshed_job.report_path:
+        Path(refreshed_job.report_path).unlink(missing_ok=True)
+
+
+def test_resolve_duplicate_rows_requires_completed_job_for_in_place_refresh():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa reserva,MarcaX,ModeloY,SN2,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1], "keep_row_index": 1},
+    )
+    assert response.status_code == 400
+    assert "completed jobs" in response.json()["detail"]
+
+    unchanged_csv = Path(csv_path).read_text(encoding="utf-8")
+    assert "Mesa reserva" in unchanged_csv
+    assert "Mesa," in unchanged_csv
+
+    Path(csv_path).unlink(missing_ok=True)
+
+
+def test_resolve_duplicate_rows_rejects_keep_index_outside_group():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa reserva,MarcaX,ModeloY,SN2,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1], "keep_row_index": 3},
+    )
+    assert response.status_code == 400
+    assert "keep_row_index" in response.json()["detail"]
+
+    Path(csv_path).unlink(missing_ok=True)
+
+
 def test_reprocess_job_creates_new_job_from_corrected_csv():
     job = job_service.create_job(tenant_id="default", file_name="corrigido.csv")
     csv_content = (
@@ -387,6 +693,7 @@ def test_reprocess_job_creates_new_job_from_corrected_csv():
     payload = response.json()
     assert payload["job_id"] != job.job_id
     assert payload["tenant_id"] == "default"
+    assert payload["validation_scope"] == "zero_items"
 
     new_job = job_service.get_job(payload["job_id"])
     assert new_job is not None
@@ -396,6 +703,40 @@ def test_reprocess_job_creates_new_job_from_corrected_csv():
 
     Path(csv_path).unlink(missing_ok=True)
     Path(new_job.file_path).unlink(missing_ok=True)
+    if new_job.result_path:
+        Path(new_job.result_path).unlink(missing_ok=True)
+    if new_job.report_path:
+        Path(new_job.report_path).unlink(missing_ok=True)
+
+
+def test_reprocess_job_preserves_validation_scope():
+    job = job_service.create_job(
+        tenant_id="default",
+        file_name="corrigido.csv",
+        params={"validation_scope": "all_items"},
+    )
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa executiva,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(f"/jobs/{job.job_id}/reprocess")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation_scope"] == "all_items"
+
+    new_job = job_service.get_job(payload["job_id"])
+    assert new_job is not None
+    assert new_job.params["validation_scope"] == "all_items"
+
+    Path(csv_path).unlink(missing_ok=True)
+    if new_job.file_path:
+        Path(new_job.file_path).unlink(missing_ok=True)
     if new_job.result_path:
         Path(new_job.result_path).unlink(missing_ok=True)
     if new_job.report_path:

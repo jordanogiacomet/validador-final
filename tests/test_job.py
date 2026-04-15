@@ -99,12 +99,57 @@ class TestJobRecord:
         job.mark_failed("bad file")
         assert job.status == JobStatus.FAILED
 
-    def test_invalid_transition_completed_to_running(self):
+    def test_request_cancellation_marks_running_job(self):
         job = JobRecord(tenant_id="default")
         job.mark_running()
-        job.mark_completed()
-        with pytest.raises(ValueError, match="Invalid transition"):
-            job.mark_running()
+
+        job.request_cancellation()
+
+        assert job.status == JobStatus.RUNNING
+        assert job.cancel_requested is True
+        assert job.status_title == "Cancelamento solicitado"
+
+    def test_transition_running_to_canceled(self):
+        job = JobRecord(tenant_id="default")
+        job.mark_running()
+        job.set_partial_result(
+            total_rows=30,
+            processed_rows=10,
+            batch_size=5,
+            partial_summary={"total_rows": 30, "processed_rows": 10},
+            partial_duplicates=[{"item": "001"}],
+            row_results_preview=[{"row_index": 0}],
+        )
+
+        job.mark_canceled("Cancelado pelo usuário")
+
+        assert job.status == JobStatus.CANCELED
+        assert job.cancel_requested is False
+        assert job.status_title == "Processamento cancelado"
+        assert job.status_detail == "Cancelado pelo usuário"
+        assert job.partial_summary == {}
+        assert job.partial_duplicates == []
+
+    def test_transition_completed_to_running_for_in_place_refresh(self):
+        job = JobRecord(tenant_id="default")
+        job.mark_running()
+        job.mark_completed(
+            total_rows=12,
+            source_total_rows=15,
+            rows_with_issues=4,
+            total_issues=7,
+        )
+
+        job.mark_running()
+
+        assert job.status == JobStatus.RUNNING
+        assert job.total_rows == 0
+        assert job.source_total_rows == 0
+        assert job.rows_with_issues == 0
+        assert job.total_issues == 0
+        assert job.processed_rows == 0
+        assert job.current_step == "reading_lot"
+        assert job.error_message is None
 
     def test_invalid_transition_failed_to_running(self):
         job = JobRecord(tenant_id="default")
@@ -181,6 +226,22 @@ class TestJobService:
         assert len(default_jobs) == 2
         assert all(j.tenant_id == "default" for j in default_jobs)
 
+    def test_list_jobs_can_filter_only_active(self):
+        queued_job = self.service.create_job(tenant_id="default")
+        running_job = self.service.create_job(tenant_id="default")
+        completed_job = self.service.create_job(tenant_id="default")
+
+        self.service.start_job(running_job.job_id)
+        self.service.start_job(completed_job.job_id)
+        self.service.complete_job(completed_job.job_id)
+
+        active_jobs = self.service.list_jobs(active_only=True)
+
+        assert [job.job_id for job in active_jobs] == [
+            running_job.job_id,
+            queued_job.job_id,
+        ]
+
     def test_start_job(self):
         job = self.service.create_job(tenant_id="default")
         updated = self.service.start_job(job.job_id)
@@ -239,6 +300,32 @@ class TestJobService:
         updated = self.service.fail_job(job.job_id, "parse error")
         assert updated.status == JobStatus.FAILED
         assert updated.error_message == "parse error"
+
+    def test_request_job_cancellation_for_queued_job(self):
+        job = self.service.create_job(tenant_id="default")
+
+        updated = self.service.request_job_cancellation(job.job_id)
+
+        assert updated.status == JobStatus.CANCELED
+        assert updated.cancel_requested is False
+
+    def test_request_job_cancellation_for_running_job(self):
+        job = self.service.create_job(tenant_id="default")
+        self.service.start_job(job.job_id)
+
+        updated = self.service.request_job_cancellation(job.job_id)
+
+        assert updated.status == JobStatus.RUNNING
+        assert updated.cancel_requested is True
+        assert updated.status_title == "Cancelamento solicitado"
+
+    def test_request_job_cancellation_rejects_completed_job(self):
+        job = self.service.create_job(tenant_id="default")
+        self.service.start_job(job.job_id)
+        self.service.complete_job(job.job_id)
+
+        with pytest.raises(ValueError, match="Only queued or running jobs"):
+            self.service.request_job_cancellation(job.job_id)
 
     def test_start_nonexistent_job_raises(self):
         with pytest.raises(KeyError, match="Job not found"):

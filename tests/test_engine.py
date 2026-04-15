@@ -3,6 +3,7 @@ from app.core.engine import ValidationEngine
 from app.core.issue import ValidationIssue
 from app.core.registry import RULE_REGISTRY, register_rule
 from app.core.tenant_config import TenantConfig
+from app.core.validation_scope import ValidationScope
 from app.rules.base import BaseRule
 
 
@@ -192,6 +193,27 @@ def test_validate_all_processes_only_rows_in_scope():
     assert len(results[1]) == 1
 
 
+def test_validate_all_can_process_all_items_scope():
+    register_rule(AlwaysFailRule())
+
+    tenant = _make_tenant(enabled_rules=["always_fail"])
+    engine = ValidationEngine(tenant)
+
+    raw_rows = [
+        {"Item": "001", "Placa Anterior": "ABC"},
+        {"Item": "002", "Placa Anterior": ""},
+    ]
+
+    results = engine.validate_all(
+        raw_rows,
+        validation_scope=ValidationScope.ALL_ITEMS,
+    )
+
+    assert len(results) == 2
+    assert len(results[0]) == 1
+    assert len(results[1]) == 1
+
+
 def test_validate_all_normalizes_rows():
     register_rule(AlwaysFailRule())
 
@@ -281,6 +303,22 @@ def test_get_scoped_row_indices_uses_canonical_zero_flag():
     ]
 
     assert engine.get_scoped_row_indices(normalized_rows) == [1, 2]
+
+
+def test_get_scoped_row_indices_can_include_all_rows():
+    tenant = _make_tenant()
+    engine = ValidationEngine(tenant)
+
+    normalized_rows = [
+        {"item": "001", "flag_item_cadastrado_do_zero": 0},
+        {"item": "002", "flag_item_cadastrado_do_zero": 1},
+        {"item": "003", "flag_item_cadastrado_do_zero": 1},
+    ]
+
+    assert engine.get_scoped_row_indices(
+        normalized_rows,
+        validation_scope=ValidationScope.ALL_ITEMS,
+    ) == [0, 1, 2]
 
 
 def test_validation_context_has_required_fields():

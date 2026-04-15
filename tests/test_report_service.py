@@ -5,9 +5,11 @@ from app.services.report_service import (
     _describe_issue,
     _sorted_problem_groups,
     build_duplicate_section,
+    build_duplicates_export_csv,
     build_full_report,
     build_grouped_problems,
     build_partial_report,
+    build_problem_group_export_csv,
     build_row_results,
     generate_pdf_report,
 )
@@ -146,6 +148,44 @@ def test_grouped_problems_include_item_and_descricao():
     assert entry["descricao"] == "Cadeira"
 
 
+def test_build_duplicates_export_csv_formats_operational_columns():
+    csv_output = build_duplicates_export_csv(
+        [
+            {
+                "item": "A001",
+                "descricao": "Mesa",
+                "row_indices": [0, 2],
+                "count": 2,
+            }
+        ]
+    )
+
+    assert "Item,Descrição,Quantidade de Ocorrências,Linhas Envolvidas" in csv_output
+    assert "A001,Mesa,2,\"2, 4\"" in csv_output
+
+
+def test_build_problem_group_export_csv_formats_operational_rows():
+    csv_output = build_problem_group_export_csv(
+        "ZERO_ITEM_COMPLEMENTO_EMPTY",
+        [
+            {
+                "row_index": 1,
+                "item": "A002",
+                "descricao": "Cadeira",
+                "severity": "warning",
+                "field": "complemento",
+                "message": "Complemento vazio",
+            }
+        ],
+    )
+
+    assert "Código,Linha,Item,Descrição,Severidade,Campo,Mensagem" in csv_output
+    assert (
+        "ZERO_ITEM_COMPLEMENTO_EMPTY,3,A002,Cadeira,warning,Complemento,"
+        "Complemento vazio" in csv_output
+    )
+
+
 def test_describe_issue_for_category_required_is_specific():
     guide = _describe_issue("CATEGORY_MONITOR_COMPLEMENTO_REQUIRED")
 
@@ -278,6 +318,25 @@ def test_partial_report_can_limit_to_scope_and_keep_source_total_rows():
     assert [row["row_index"] for row in preview["row_results_preview"]] == [1]
     assert list(preview["partial_grouped_problems"]) == ["ZERO_SCOPE"]
     assert preview["partial_duplicates"] == []
+
+
+def test_partial_report_can_skip_row_results_preview_for_live_polling():
+    rows = _sample_rows()
+    results = {
+        0: [_make_issue(code="DUPLICATE_ITEM", severity="error")],
+        1: [_make_issue(code="ZERO_SCOPE", severity="warning")],
+    }
+
+    preview = build_partial_report(
+        rows,
+        results,
+        processed_row_indices=[0, 1],
+        include_row_results_preview=False,
+    )
+
+    assert preview["partial_summary"]["processed_rows"] == 2
+    assert preview["row_results_preview"] == []
+    assert "DUPLICATE_ITEM" in preview["partial_grouped_problems"]
 
 
 def test_sorted_problem_groups_prioritize_errors_then_volume():

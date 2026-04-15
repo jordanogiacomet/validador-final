@@ -1,6 +1,8 @@
+import csv
 from collections import defaultdict
 from datetime import datetime
 from html import escape
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -1235,6 +1237,7 @@ def build_partial_report(
     partial_duplicates: list[dict] | None = None,
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
+    include_row_results_preview: bool = True,
 ) -> dict:
     validated_indices = _resolve_validated_row_indices(
         normalized_rows, validated_row_indices
@@ -1251,10 +1254,14 @@ def build_partial_report(
             source_total_rows=source_total_rows,
             processed_rows=len(ordered_indices),
         ),
-        "row_results_preview": build_row_results(
-            normalized_rows,
-            validation_results,
-            row_indices=ordered_indices,
+        "row_results_preview": (
+            build_row_results(
+                normalized_rows,
+                validation_results,
+                row_indices=ordered_indices,
+            )
+            if include_row_results_preview
+            else []
         ),
         "partial_grouped_problems": build_grouped_problems(
             normalized_rows,
@@ -1306,6 +1313,91 @@ def build_full_report(
             row_indices=validated_indices,
         ),
     }
+
+
+def build_duplicates_export_csv(duplicates: list[dict]) -> str:
+    buffer = StringIO()
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "Item",
+            "Descrição",
+            "Quantidade de Ocorrências",
+            "Linhas Envolvidas",
+        ],
+    )
+    writer.writeheader()
+    for duplicate in duplicates:
+        row_indices = duplicate.get("row_indices") or []
+        writer.writerow(
+            {
+                "Item": "" if duplicate.get("item") is None else str(duplicate["item"]),
+                "Descrição": ""
+                if duplicate.get("descricao") is None
+                else str(duplicate["descricao"]),
+                "Quantidade de Ocorrências": duplicate.get("count", 0),
+                "Linhas Envolvidas": ", ".join(
+                    _human_line_number(
+                        row_index if isinstance(row_index, int) else None
+                    )
+                    for row_index in row_indices
+                ),
+            }
+        )
+
+    return buffer.getvalue()
+
+
+def build_problem_group_export_csv(
+    code: str,
+    occurrences: list[dict],
+) -> str:
+    buffer = StringIO()
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "Código",
+            "Linha",
+            "Item",
+            "Descrição",
+            "Severidade",
+            "Campo",
+            "Mensagem",
+        ],
+    )
+    writer.writeheader()
+    for occurrence in sorted(
+        occurrences,
+        key=lambda item: (
+            item.get("row_index")
+            if isinstance(item.get("row_index"), int)
+            else float("inf")
+        ),
+    ):
+        row_index = occurrence.get("row_index")
+        writer.writerow(
+            {
+                "Código": code,
+                "Linha": _human_line_number(row_index if isinstance(row_index, int) else None),
+                "Item": "" if occurrence.get("item") is None else str(occurrence["item"]),
+                "Descrição": ""
+                if occurrence.get("descricao") is None
+                else str(occurrence["descricao"]),
+                "Severidade": ""
+                if occurrence.get("severity") is None
+                else str(occurrence["severity"]),
+                "Campo": _field_label(
+                    occurrence.get("field")
+                    if isinstance(occurrence.get("field"), str)
+                    else None
+                ),
+                "Mensagem": ""
+                if occurrence.get("message") is None
+                else str(occurrence["message"]),
+            }
+        )
+
+    return buffer.getvalue()
 
 
 def generate_pdf_report(
