@@ -1,7 +1,11 @@
 import pytest
 
-from app.core.tenant_config import CategoryConfig, LLMConfig, TenantConfig
-from app.core.tenant_loader import list_tenants, load_default_tenant_config, load_tenant_config
+from app.core.tenant_config import CategoryConfig, CSVConfig, LLMConfig, TenantConfig
+from app.core.tenant_loader import (
+    list_tenants,
+    load_default_tenant_config,
+    load_tenant_config,
+)
 
 
 class TestTenantConfig:
@@ -13,6 +17,8 @@ class TestTenantConfig:
         assert config.disabled_rules == []
         assert config.thresholds == {}
         assert config.categories == []
+        assert config.csv.delimiter == ","
+        assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
 
     def test_config_with_categories(self) -> None:
@@ -46,6 +52,15 @@ class TestTenantConfig:
         assert config.llm.enabled is True
         assert config.llm.model == "claude-sonnet-4-20250514"
 
+    def test_config_with_csv_options(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            csv=CSVConfig(delimiter=";", encoding="iso-8859-1"),
+        )
+        assert config.csv.delimiter == ";"
+        assert config.csv.encoding == "iso-8859-1"
+
 
 class TestTenantLoader:
     def test_load_default_tenant(self) -> None:
@@ -68,13 +83,25 @@ class TestTenantLoader:
     def test_load_redesim(self) -> None:
         config = load_tenant_config("redesim")
         assert config.tenant_id == "redesim"
-        assert config.columns["descricao"] == "Espécie"
+        assert config.columns["descricao"] == "Descrição"
         assert "category_required_fields" in config.enabled_rules
         assert len(config.categories) > 5
         monitor = next(cat for cat in config.categories if cat.name == "monitor")
         assert "complemento" in monitor.required_fields
         assert "inches_pattern" in monitor.critical_checks
         assert monitor.field_help["complemento"] == "LED 19 POL"
+
+    def test_load_redesim_v2(self) -> None:
+        config = load_tenant_config("redesim_v2")
+        assert config.tenant_id == "redesim_v2"
+        assert config.display_name == "RedeSim V2"
+        assert config.csv.delimiter == ";"
+        assert config.csv.encoding == "iso-8859-1"
+        assert config.columns["item"] == "item"
+        assert config.columns["placa_anterior"] == "item_anterior"
+        assert config.columns["descricao"] == "descricao"
+        assert "category_required_fields" in config.enabled_rules
+        assert len(config.categories) > 5
 
     def test_load_nonexistent_tenant_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
@@ -85,6 +112,7 @@ class TestTenantLoader:
         assert "default" in tenants
         assert "empresa_exemplo" in tenants
         assert "redesim" in tenants
+        assert "redesim_v2" in tenants
 
     def test_default_tenant_has_columns(self) -> None:
         config = load_default_tenant_config()

@@ -19,9 +19,15 @@ CSV_CONTENT = (
 )
 
 REDESIM_DUPLICATE_CONTENT_WITH_HEADER_VARIATION = (
-    "Item,Placa Anterior,ESPECIE ,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
     "001,,MONITOR,Dell,P2419H,SN1,Sala1,CC1,LED 19 POL,\n"
     "001,,MESA,,,SN2,Sala2,CC2,,\n"
+)
+
+REDESIM_V2_DUPLICATE_CONTENT = (
+    "especie_id;base_id;;item_anterior;item;descricao;marca;modelo;ns;complemento;observacao;cc;cc_descricao;local;latitude;longitude;gps;usuario;foto_complementar_memento;\n"
+    "1;144;uuid-1;;001;MONITOR;Dell;P2419H;SN1;;AÇÃO;8327;A27;MATRIZ;;;;Letícia;;\n"
+    "1;144;uuid-2;;001;MESA;;;;;;8327;A27;MATRIZ;;;;Letícia;;\n"
 )
 
 
@@ -130,25 +136,71 @@ def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplica
     assert duplicate_group[1]["descricao"] == "MESA"
 
 
-def test_job_csv_read_and_update_resolve_redesim_header_variations(tmp_path):
+def test_run_validation_job_supports_redesim_v2_semicolon_csv(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "redesim_v2.csv"
+    csv_path.write_text(REDESIM_V2_DUPLICATE_CONTENT, encoding="iso-8859-1")
+
+    service = RecordingJobService()
+    job = service.create_job(
+        tenant_id="redesim_v2",
+        file_path=str(csv_path),
+        file_name="redesim_v2.csv",
+    )
+
+    run_validation_job(job.job_id, service)
+
+    updated_job = service.get_job(job.job_id)
+    assert updated_job is not None
+    assert updated_job.status == JobStatus.COMPLETED
+
+    assert len(service.partial_snapshots) >= 2
+    last_snapshot = service.partial_snapshots[-1]
+    assert last_snapshot["partial_duplicates"][0]["descricao"] == "MONITOR / MESA"
+    assert last_snapshot["partial_grouped_problems"]["DUPLICATE_ITEM"][0]["descricao"] == "MONITOR"
+    assert last_snapshot["partial_grouped_problems"]["DUPLICATE_ITEM"][1]["descricao"] == "MESA"
+    assert last_snapshot["row_results_preview"][0]["descricao"] == "MONITOR"
+    assert last_snapshot["row_results_preview"][1]["descricao"] == "MESA"
+
+    assert updated_job.result_path is not None
+    payload = json.loads(Path(updated_job.result_path).read_text(encoding="utf-8"))
+    assert payload["row_results"][0]["descricao"] == "MONITOR"
+    assert payload["row_results"][1]["descricao"] == "MESA"
+    assert payload["duplicates"][0]["descricao"] == "MONITOR / MESA"
+
+
+def test_job_csv_read_and_update_preserve_redesim_v2_csv_format(tmp_path):
     csv_path = tmp_path / "redesim.csv"
-    csv_path.write_text(REDESIM_DUPLICATE_CONTENT_WITH_HEADER_VARIATION, encoding="utf-8")
+    csv_path.write_text(REDESIM_V2_DUPLICATE_CONTENT, encoding="iso-8859-1")
 
     service = JobService()
     job = service.create_job(
-        tenant_id="redesim",
+        tenant_id="redesim_v2",
         file_path=str(csv_path),
         file_name="redesim.csv",
     )
 
     row, resolved_columns = read_job_csv_row(job.job_id, service, row_index=0)
-    assert resolved_columns["descricao"] == "Espécie"
-    assert row["ESPECIE "] == "MONITOR"
+    assert resolved_columns["descricao"] == "descricao"
+    assert row["descricao"] == "MONITOR"
 
     updated_row = update_job_csv_row(
         job.job_id,
         service,
         row_index=0,
-        updates={"descricao": "MONITOR AJUSTADO"},
+        updates={"descricao": "MONITOR AÇÃO", "observacao": "AÇÃO MANUAL"},
     )
-    assert updated_row["ESPECIE "] == "MONITOR AJUSTADO"
+    assert updated_row["descricao"] == "MONITOR AÇÃO"
+    assert updated_row["observacao"] == "AÇÃO MANUAL"
+
+    updated_csv = csv_path.read_text(encoding="iso-8859-1")
+    assert updated_csv.splitlines()[0].startswith(
+        "especie_id;base_id;;item_anterior;item;descricao;"
+    )
+    assert "MONITOR AÇÃO" in updated_csv
+    assert "AÇÃO MANUAL" in updated_csv

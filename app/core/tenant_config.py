@@ -18,6 +18,11 @@ class LLMConfig(BaseModel):
     prompt_file: str = ""
 
 
+class CSVConfig(BaseModel):
+    delimiter: str = ","
+    encoding: str = "utf-8"
+
+
 class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str
@@ -26,6 +31,7 @@ class TenantConfig(BaseModel):
     disabled_rules: list[str] = Field(default_factory=list)
     thresholds: dict[str, int | float | str | bool] = Field(default_factory=dict)
     categories: list[CategoryConfig] = Field(default_factory=list)
+    csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
 

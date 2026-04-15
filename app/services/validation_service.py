@@ -1,3 +1,4 @@
+import csv
 import json
 import math
 import shutil
@@ -13,6 +14,7 @@ from app.core.canonical_fields import (
 from app.core.engine import ValidationEngine
 from app.core.job import JobRecord
 from app.core.registry import register_rule
+from app.core.tenant_config import TenantConfig
 from app.core.tenant_loader import load_tenant_config
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
@@ -32,10 +34,59 @@ DEFAULT_BATCH_SIZE = 200
 TARGET_PREVIEW_BATCHES = 10
 
 
+def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
+    return {
+        "sep": tenant_config.csv.delimiter,
+        "encoding": tenant_config.csv.encoding,
+        "keep_default_na": False,
+    }
+
+
+def _read_raw_csv_headers(file_path: Path, tenant_config: TenantConfig) -> list[str]:
+    with file_path.open("r", encoding=tenant_config.csv.encoding, newline="") as file:
+        reader = csv.reader(file, delimiter=tenant_config.csv.delimiter)
+        try:
+            return next(reader)
+        except StopIteration:
+            return []
+
+
+def _read_tenant_csv(file_path: Path, tenant_config: TenantConfig) -> pd.DataFrame:
+    df = pd.read_csv(
+        file_path,
+        dtype=str,
+        **_build_csv_read_kwargs(tenant_config),
+    )
+    raw_headers = _read_raw_csv_headers(file_path, tenant_config)
+    if raw_headers and len(raw_headers) == len(df.columns):
+        df.columns = raw_headers
+    return df
+
+
+def _write_tenant_csv(
+    df: pd.DataFrame,
+    file_path: Path,
+    tenant_config: TenantConfig,
+) -> None:
+    df.to_csv(
+        file_path,
+        index=False,
+        sep=tenant_config.csv.delimiter,
+        encoding=tenant_config.csv.encoding,
+    )
+
+
+def _dataframe_to_raw_rows(df: pd.DataFrame) -> list[dict[str, object]]:
+    return [
+        dict(zip(df.columns, row, strict=False))
+        for row in df.itertuples(index=False, name=None)
+    ]
+
+
 def _get_job_csv_context(
     job_id: str,
     job_service: JobService,
-) -> tuple[JobRecord, Path, pd.DataFrame]:
+) -> tuple[JobRecord, Path, TenantConfig, pd.DataFrame]:
     job = job_service.get_job(job_id)
     if job is None:
         raise KeyError(f"Job not found: {job_id}")
@@ -47,8 +98,9 @@ def _get_job_csv_context(
     if not file_path.exists():
         raise FileNotFoundError("CSV file not found for this job")
 
-    df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
-    return job, file_path, df
+    tenant_config = load_tenant_config(job.tenant_id)
+    df = _read_tenant_csv(file_path, tenant_config)
+    return job, file_path, tenant_config, df
 
 
 def _resolve_source_column(
@@ -82,8 +134,7 @@ def update_job_csv_row(
     if row_index < 0:
         raise ValueError(f"Invalid row index: {row_index}")
 
-    job, file_path, df = _get_job_csv_context(job_id, job_service)
-    tenant_config = load_tenant_config(job.tenant_id)
+    job, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
     if row_index >= len(df):
         raise ValueError(f"Row index out of range: {row_index}")
 
@@ -93,7 +144,7 @@ def update_job_csv_row(
         )
         df.at[row_index, column_name] = new_value
 
-    df.to_csv(file_path, index=False)
+    _write_tenant_csv(df, file_path, tenant_config)
     return df.iloc[row_index].to_dict()  # type: ignore[return-value]
 
 
@@ -106,8 +157,7 @@ def read_job_csv_row(
     if row_index < 0:
         raise ValueError(f"Invalid row index: {row_index}")
 
-    job, _, df = _get_job_csv_context(job_id, job_service)
-    tenant_config = load_tenant_config(job.tenant_id)
+    _, _, tenant_config, df = _get_job_csv_context(job_id, job_service)
     if row_index >= len(df):
         raise ValueError(f"Row index out of range: {row_index}")
 
@@ -126,7 +176,7 @@ def create_reprocess_job(
     job_id: str,
     job_service: JobService,
 ) -> JobRecord:
-    source_job, source_file_path, _ = _get_job_csv_context(job_id, job_service)
+    source_job, source_file_path, _, _ = _get_job_csv_context(job_id, job_service)
     source_file_name = source_job.file_name or source_file_path.name
 
     new_job = job_service.create_job(
@@ -208,8 +258,8 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         engine = ValidationEngine(tenant=tenant_config)
 
         file_path = Path(job.file_path)  # type: ignore[arg-type]
-        df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
-        raw_rows: list[dict[str, object]] = df.to_dict(orient="records")
+        df = _read_tenant_csv(file_path, tenant_config)
+        raw_rows = _dataframe_to_raw_rows(df)
 
         job_service.update_progress(
             job_id=job_id,
