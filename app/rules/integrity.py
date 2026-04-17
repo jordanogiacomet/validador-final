@@ -1,6 +1,7 @@
 from collections import Counter
 
 from app.core.context import ValidationContext
+from app.core.duplicate_items import count_item_occurrences
 from app.core.issue import ValidationIssue
 from app.rules.base import BaseRule
 
@@ -17,11 +18,7 @@ class DuplicateItemRule(BaseRule):
             return []
 
         if "_duplicate_item_counts" not in context.shared_context:
-            counts: Counter[object] = Counter()
-            for row in context.all_rows:
-                val = row.get("item")
-                if val is not None:
-                    counts[val] += 1
+            counts: Counter[object] = count_item_occurrences(context.all_rows)
             context.shared_context["_duplicate_item_counts"] = counts
 
         counts = context.shared_context["_duplicate_item_counts"]

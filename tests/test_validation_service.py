@@ -11,6 +11,7 @@ from app.services.validation_service import (
     delete_job_csv_rows_and_refresh,
     get_job_operational_export,
     read_job_csv_row,
+    resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
     update_job_csv_row,
 )
@@ -20,6 +21,13 @@ CSV_CONTENT = (
     "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
     "001,,Cadeira,MarcaZ,ModeloW,SN2,Sala2,CC2,,\n"
     "001,,Armario,MarcaA,ModeloB,SN3,Sala3,CC3,,\n"
+)
+
+DUPLICATE_SCOPE_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
+    "002,,Cadeira,MarcaZ,ModeloW,SN2,Sala2,CC2,,\n"
+    "001,,Armario,MarcaA,ModeloB,SN3,Sala3,CC3,Detalhe armario completo validado,\n"
 )
 
 REDESIM_DUPLICATE_CONTENT_WITH_HEADER_VARIATION = (
@@ -51,6 +59,10 @@ class CancelAfterProgressJobService(RecordingJobService):
         if kwargs.get("processed_rows", 0) > 0 and not updated.cancel_requested:
             self.request_job_cancellation(job_id)
         return updated
+
+
+def setup_function():
+    validation_service._JOB_CSV_CONTEXT_CACHE.clear()
 
 
 def test_run_validation_job_publishes_incremental_preview_before_final_artifacts(
@@ -148,6 +160,52 @@ def test_run_validation_job_can_include_all_items_when_scope_requests_it(
     assert payload["summary"]["total_rows"] == 3
     assert payload["summary"]["source_total_rows"] == 3
     assert [row["row_index"] for row in payload["row_results"]] == [0, 1, 2]
+
+
+def test_run_validation_job_can_include_only_duplicate_items_when_scope_requests_it(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(DUPLICATE_SCOPE_CONTENT, encoding="utf-8")
+
+    service = RecordingJobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "duplicate_items"},
+    )
+
+    run_validation_job(job.job_id, service)
+
+    updated_job = service.get_job(job.job_id)
+    assert updated_job is not None
+    assert updated_job.status == JobStatus.COMPLETED
+    assert updated_job.processed_rows == 2
+    assert updated_job.total_rows == 2
+    assert updated_job.source_total_rows == 3
+
+    assert len(service.partial_snapshots) >= 2
+    first_snapshot = service.partial_snapshots[0]
+    assert first_snapshot["processed_rows"] == 0
+    assert first_snapshot["partial_summary"]["total_rows"] == 2
+    assert [group["item"] for group in first_snapshot["partial_duplicates"]] == ["001"]
+
+    last_snapshot = service.partial_snapshots[-1]
+    assert last_snapshot["processed_rows"] == 2
+    assert last_snapshot["partial_summary"]["processed_rows"] == 2
+
+    assert updated_job.result_path is not None
+    payload = json.loads(Path(updated_job.result_path).read_text(encoding="utf-8"))
+    assert payload["summary"]["total_rows"] == 2
+    assert payload["summary"]["source_total_rows"] == 3
+    assert [row["row_index"] for row in payload["row_results"]] == [0, 2]
+    assert payload["duplicates"][0]["row_indices"] == [0, 2]
+    assert "DUPLICATE_ITEM" in payload["grouped_problems"]
 
 
 def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplicates(
@@ -259,6 +317,88 @@ def test_job_csv_read_and_update_preserve_redesim_v2_csv_format(tmp_path):
     assert "AÇÃO MANUAL" in updated_csv
 
 
+def test_job_csv_context_cache_reuses_loaded_dataframe_across_row_reads_and_updates(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+    )
+
+    read_calls = 0
+    original_read = validation_service._read_tenant_csv
+
+    def counting_read(*args, **kwargs):
+        nonlocal read_calls
+        read_calls += 1
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(validation_service, "_read_tenant_csv", counting_read)
+
+    first_row, _ = read_job_csv_row(job.job_id, service, row_index=0)
+    second_row, _ = read_job_csv_row(job.job_id, service, row_index=1)
+    assert first_row["Descrição"] == "Mesa"
+    assert second_row["Descrição"] == "Cadeira"
+    assert read_calls == 1
+
+    updated_row = update_job_csv_row(
+        job.job_id,
+        service,
+        row_index=1,
+        updates={"descricao": "Cadeira revisada"},
+    )
+    assert updated_row["Descrição"] == "Cadeira revisada"
+    assert read_calls == 1
+
+    refreshed_row, _ = read_job_csv_row(job.job_id, service, row_index=1)
+    assert refreshed_row["Descrição"] == "Cadeira revisada"
+    assert read_calls == 1
+
+
+def test_job_csv_context_cache_reloads_when_source_file_changes_outside_service(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+    )
+
+    read_calls = 0
+    original_read = validation_service._read_tenant_csv
+
+    def counting_read(*args, **kwargs):
+        nonlocal read_calls
+        read_calls += 1
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(validation_service, "_read_tenant_csv", counting_read)
+
+    first_row, _ = read_job_csv_row(job.job_id, service, row_index=0)
+    assert first_row["Descrição"] == "Mesa"
+    assert read_calls == 1
+
+    csv_path.write_text(
+        CSV_CONTENT.replace("Mesa", "Mesa externa", 1),
+        encoding="utf-8",
+    )
+
+    refreshed_row, _ = read_job_csv_row(job.job_id, service, row_index=0)
+    assert refreshed_row["Descrição"] == "Mesa externa"
+    assert read_calls == 2
+
+
 def test_delete_job_csv_rows_removes_selected_duplicates_and_reindexes(tmp_path):
     csv_path = tmp_path / "lote.csv"
     csv_path.write_text(CSV_CONTENT, encoding="utf-8")
@@ -342,6 +482,72 @@ def test_delete_job_csv_rows_and_refresh_rebuilds_artifacts_in_place(
     assert refreshed_payload["duplicates"] == []
     assert [row["item"] for row in refreshed_payload["row_results"]] == ["001", "002"]
     assert [row["row_index"] for row in refreshed_payload["row_results"]] == [0, 1]
+
+
+def test_resolve_duplicate_csv_rows_keeps_highest_row_and_merges_previous_values(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(
+        (
+            "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+            "001,,Mesa antiga,Marca antiga,Modelo antigo,SN antigo,"
+            "Sala antiga,CC antiga,Detalhe antigo,Obs antiga\n"
+            "001,,Mesa intermediaria,,Modelo intermediario,,Sala intermediaria,CC intermediario,,\n"
+            "001,,Mesa atual,,Modelo atual,SN atual,,CC atual,,\n"
+        ),
+        encoding="utf-8",
+    )
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, service)
+
+    resolution = resolve_duplicate_csv_rows_and_refresh(
+        job.job_id,
+        service,
+        row_indices=[0, 1, 2],
+    )
+
+    assert resolution.kept_row_index == 2
+    assert resolution.deleted_row_indices == [0, 1]
+    assert resolution.remaining_rows == 1
+    assert resolution.merged_columns == [
+        "Marca",
+        "Local",
+        "Complemento",
+        "Observação",
+    ]
+
+    row, _ = read_job_csv_row(job.job_id, service, row_index=0)
+    assert row["Descrição"] == "Mesa atual"
+    assert row["Marca"] == "Marca antiga"
+    assert row["Modelo"] == "Modelo atual"
+    assert row["NS"] == "SN atual"
+    assert row["Local"] == "Sala intermediaria"
+    assert row["CC"] == "CC atual"
+    assert row["Complemento"] == "Detalhe antigo"
+    assert row["Observação"] == "Obs antiga"
+
+    refreshed_job = service.get_job(job.job_id)
+    assert refreshed_job is not None
+    assert refreshed_job.status == JobStatus.COMPLETED
+    assert refreshed_job.result_path is not None
+    refreshed_payload = json.loads(
+        Path(refreshed_job.result_path).read_text(encoding="utf-8")
+    )
+    assert refreshed_payload["duplicates"] == []
+    assert refreshed_payload["summary"]["total_rows"] == 1
+    assert refreshed_payload["row_results"][0]["descricao"] == "Mesa atual"
 
 
 def test_run_validation_job_can_be_canceled_after_batch_checkpoint(

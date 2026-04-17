@@ -1,4 +1,5 @@
 import csv
+import re
 from collections import defaultdict
 from datetime import datetime
 from html import escape
@@ -23,7 +24,9 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.duplicate_items import group_duplicate_item_row_indices
 from app.core.issue import ValidationIssue
+from app.core.validation_scope import DEFAULT_VALIDATION_SCOPE, ValidationScope
 
 RowType = dict[str, str | int | float | None]
 ValidationResults = dict[int, list[ValidationIssue]]
@@ -82,6 +85,18 @@ def _get_duplicate_descricao(
     normalized_rows: list[RowType],
     row_indices: list[int],
 ) -> str | None:
+    descriptions = _get_duplicate_description_values(normalized_rows, row_indices)
+
+    if not descriptions:
+        return None
+
+    return " / ".join(descriptions)
+
+
+def _get_duplicate_description_values(
+    normalized_rows: list[RowType],
+    row_indices: list[int],
+) -> list[str]:
     descriptions: list[str] = []
     seen: set[str] = set()
 
@@ -97,10 +112,7 @@ def _get_duplicate_descricao(
         seen.add(descricao_text)
         descriptions.append(descricao_text)
 
-    if not descriptions:
-        return None
-
-    return " / ".join(descriptions)
+    return descriptions
 
 
 def _truncate_text(value: object, max_length: int) -> str:
@@ -152,8 +164,24 @@ def _normalize_metadata(metadata: ReportMetadata | None) -> ReportMetadata:
     }
 
 
-def _build_scope_note(summary: dict[str, int]) -> str:
+def _build_scope_note(
+    summary: dict[str, int],
+    validation_scope: ValidationScope,
+) -> str:
     source_total_rows = summary.get("source_total_rows", summary["total_rows"])
+
+    if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+        if source_total_rows != summary["total_rows"]:
+            return (
+                "Somente linhas pertencentes a grupos com Item duplicado entraram "
+                f"no resultado operacional. Arquivo com {source_total_rows} linhas."
+            )
+
+        return (
+            "Todas as linhas lidas pertencem a grupos com Item duplicado e entraram "
+            "no escopo validado deste lote."
+        )
+
     if source_total_rows != summary["total_rows"]:
         return (
             "Somente itens cadastrados do zero entraram no resultado operacional. "
@@ -211,7 +239,17 @@ def _parse_category_critical_issue(code: str) -> dict[str, str] | None:
     return None
 
 
-def _describe_issue(code: str) -> dict[str, str]:
+def _parse_category_critical_placement(message: str | None) -> str | None:
+    if not message:
+        return None
+
+    match = re.match(r"^Espécie '.*': informar .* em (.+)$", message)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _describe_issue(code: str, message: str | None = None) -> dict[str, str]:
     if code == "DUPLICATE_ITEM":
         return {
             "title": "Identificador patrimonial repetido",
@@ -312,18 +350,22 @@ def _describe_issue(code: str) -> dict[str, str]:
     if category_critical is not None:
         category_label = category_critical["category_label"]
         requirement_label = category_critical["requirement_label"]
+        target_placement = (
+            _parse_category_critical_placement(message)
+            or "Complemento"
+        )
         return {
             "title": f"{category_label}: informar {requirement_label}",
             "context": (
                 f"Itens da espécie {category_label} precisam trazer "
-                f"{requirement_label} em Descrição, Complemento ou Modelo."
+                f"{requirement_label} em {target_placement}."
             ),
             "impact": (
                 "Sem esse detalhe técnico, a identificação do bem fica incompleta "
                 "e a conciliação patrimonial exige verificação manual adicional."
             ),
             "action": (
-                f"Inclua {requirement_label} em Descrição, Complemento ou Modelo, "
+                f"Inclua {requirement_label} em {target_placement}, "
                 "conforme o padrão de cadastro usado para essa espécie."
             ),
         }
@@ -728,13 +770,14 @@ def _build_identity_panel(
 def _build_summary_grid(
     summary: dict[str, int],
     styles: dict[str, ParagraphStyle],
+    validation_scope: ValidationScope,
 ) -> Table:
     clean_rows = max(summary["total_rows"] - summary["rows_with_issues"], 0)
     cards = [
         _metric_card(
             "Linhas validadas",
             summary["total_rows"],
-            _build_scope_note(summary),
+            _build_scope_note(summary, validation_scope),
             styles,
             ACCENT,
         ),
@@ -793,17 +836,26 @@ def _build_verdict_panel(
     summary: dict[str, int],
     duplicates: list[dict],
     styles: dict[str, ParagraphStyle],
+    validation_scope: ValidationScope,
 ) -> Table:
     duplicate_count = len(duplicates)
     source_total_rows = summary.get("source_total_rows", summary["total_rows"])
 
     if summary["total_rows"] == 0:
-        title = "Nenhum item cadastrado do zero entrou no escopo operacional."
-        body = (
-            "O arquivo foi lido normalmente, mas nenhuma linha tinha "
-            "flag_item_cadastrado_do_zero = 1. Por isso, o resultado validado "
-            "não traz pendências operacionais."
-        )
+        if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+            title = "Nenhum item duplicado entrou no escopo operacional."
+            body = (
+                "O arquivo foi lido normalmente, mas nenhum Item apareceu mais "
+                "de uma vez no lote. Por isso, o resultado validado não traz "
+                "pendências operacionais neste recorte."
+            )
+        else:
+            title = "Nenhum item cadastrado do zero entrou no escopo operacional."
+            body = (
+                "O arquivo foi lido normalmente, mas nenhuma linha tinha "
+                "flag_item_cadastrado_do_zero = 1. Por isso, o resultado validado "
+                "não traz pendências operacionais."
+            )
         highlight_label = "Itens em escopo"
         highlight_value = 0
         highlight_copy = f"Arquivo com {source_total_rows} linhas."
@@ -839,7 +891,10 @@ def _build_verdict_panel(
         )
         highlight_label = "Lote liberado"
         highlight_value = summary["total_rows"]
-        highlight_copy = "Registros em escopo processados sem pendências."
+        if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+            highlight_copy = "Registros duplicados em escopo processados sem pendências."
+        else:
+            highlight_copy = "Registros em escopo processados sem pendências."
         highlight_color = SUCCESS
         highlight_bg = SUCCESS_SOFT
 
@@ -1001,7 +1056,7 @@ def _build_problem_guidance(
     occurrences: list[dict],
     styles: dict[str, ParagraphStyle],
 ) -> Table:
-    guide = _describe_issue(code)
+    guide = _describe_issue(code, occurrences[0].get("message") if occurrences else None)
     unique_fields = []
     for field in (_field_label(occ.get("field")) for occ in occurrences):
         if field not in unique_fields:
@@ -1083,7 +1138,11 @@ def _build_occurrences_table(
     return table
 
 
-def _build_clean_panel(summary: dict[str, int], styles: dict[str, ParagraphStyle]) -> Table:
+def _build_clean_panel(
+    summary: dict[str, int],
+    styles: dict[str, ParagraphStyle],
+    validation_scope: ValidationScope,
+) -> Table:
     source_total_rows = summary.get("source_total_rows", summary["total_rows"])
     title = "Nenhuma correção foi exigida neste processamento."
     body = (
@@ -1092,12 +1151,20 @@ def _build_clean_panel(summary: dict[str, int], styles: dict[str, ParagraphStyle
     )
 
     if summary["total_rows"] == 0 and source_total_rows > 0:
-        title = "Nenhum item cadastrado do zero entrou no escopo operacional."
-        body = (
-            "O arquivo foi lido normalmente, mas nenhuma linha tinha "
-            "flag_item_cadastrado_do_zero = 1. Este PDF registra que não houve "
-            "itens em escopo para consolidar no resultado operacional."
-        )
+        if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+            title = "Nenhum item duplicado entrou no escopo operacional."
+            body = (
+                "O arquivo foi lido normalmente, mas nenhum Item apareceu mais de "
+                "uma vez no lote. Este PDF registra que não houve linhas "
+                "duplicadas em escopo para consolidar no resultado operacional."
+            )
+        else:
+            title = "Nenhum item cadastrado do zero entrou no escopo operacional."
+            body = (
+                "O arquivo foi lido normalmente, mas nenhuma linha tinha "
+                "flag_item_cadastrado_do_zero = 1. Este PDF registra que não houve "
+                "itens em escopo para consolidar no resultado operacional."
+            )
 
     panel = Table(
         [[[
@@ -1145,23 +1212,23 @@ def build_duplicate_section(
     row_indices: list[int] | None = None,
 ) -> list[dict]:
     _ = validation_results
-    item_rows: dict[object, list[int]] = defaultdict(list)
-    indices = row_indices if row_indices is not None else list(range(len(normalized_rows)))
-    for idx in indices:
-        row = normalized_rows[idx]
-        item_value = row.get("item")
-        if item_value is not None:
-            item_rows[item_value].append(idx)
-
     duplicates = []
-    for item_value, indices in item_rows.items():
-        if len(indices) > 1:
-            duplicates.append({
-                "item": item_value,
-                "descricao": _get_duplicate_descricao(normalized_rows, indices),
-                "row_indices": indices,
-                "count": len(indices),
-            })
+    for duplicate_indices in group_duplicate_item_row_indices(
+        normalized_rows,
+        row_indices=row_indices,
+    ):
+        item_value, _ = _get_row_metadata(normalized_rows, duplicate_indices[0])
+        description_values = _get_duplicate_description_values(
+            normalized_rows,
+            duplicate_indices,
+        )
+        duplicates.append({
+            "item": item_value,
+            "descricao": " / ".join(description_values) if description_values else None,
+            "has_description_conflict": len(description_values) > 1,
+            "row_indices": duplicate_indices,
+            "count": len(duplicate_indices),
+        })
     return duplicates
 
 
@@ -1407,6 +1474,7 @@ def generate_pdf_report(
     metadata: ReportMetadata | None = None,
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
+    validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
 ) -> Path:
     output_path = Path(output_path)
     report_data = build_full_report(
@@ -1458,7 +1526,7 @@ def generate_pdf_report(
         styles["section_body"],
     ))
     elements.append(Spacer(1, 4 * mm))
-    elements.append(_build_summary_grid(summary, styles))
+    elements.append(_build_summary_grid(summary, styles, validation_scope))
     elements.append(Spacer(1, 7 * mm))
 
     elements.append(_paragraph("DIREÇÃO DE TRATAMENTO", styles["section_kicker"]))
@@ -1471,7 +1539,7 @@ def generate_pdf_report(
         styles["section_body"],
     ))
     elements.append(Spacer(1, 4 * mm))
-    elements.append(_build_verdict_panel(summary, duplicates, styles))
+    elements.append(_build_verdict_panel(summary, duplicates, styles, validation_scope))
 
     if duplicates:
         elements.append(Spacer(1, 7 * mm))
@@ -1490,7 +1558,7 @@ def generate_pdf_report(
     sorted_groups = _sorted_problem_groups(grouped_problems)
     if not sorted_groups:
         elements.append(Spacer(1, 7 * mm))
-        elements.append(_build_clean_panel(summary, styles))
+        elements.append(_build_clean_panel(summary, styles, validation_scope))
     else:
         elements.append(PageBreak())
         elements.append(_paragraph("MAPA DE CORREÇÕES", styles["section_kicker"]))

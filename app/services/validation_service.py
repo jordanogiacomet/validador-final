@@ -3,6 +3,7 @@ import json
 import math
 import re
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -41,6 +42,18 @@ UPLOADS_DIR = Path("uploads")
 RESULTS_DIR = Path("results")
 DEFAULT_BATCH_SIZE = 200
 TARGET_PREVIEW_BATCHES = 10
+
+
+@dataclass
+class _CachedJobCsvContext:
+    tenant_id: str
+    file_path: Path
+    signature: tuple[int, int]
+    tenant_config: TenantConfig
+    df: pd.DataFrame
+
+
+_JOB_CSV_CONTEXT_CACHE: dict[str, _CachedJobCsvContext] = {}
 
 
 def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
@@ -101,6 +114,14 @@ class OperationalExportKind(StrEnum):
     PROBLEM_GROUP = "problem_group"
 
 
+@dataclass(frozen=True)
+class DuplicateCsvResolution:
+    kept_row_index: int
+    deleted_row_indices: list[int]
+    remaining_rows: int
+    merged_columns: list[str]
+
+
 def _get_job_csv_file(
     job_id: str,
     job_service: JobService,
@@ -124,9 +145,41 @@ def _get_job_csv_context(
     job_service: JobService,
 ) -> tuple[JobRecord, Path, TenantConfig, pd.DataFrame]:
     job, file_path = _get_job_csv_file(job_id, job_service)
+    signature = _get_job_csv_signature(file_path)
+    cached_context = _JOB_CSV_CONTEXT_CACHE.get(job_id)
+    if (
+        cached_context
+        and cached_context.tenant_id == job.tenant_id
+        and cached_context.file_path == file_path
+        and cached_context.signature == signature
+    ):
+        return job, file_path, cached_context.tenant_config, cached_context.df
+
     tenant_config = load_tenant_config(job.tenant_id)
     df = _read_tenant_csv(file_path, tenant_config)
+    _store_job_csv_context(job_id, job, file_path, tenant_config, df)
     return job, file_path, tenant_config, df
+
+
+def _get_job_csv_signature(file_path: Path) -> tuple[int, int]:
+    file_stat = file_path.stat()
+    return file_stat.st_mtime_ns, file_stat.st_size
+
+
+def _store_job_csv_context(
+    job_id: str,
+    job: JobRecord,
+    file_path: Path,
+    tenant_config: TenantConfig,
+    df: pd.DataFrame,
+) -> None:
+    _JOB_CSV_CONTEXT_CACHE[job_id] = _CachedJobCsvContext(
+        tenant_id=job.tenant_id,
+        file_path=file_path,
+        signature=_get_job_csv_signature(file_path),
+        tenant_config=tenant_config,
+        df=df,
+    )
 
 
 def _build_corrected_csv_name(job: JobRecord, file_path: Path) -> str:
@@ -264,6 +317,7 @@ def update_job_csv_row(
         df.at[row_index, column_name] = new_value
 
     _write_tenant_csv(df, file_path, tenant_config)
+    _store_job_csv_context(job_id, job, file_path, tenant_config, df)
     return df.iloc[row_index].to_dict()  # type: ignore[return-value]
 
 
@@ -279,13 +333,52 @@ def delete_job_csv_rows(
     if normalized_indices[0] < 0:
         raise ValueError(f"Invalid row index: {normalized_indices[0]}")
 
-    _, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
+    job, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
     if normalized_indices[-1] >= len(df):
         raise ValueError(f"Row index out of range: {normalized_indices[-1]}")
 
     df = df.drop(index=normalized_indices).reset_index(drop=True)
     _write_tenant_csv(df, file_path, tenant_config)
+    _store_job_csv_context(job_id, job, file_path, tenant_config, df)
     return len(df)
+
+
+def _is_missing_csv_value(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _merge_missing_duplicate_values(
+    df: pd.DataFrame,
+    *,
+    keep_row_index: int,
+    source_row_indices: list[int],
+) -> list[str]:
+    merged_columns: list[str] = []
+    source_indices = sorted(set(source_row_indices), reverse=True)
+
+    for column_name in df.columns:
+        current_value = df.at[keep_row_index, column_name]
+        if not _is_missing_csv_value(current_value):
+            continue
+
+        for source_index in source_indices:
+            source_value = df.at[source_index, column_name]
+            if _is_missing_csv_value(source_value):
+                continue
+
+            df.at[keep_row_index, column_name] = source_value
+            merged_columns.append(str(column_name))
+            break
+
+    return merged_columns
 
 
 def rerun_job_validation(
@@ -330,6 +423,54 @@ def delete_job_csv_rows_and_refresh(
     )
     rerun_job_validation(job_id, job_service)
     return remaining_rows
+
+
+def resolve_duplicate_csv_rows_and_refresh(
+    job_id: str,
+    job_service: JobService,
+    *,
+    row_indices: list[int],
+) -> DuplicateCsvResolution:
+    normalized_indices = sorted(set(row_indices))
+    if not normalized_indices:
+        raise ValueError("At least one row index must be provided")
+    if normalized_indices[0] < 0:
+        raise ValueError(f"Invalid row index: {normalized_indices[0]}")
+
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    if job.status != JobStatus.COMPLETED:
+        raise ValueError("Only completed jobs can resolve duplicates and refresh the job")
+
+    keep_row_index = normalized_indices[-1]
+    deleted_row_indices = [
+        row_index for row_index in normalized_indices if row_index != keep_row_index
+    ]
+    if not deleted_row_indices:
+        raise ValueError("At least one duplicate row must be removed")
+
+    job, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
+    if normalized_indices[-1] >= len(df):
+        raise ValueError(f"Row index out of range: {normalized_indices[-1]}")
+
+    merged_columns = _merge_missing_duplicate_values(
+        df,
+        keep_row_index=keep_row_index,
+        source_row_indices=deleted_row_indices,
+    )
+
+    df = df.drop(index=deleted_row_indices).reset_index(drop=True)
+    _write_tenant_csv(df, file_path, tenant_config)
+    _store_job_csv_context(job_id, job, file_path, tenant_config, df)
+
+    rerun_job_validation(job_id, job_service)
+    return DuplicateCsvResolution(
+        kept_row_index=keep_row_index,
+        deleted_row_indices=deleted_row_indices,
+        remaining_rows=len(df),
+        merged_columns=merged_columns,
+    )
 
 
 def read_job_csv_row(
@@ -409,6 +550,12 @@ def _build_indexing_status_detail(
                 "A indexação global foi concluída. O arquivo foi lido, mas não "
                 "há linhas de dados para validar neste lote."
             )
+        if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+            return (
+                "A indexação global foi concluída. O arquivo foi lido, mas nenhuma "
+                "linha entrou no escopo operacional porque não há grupos de "
+                "duplicidade no lote."
+            )
         return (
             "A indexação global foi concluída. O arquivo foi lido, mas nenhuma linha "
             "entrou no escopo operacional porque não há itens cadastrados do zero."
@@ -419,6 +566,13 @@ def _build_indexing_status_detail(
             "A indexação global foi concluída. O arquivo tem "
             f"{source_total_rows} linhas e todas entrarão na validação operacional "
             "e na prévia."
+        )
+
+    if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+        return (
+            "A indexação global foi concluída. O arquivo tem "
+            f"{source_total_rows} linhas e {validated_rows} linhas pertencentes a "
+            "grupos com Item duplicado entrarão na validação operacional e na prévia."
         )
 
     return (
@@ -453,6 +607,13 @@ def _build_scope_indexing_detail(validation_scope: ValidationScope) -> str:
             "operacional e liberar apenas prévias compatíveis com esse escopo."
         )
 
+    if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+        return (
+            "O sistema está mapeando o conjunto completo do arquivo para "
+            "identificar quais linhas pertencem a grupos com Item duplicado e "
+            "liberar apenas prévias compatíveis com esse escopo."
+        )
+
     return (
         "O sistema está mapeando o conjunto completo do arquivo para "
         "identificar quais itens cadastrados do zero entram no resultado "
@@ -466,6 +627,13 @@ def _build_scope_artifact_detail(validation_scope: ValidationScope) -> str:
             "O sistema está montando o resumo executivo, os dados estruturados "
             "e o relatório PDF com todas as linhas que entraram no escopo "
             "validado deste lote."
+        )
+
+    if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+        return (
+            "O sistema está montando o resumo executivo, os dados estruturados "
+            "e o relatório PDF apenas com as linhas que pertencem a grupos com "
+            "Item duplicado e entraram no escopo validado."
         )
 
     return (
@@ -650,6 +818,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             },
             validated_row_indices=scoped_row_indices,
             source_total_rows=source_total_rows,
+            validation_scope=validation_scope,
         )
         _raise_if_cancellation_requested(job_id, job_service)
 

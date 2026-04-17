@@ -200,6 +200,7 @@ class TestFlagConsistencyRule:
 class TestIntegrityRulesWithEngine:
     def test_rules_register_and_run(self):
         from app.core.engine import ValidationEngine
+        from app.core.validation_scope import ValidationScope
 
         register_rule(DuplicateItemRule())
         register_rule(FlagConsistencyRule())
@@ -211,7 +212,10 @@ class TestIntegrityRulesWithEngine:
             {"Item": "A001", "Placa Anterior": "OLD-001"},
             {"Item": "A001", "Placa Anterior": ""},
         ]
-        results = engine.validate_all(raw_rows)
+        results = engine.validate_all(
+            raw_rows,
+            validation_scope=ValidationScope.ALL_ITEMS,
+        )
 
         assert 0 in results
         assert 1 in results

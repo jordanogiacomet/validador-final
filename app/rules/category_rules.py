@@ -40,6 +40,8 @@ FIELD_LABELS: dict[str, str] = {
     "observacao": "Observação",
 }
 
+DEFAULT_CRITICAL_CHECK_FIELDS = ["complemento"]
+
 
 def classify_category(
     descricao: str, categories: list[CategoryConfig]
@@ -73,6 +75,24 @@ def get_critical_check_label(check_name: str) -> str:
     return CRITICAL_CHECK_LABELS.get(check_name, "detalhe técnico obrigatório")
 
 
+def get_critical_check_fields(category: CategoryConfig, check_name: str) -> list[str]:
+    configured_fields = category.critical_check_fields.get(check_name)
+    if configured_fields:
+        return configured_fields
+    return DEFAULT_CRITICAL_CHECK_FIELDS
+
+
+def join_field_labels(field_names: list[str]) -> str:
+    labels = [FIELD_LABELS.get(field_name, field_name) for field_name in field_names]
+    if not labels:
+        return "Revisão geral"
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} ou {labels[1]}"
+    return f"{', '.join(labels[:-1])} ou {labels[-1]}"
+
+
 class CategoryCriticalCheckRule(BaseRule):
     name: str = "category_critical_check"
 
@@ -82,12 +102,6 @@ class CategoryCriticalCheckRule(BaseRule):
 
     def validate(self, context: ValidationContext) -> list[ValidationIssue]:
         row = context.normalized_row
-        descricao = str(row.get("descricao", ""))
-        complemento = str(row.get("complemento", "")).strip() if row.get("complemento") else ""
-        modelo = str(row.get("modelo", "")).strip() if row.get("modelo") else ""
-
-        searchable_text = f"{descricao} {complemento} {modelo}"
-
         cat = get_matching_category(context)
         if cat is None:
             return []
@@ -97,18 +111,25 @@ class CategoryCriticalCheckRule(BaseRule):
             pattern = CRITICAL_CHECK_PATTERNS.get(check_name)
             if pattern is None:
                 continue
+            target_fields = get_critical_check_fields(cat, check_name)
+            searchable_text = " ".join(
+                str(row.get(field_name, "")).strip()
+                for field_name in target_fields
+                if row.get(field_name)
+            )
             if not pattern.search(searchable_text):
                 category_label = get_category_label(cat)
                 requirement_label = get_critical_check_label(check_name)
+                target_label = join_field_labels(target_fields)
                 issues.append(
                     ValidationIssue(
                         code=f"CATEGORY_{cat.name.upper()}_{check_name.upper()}_MISSING",
                         severity="error",
                         message=(
                             f"Espécie '{category_label}': informar {requirement_label}"
-                            " em Descrição, Complemento ou Modelo"
+                            f" em {target_label}"
                         ),
-                        field="descricao",
+                        field="complemento" if "complemento" in target_fields else target_fields[0],
                     )
                 )
         return issues

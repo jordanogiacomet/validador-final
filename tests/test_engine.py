@@ -214,6 +214,28 @@ def test_validate_all_can_process_all_items_scope():
     assert len(results[1]) == 1
 
 
+def test_validate_all_can_process_only_duplicate_items_scope():
+    register_rule(AlwaysFailRule())
+
+    tenant = _make_tenant(enabled_rules=["always_fail"])
+    engine = ValidationEngine(tenant)
+
+    raw_rows = [
+        {"Item": "001", "Placa Anterior": "ABC"},
+        {"Item": "002", "Placa Anterior": ""},
+        {"Item": "001", "Placa Anterior": ""},
+    ]
+
+    results = engine.validate_all(
+        raw_rows,
+        validation_scope=ValidationScope.DUPLICATE_ITEMS,
+    )
+
+    assert list(results) == [0, 2]
+    assert len(results[0]) == 1
+    assert len(results[2]) == 1
+
+
 def test_validate_all_normalizes_rows():
     register_rule(AlwaysFailRule())
 
@@ -319,6 +341,23 @@ def test_get_scoped_row_indices_can_include_all_rows():
         normalized_rows,
         validation_scope=ValidationScope.ALL_ITEMS,
     ) == [0, 1, 2]
+
+
+def test_get_scoped_row_indices_can_include_only_duplicate_rows():
+    tenant = _make_tenant()
+    engine = ValidationEngine(tenant)
+
+    normalized_rows = [
+        {"item": "001", "flag_item_cadastrado_do_zero": 0},
+        {"item": "002", "flag_item_cadastrado_do_zero": 1},
+        {"item": "001", "flag_item_cadastrado_do_zero": 1},
+        {"item": "003", "flag_item_cadastrado_do_zero": 0},
+    ]
+
+    assert engine.get_scoped_row_indices(
+        normalized_rows,
+        validation_scope=ValidationScope.DUPLICATE_ITEMS,
+    ) == [0, 2]
 
 
 def test_validation_context_has_required_fields():

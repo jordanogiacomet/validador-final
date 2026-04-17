@@ -6,6 +6,7 @@ class CategoryConfig(BaseModel):
     display_name: str = ""
     keywords: list[str] = Field(default_factory=list)
     critical_checks: list[str] = Field(default_factory=list)
+    critical_check_fields: dict[str, list[str]] = Field(default_factory=dict)
     required_fields: list[str] = Field(default_factory=list)
     field_help: dict[str, str] = Field(default_factory=dict)
 

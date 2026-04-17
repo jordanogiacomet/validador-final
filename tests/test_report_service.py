@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from app.core.issue import ValidationIssue
+from app.core.validation_scope import ValidationScope
 from app.services.report_service import (
+    _build_scope_note,
     _describe_issue,
     _sorted_problem_groups,
     build_duplicate_section,
@@ -79,8 +81,20 @@ def test_duplicate_section_finds_duplicates():
     assert len(dups) == 1
     assert dups[0]["item"] == "A001"
     assert dups[0]["descricao"] == "Mesa"
+    assert dups[0]["has_description_conflict"] is False
     assert dups[0]["count"] == 2
     assert set(dups[0]["row_indices"]) == {0, 2}
+
+
+def test_duplicate_section_flags_different_descriptions():
+    rows = [
+        {"item": "A001", "descricao": "Mesa"},
+        {"item": "A001", "descricao": "Cadeira"},
+    ]
+    dups = build_duplicate_section(rows, {})
+
+    assert dups[0]["descricao"] == "Mesa / Cadeira"
+    assert dups[0]["has_description_conflict"] is True
 
 
 def test_duplicate_section_no_duplicates():
@@ -199,8 +213,36 @@ def test_describe_issue_for_category_critical_uses_portuguese_requirement():
 
     assert guide["title"] == "TANQUE METALICO: informar capacidade em litros"
     assert "capacidade em litros" in guide["context"]
+    assert "em Complemento" in guide["context"]
     assert "liters_pattern" not in guide["context"]
     assert "capacidade em litros" in guide["action"]
+
+
+def test_describe_issue_for_category_critical_can_use_message_target_field():
+    guide = _describe_issue(
+        "CATEGORY_TANQUE_METALICO_LITERS_PATTERN_MISSING",
+        "Espécie 'TANQUE METALICO': informar capacidade em litros em Complemento",
+    )
+
+    assert "em Complemento" in guide["context"]
+    assert "em Complemento" in guide["action"]
+
+
+def test_build_scope_note_can_describe_duplicate_scope():
+    note = _build_scope_note(
+        {
+            "total_rows": 2,
+            "source_total_rows": 5,
+            "rows_with_issues": 0,
+            "total_issues": 0,
+            "error_count": 0,
+            "warning_count": 0,
+        },
+        ValidationScope.DUPLICATE_ITEMS,
+    )
+
+    assert "Item duplicado" in note
+    assert "5 linhas" in note
 
 
 # --- build_full_report ---

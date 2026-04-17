@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-13 00:00 BRT
+Last Updated: 2026-04-17 10:50 BRT
 
 ---
 
@@ -233,4 +233,31 @@ Expected architectural direction:
   - Rules are not auto-registered at module import — need explicit `ensure_rules_registered()` call before engine use
   - Use `raise HTTPException(...) from None` inside except clauses to satisfy ruff B904
   - TestClient executes BackgroundTasks synchronously, which simplifies testing async flows
+---
+
+## 2026-04-17 - US-012
+- Implemented duplicate CSV consolidation in `app/services/validation_service.py`
+- Duplicate resolution now keeps the occurrence with the highest row index, fills missing values from previous duplicate occurrences, removes the other occurrences, and rebuilds the job artifacts in place
+- Extended `POST /jobs/{job_id}/duplicates/resolve` to return `merged_columns`
+- Updated the operational frontend modal to reflect the automatic highest-row keep rule and show merged column feedback after resolution
+- Added focused service and API tests for highest-row duplicate resolution and field merging
+- Fixed the legacy integrity-rule integration test to request `ValidationScope.ALL_ITEMS` explicitly, preserving the current default `zero_items` operational scope
+- Applied ruff import-order fixes in `app/rules/integrity.py` and `app/services/report_service.py`
+- Updated `prd.json` with US-012 for duplicate consolidation
+- Deployed:
+  - API image: `ttl.sh/validador-final-api-20260417104643:24h`
+  - Frontend image: `ttl.sh/validador-final-frontend-20260417104643:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL: `http://192.168.0.20:30091`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - Duplicate consolidation belongs in the CSV correction service, not in row validation rules, because it mutates the corrected artifact and triggers job artifact regeneration
+  - Keep duplicate merge behavior generic: operate on row indices and CSV values without tenant-name branching
+  - `ttl.sh` images expire after 24h; use a persistent registry for durable deployments
 ---

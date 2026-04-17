@@ -1,5 +1,6 @@
 from app.core.canonical_fields import normalize_row
 from app.core.context import ValidationContext
+from app.core.duplicate_items import get_duplicate_item_row_indices
 from app.core.issue import ValidationIssue
 from app.core.registry import RULE_REGISTRY
 from app.core.tenant_config import TenantConfig
@@ -75,6 +76,9 @@ class ValidationEngine:
         normalized_rows: list[RowType],
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     ) -> list[int]:
+        if validation_scope == ValidationScope.DUPLICATE_ITEMS:
+            return get_duplicate_item_row_indices(normalized_rows)
+
         return [
             idx
             for idx, normalized_row in enumerate(normalized_rows)

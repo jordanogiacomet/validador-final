@@ -212,21 +212,55 @@ uvicorn app.main:app --reload
 
 The app will then be available at `http://127.0.0.1:8000`.
 
-Web Form for Operational Teams
+Operational Frontend
 
-The API now exposes a browser-facing correction screen at `http://127.0.0.1:8000/`.
+The main operational UI now lives in the Next.js app under `frontend/`.
 
-This page is intended for patrimonial and inventory staff who need a friendlier view than the raw PDF:
+Suggested local setup:
+
+```bash
+source .venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+In another terminal:
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+By default, the frontend expects the API at `http://127.0.0.1:8000` via
+`NEXT_PUBLIC_API_BASE_URL`.
+
+The backend enables CORS for `http://127.0.0.1:3000` and `http://localhost:3000` by default.
+To point the UI to other origins, set `VALIDATOR_FRONTEND_ORIGINS` before starting FastAPI:
+
+```bash
+export VALIDATOR_FRONTEND_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
+uvicorn app.main:app --reload
+```
+
+The new frontend is intended for patrimonial and inventory staff who need a friendlier view than
+the raw PDF:
 
 - upload a CSV without calling the API manually
 - follow job progress on screen
 - read grouped problems in plain Portuguese
-- see which spreadsheet line should be corrected
-- understand which field needs attention and what kind of fix is expected
-- download the PDF and raw JSON only when needed
+- edit CSV rows directly in the current job
+- resolve duplicates while preserving the same `job_id`
+- download JSON, PDF, CSV corrigido, and operational CSV exports
 
 The UI converts the internal zero-based `row_index` into a human-friendly spreadsheet line number
 that already accounts for the header row.
+
+Legacy Inline Frontend
+
+The inline HTML page served by FastAPI at `http://127.0.0.1:8000/` remains available as a
+temporary compatibility path while the React/Next.js frontend becomes the recommended operational
+entry point.
 
 Notebook Frontend
 

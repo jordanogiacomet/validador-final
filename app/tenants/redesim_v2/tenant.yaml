@@ -186,6 +186,8 @@ categories:
     keywords: ["tanque metalico"]
     required_fields: ["complemento"]
     critical_checks: ["liters_pattern"]
+    critical_check_fields:
+      liters_pattern: ["complemento"]
     field_help:
       complemento: "etanol 1500 l"
 

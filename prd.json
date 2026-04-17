@@ -203,6 +203,23 @@
       "priority": 11,
       "passes": false,
       "notes": "Tests should focus on behavior and regression safety."
+    },
+    {
+      "id": "US-012",
+      "title": "Resolve duplicate items by keeping highest row and merging missing fields",
+      "description": "As an operator, I need duplicate item consolidation to preserve the newest occurrence while carrying over useful data from previous occurrences.",
+      "acceptanceCriteria": [
+        "Keep the duplicate occurrence with the highest row index as the surviving CSV row",
+        "Fill empty fields in the surviving row from previous duplicate occurrences",
+        "Do not overwrite fields already populated in the surviving row",
+        "Remove the remaining duplicate occurrences from the corrected CSV",
+        "Rebuild job result artifacts after duplicate resolution",
+        "Keep duplicate resolution generic and tenant-agnostic",
+        "Focused backend and frontend checks pass"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented in the CSV correction service and exposed through the existing duplicate resolution API. Global US-011 remains open because the full suite still has a known legacy integrity-rule expectation failure."
     }
   ],
   "nonFunctionalRequirements": {

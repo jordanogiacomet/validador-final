@@ -4,6 +4,7 @@ from enum import StrEnum
 class ValidationScope(StrEnum):
     ZERO_ITEMS = "zero_items"
     ALL_ITEMS = "all_items"
+    DUPLICATE_ITEMS = "duplicate_items"
 
 
 DEFAULT_VALIDATION_SCOPE = ValidationScope.ZERO_ITEMS

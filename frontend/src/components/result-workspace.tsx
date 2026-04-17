@@ -1,0 +1,518 @@
+import {
+  buildCorrectedCsvUrl,
+  buildOperationalExportUrl,
+  buildReportUrl,
+  buildResultUrl,
+} from "@/lib/api";
+import {
+  buildScopeSummaryCopy,
+  describeIssue,
+  formatFieldName,
+  getSourceTotalRows,
+  getValidatedTotalRows,
+  isDuplicateItemsScope,
+  isZeroItemsScope,
+  lineNumber,
+  resolveEditableField,
+  slugify,
+} from "@/lib/presentation";
+import type {
+  DuplicateGroup,
+  JobResultPayload,
+  JobStatusResponse,
+  PreviewReportPayload,
+  ProblemOccurrence,
+  SummaryPayload,
+  ValidationScope,
+} from "@/lib/types";
+
+interface ResultWorkspaceProps {
+  job: JobStatusResponse | null;
+  currentJobId: string | null;
+  validationScope: ValidationScope;
+  reportData: JobResultPayload | null;
+  previewData: PreviewReportPayload | null;
+  hasPendingCorrections: boolean;
+  visibleProblemOccurrencesByCode: Record<string, number>;
+  isReprocessing: boolean;
+  onShowMore: (code: string) => void;
+  onEditOccurrence: (occurrence: ProblemOccurrence) => void;
+  onResolveDuplicate: (duplicate: DuplicateGroup) => void;
+  onReprocess: () => void;
+}
+
+function sortProblemGroups(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+): Array<{ code: string; occurrences: ProblemOccurrence[] }> {
+  return Object.entries(groupedProblems)
+    .map(([code, occurrences]) => ({ code, occurrences }))
+    .sort((left, right) => {
+      const leftHasError = left.occurrences.some((occurrence) => occurrence.severity === "error");
+      const rightHasError = right.occurrences.some((occurrence) => occurrence.severity === "error");
+      if (leftHasError !== rightHasError) {
+        return leftHasError ? -1 : 1;
+      }
+
+      if (left.occurrences.length !== right.occurrences.length) {
+        return right.occurrences.length - left.occurrences.length;
+      }
+
+      return left.code.localeCompare(right.code);
+    });
+}
+
+function hasDuplicateDescriptionConflict(duplicate: DuplicateGroup): boolean {
+  if (duplicate.has_description_conflict !== undefined) {
+    return duplicate.has_description_conflict;
+  }
+
+  return Boolean(duplicate.descricao?.includes(" / "));
+}
+
+function SummarySection({
+  summary,
+  validationScope,
+  isPartial,
+  processedRows,
+}: {
+  summary: Partial<SummaryPayload>;
+  validationScope: ValidationScope;
+  isPartial: boolean;
+  processedRows: number;
+}) {
+  const validatedRows = getValidatedTotalRows(summary);
+  const cleanRows = Math.max(
+    (isPartial ? processedRows : validatedRows) - Number(summary.rows_with_issues ?? 0),
+    0,
+  );
+
+  const cards = isPartial
+    ? [
+        {
+          label: "Itens em escopo",
+          value: validatedRows,
+          copy: buildScopeSummaryCopy(summary, validationScope),
+          className: "",
+        },
+        {
+          label: "Itens já validados",
+          value: processedRows,
+          copy: "Prévia atual.",
+          className: "",
+        },
+        {
+          label: "Linhas com revisão",
+          value: summary.rows_with_issues ?? 0,
+          copy: "Registros com ajuste.",
+          className: "",
+        },
+        {
+          label: "Total de problemas",
+          value: summary.total_issues ?? 0,
+          copy: "Apontamentos na prévia.",
+          className: "",
+        },
+        {
+          label: "Erros",
+          value: summary.error_count ?? 0,
+          copy: "Corrigir primeiro.",
+          className: "error",
+        },
+        {
+          label: "Avisos",
+          value: summary.warning_count ?? 0,
+          copy: "Completar depois.",
+          className: "warning",
+        },
+      ]
+    : [
+        {
+          label: "Itens em escopo",
+          value: validatedRows,
+          copy: buildScopeSummaryCopy(summary, validationScope),
+          className: "",
+        },
+        {
+          label: "Linhas com revisão",
+          value: summary.rows_with_issues ?? 0,
+          copy: "Registros com ajuste.",
+          className: "",
+        },
+        {
+          label: "Total de problemas",
+          value: summary.total_issues ?? 0,
+          copy: "Apontamentos do lote.",
+          className: "",
+        },
+        {
+          label: "Erros",
+          value: summary.error_count ?? 0,
+          copy: "Corrigir primeiro.",
+          className: "error",
+        },
+        {
+          label: "Avisos",
+          value: summary.warning_count ?? 0,
+          copy: "Completar depois.",
+          className: "warning",
+        },
+        {
+          label: "Linhas sem ação",
+          value: cleanRows,
+          copy: "Sem apontamentos.",
+          className: "success",
+        },
+      ];
+
+  return (
+    <section className="summary-grid">
+      {cards.map((card) => (
+        <article className={`summary-card ${card.className}`.trim()} key={card.label}>
+          <small>{card.label}</small>
+          <strong>{card.value}</strong>
+          <p>{card.copy}</p>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function EmptyState({ job }: { job: JobStatusResponse | null }) {
+  let title = "O lote ainda não foi processado";
+  let detail = "Envie um CSV para iniciar a validação.";
+
+  if (job?.status === "canceled") {
+    title = "O lote foi cancelado";
+    detail = "Envie o arquivo novamente para iniciar outro lote.";
+  } else if (job?.cancel_requested) {
+    title = "Encerrando o lote atual";
+    detail = "Cancelamento em andamento.";
+  } else if (job?.status === "failed") {
+    title = "O lote falhou";
+    detail = "Revise a falha e envie o arquivo novamente.";
+  } else if (job && (job.status === "queued" || job.status === "running")) {
+    title = "Prévia ainda indisponível";
+    detail = "Aguarde a primeira prévia do processamento.";
+  }
+
+  return (
+    <section className="panel empty-card">
+      <div className="panel-kicker">Resultado</div>
+      <h2 className="panel-title">{title}</h2>
+      <p>{detail}</p>
+    </section>
+  );
+}
+
+export function ResultWorkspace({
+  job,
+  currentJobId,
+  validationScope,
+  reportData,
+  previewData,
+  hasPendingCorrections,
+  visibleProblemOccurrencesByCode,
+  isReprocessing,
+  onShowMore,
+  onEditOccurrence,
+  onResolveDuplicate,
+  onReprocess,
+}: ResultWorkspaceProps) {
+  const activeData = previewData || reportData;
+  const isPartial = Boolean(previewData);
+
+  if (!activeData) {
+    return <EmptyState job={job} />;
+  }
+
+  const summary = activeData.summary;
+  const duplicates = activeData.duplicates || [];
+  const groupedProblems = activeData.grouped_problems || {};
+  const groups = sortProblemGroups(groupedProblems);
+  const processedRows = Number(summary.processed_rows ?? job?.processed_rows ?? getValidatedTotalRows(summary));
+  const showCleanState = Number(summary.rows_with_issues ?? 0) === 0;
+
+  return (
+    <>
+      <SummarySection
+        summary={summary}
+        validationScope={validationScope}
+        isPartial={isPartial}
+        processedRows={processedRows}
+      />
+
+      {!isPartial && currentJobId ? (
+        <section className="panel actions-card">
+          <div className="panel-kicker">Artefatos do lote</div>
+          <h2 className="panel-title">Arquivos finais</h2>
+          <div className="actions">
+            <a className="action-link" href={buildReportUrl(currentJobId)} target="_blank" rel="noreferrer">
+              Baixar relatório PDF
+            </a>
+            <a className="action-link" href={buildResultUrl(currentJobId)} target="_blank" rel="noreferrer">
+              Baixar dados estruturados
+            </a>
+            <a className="action-link" href={buildCorrectedCsvUrl(currentJobId)}>
+              Baixar CSV corrigido
+            </a>
+          </div>
+
+          {duplicates.length || groups.length ? (
+            <div className="export-actions">
+              <div>
+                <div className="panel-kicker">CSVs de correção</div>
+              </div>
+
+              <div className="export-actions-grid">
+                {duplicates.length ? (
+                  <article className="export-card">
+                    <small>Duplicidades</small>
+                    <strong>CSV apenas com itens duplicados</strong>
+                    <p>{duplicates.length} grupo(s).</p>
+                    <a
+                      className="action-link"
+                      href={buildOperationalExportUrl(currentJobId, "duplicates")}
+                    >
+                      Baixar duplicados em CSV
+                    </a>
+                  </article>
+                ) : null}
+
+                {groups.map(({ code, occurrences }) => {
+                  const guide = describeIssue(code, occurrences[0]?.message);
+                  return (
+                    <article className="export-card" key={code}>
+                      <small>{code}</small>
+                      <strong>{guide.title}</strong>
+                      <p>{occurrences.length} ocorrência(s).</p>
+                      <a
+                        className="action-link"
+                        href={buildOperationalExportUrl(currentJobId, "problem_group", code)}
+                      >
+                        Baixar este grupo em CSV
+                      </a>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {!isPartial && hasPendingCorrections && currentJobId ? (
+        <section className="panel correction-card">
+          <div className="panel-kicker">Correções aplicadas</div>
+          <h2 className="panel-title">CSV corrigido nesta sessão</h2>
+          <div className="correction-actions">
+            <a className="action-link" href={buildCorrectedCsvUrl(currentJobId)}>
+              Baixar CSV corrigido
+            </a>
+            <button className="action-button primary" type="button" disabled={isReprocessing} onClick={onReprocess}>
+              {isReprocessing ? "Reprocessando..." : "Reprocessar lote"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {duplicates.length ? (
+        <section className="panel duplicates-card">
+          <div className="panel-kicker">Duplicidades</div>
+          <h2 className="panel-title">Itens repetidos</h2>
+
+          <div className="duplicates-grid">
+            {duplicates.map((duplicate, index) => {
+              const hasDescriptionConflict = hasDuplicateDescriptionConflict(duplicate);
+              return (
+                <article
+                  className={`duplicate-card ${hasDescriptionConflict ? "description-conflict" : ""}`.trim()}
+                  key={`${duplicate.item || "sem-item"}-${index}`}
+                >
+                  <strong>{duplicate.item || "Sem item"}</strong>
+                  {hasDescriptionConflict ? (
+                    <span className="duplicate-alert">Nomes do bem diferentes</span>
+                  ) : null}
+                  <p>
+                    <b>Nome do bem:</b> {duplicate.descricao || "Não informado"}
+                  </p>
+                  <p>
+                    <b>Ocorrências:</b> {duplicate.count}
+                  </p>
+                  <p>
+                    <b>Linhas envolvidas:</b>{" "}
+                    {duplicate.row_indices.map((rowIndex) => lineNumber(rowIndex)).join(", ")}
+                  </p>
+                  <div className="duplicate-card-actions">
+                    <button
+                      className="action-button"
+                      type="button"
+                      disabled={isPartial}
+                      onClick={() => onResolveDuplicate(duplicate)}
+                    >
+                      {isPartial ? "Disponível após conclusão" : "Escolher linha para manter"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {groups.length ? (
+        <section className="panel nav-card">
+          <div className="panel-kicker">Atalhos</div>
+          <h2 className="panel-title">Grupos de correção</h2>
+          <div className="nav-chips">
+            {groups.map(({ code, occurrences }) => {
+              const severity = occurrences.some((occurrence) => occurrence.severity === "error")
+                ? "error"
+                : "warning";
+              const guide = describeIssue(code, occurrences[0]?.message);
+              return (
+                <a className={`nav-chip ${severity}`} href={`#problem-${slugify(code)}`} key={code}>
+                  <span>{guide.title}</span>
+                  <strong>{occurrences.length}</strong>
+                </a>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {showCleanState ? (
+        <section className="panel clean-card">
+          <div className="panel-kicker">Resultado do lote</div>
+          <h2 className="panel-title">
+            {!isPartial &&
+            isZeroItemsScope(validationScope) &&
+            getValidatedTotalRows(summary) === 0 &&
+            getSourceTotalRows(summary) > 0
+              ? "Nenhum item cadastrado do zero entrou no escopo deste processamento"
+              : !isPartial &&
+                  isDuplicateItemsScope(validationScope) &&
+                  getValidatedTotalRows(summary) === 0 &&
+                  getSourceTotalRows(summary) > 0
+                ? "Nenhum item duplicado entrou no escopo deste processamento"
+              : isPartial
+                ? "Nenhuma pendência foi confirmada na prévia atual"
+                : "Nenhuma correção foi exigida neste processamento"}
+          </h2>
+          <p>
+            {!isPartial &&
+            isZeroItemsScope(validationScope) &&
+            getValidatedTotalRows(summary) === 0 &&
+            getSourceTotalRows(summary) > 0
+              ? `CSV original: ${getSourceTotalRows(summary)} linhas. Nenhuma entrou no escopo de itens novos.`
+              : !isPartial &&
+                  isDuplicateItemsScope(validationScope) &&
+                  getValidatedTotalRows(summary) === 0 &&
+                  getSourceTotalRows(summary) > 0
+                ? `CSV original: ${getSourceTotalRows(summary)} linhas. Nenhuma entrou no escopo de duplicidades.`
+              : isPartial
+                ? `${processedRows} itens validados sem apontamentos até agora.`
+                : "Arquivo sem pendências abertas."}
+          </p>
+        </section>
+      ) : null}
+
+      {groups.length ? (
+        <section className="problems" id="problems-section">
+          {groups.map(({ code, occurrences }) => {
+            const guide = describeIssue(code, occurrences[0]?.message);
+            const severity = occurrences.some((occurrence) => occurrence.severity === "error")
+              ? "error"
+              : "warning";
+            const visibleCount = Math.min(
+              occurrences.length,
+              visibleProblemOccurrencesByCode[code] || 20,
+            );
+            const visibleOccurrences = [...occurrences]
+              .sort((left, right) => left.row_index - right.row_index)
+              .slice(0, visibleCount);
+
+            return (
+              <article className="panel problem-card" id={`problem-${slugify(code)}`} key={code}>
+                <div className="problem-header">
+                  <div>
+                    <span className="problem-kicker">
+                      {severity === "error" ? "Erro" : "Aviso"}
+                    </span>
+                    <h3 className="problem-title">{guide.title}</h3>
+                    <p className="problem-meta">
+                      {occurrences.length} ocorrência(s)
+                    </p>
+                  </div>
+                  <span className={`status-chip ${severity}`}>
+                    {severity === "error" ? "Erro" : "Aviso"}
+                  </span>
+                </div>
+
+                <div className="problem-layout">
+                  <section className="detail-box">
+                    <small>Ação</small>
+                    <p>{guide.action}</p>
+                  </section>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Linha</th>
+                        <th>Item</th>
+                        <th>Nome do bem</th>
+                        <th>Campo</th>
+                        <th>Orientação</th>
+                        <th>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleOccurrences.map((occurrence) => {
+                        const editableField = resolveEditableField(occurrence);
+                        return (
+                          <tr key={`${code}-${occurrence.row_index}-${occurrence.message}`}>
+                            <td>{lineNumber(occurrence.row_index)}</td>
+                            <td>{occurrence.item || "Não informado"}</td>
+                            <td>{occurrence.descricao || "Não informado"}</td>
+                            <td>
+                              <span className="field-pill">
+                                {formatFieldName(editableField || occurrence.field)}
+                              </span>
+                            </td>
+                            <td>{occurrence.message}</td>
+                            <td>
+                              <button
+                                className="edit-action"
+                                type="button"
+                                disabled={!editableField}
+                                onClick={() => onEditOccurrence(occurrence)}
+                              >
+                                Corrigir
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {visibleCount < occurrences.length ? (
+                  <div className="problem-pagination">
+                    <p>
+                      Mostrando {visibleCount} de {occurrences.length}.
+                    </p>
+                    <button className="action-button" type="button" onClick={() => onShowMore(code)}>
+                      Carregar mais
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </section>
+      ) : null}
+    </>
+  );
+}

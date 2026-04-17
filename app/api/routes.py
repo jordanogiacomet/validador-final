@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 from app.api.frontend import build_frontend_html
 from app.core.job import JobStatus
-from app.core.tenant_loader import load_tenant_config
+from app.core.tenant_config import DEFAULT_TENANT_ID
+from app.core.tenant_loader import list_tenants, load_tenant_config
 from app.core.validation_scope import (
     DEFAULT_VALIDATION_SCOPE,
     VALIDATION_SCOPE_PARAM,
@@ -20,10 +21,10 @@ from app.services.validation_service import (
     UPLOADS_DIR,
     OperationalExportKind,
     create_reprocess_job,
-    delete_job_csv_rows_and_refresh,
     get_job_csv_download,
     get_job_operational_export,
     read_job_csv_row,
+    resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
     update_job_csv_row,
 )
@@ -38,6 +39,12 @@ class UploadResponse(BaseModel):
     status: str
     tenant_id: str
     validation_scope: ValidationScope
+
+
+class TenantListItemResponse(BaseModel):
+    tenant_id: str
+    display_name: str
+    is_default: bool = False
 
 
 class JobStatusResponse(BaseModel):
@@ -112,6 +119,7 @@ class DuplicateResolutionResponse(BaseModel):
     kept_row_index: int
     deleted_row_indices: list[int]
     remaining_rows: int
+    merged_columns: list[str] = Field(default_factory=list)
 
 
 def _get_job_validation_scope_value(job) -> ValidationScope:
@@ -165,9 +173,23 @@ def _build_job_list_item_response(job) -> JobListItemResponse:
     )
 
 
+def _build_tenant_list_item_response(tenant_id: str) -> TenantListItemResponse:
+    tenant = load_tenant_config(tenant_id)
+    return TenantListItemResponse(
+        tenant_id=tenant.tenant_id,
+        display_name=tenant.display_name,
+        is_default=tenant.tenant_id == DEFAULT_TENANT_ID,
+    )
+
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def frontend() -> HTMLResponse:
     return HTMLResponse(build_frontend_html())
+
+
+@router.get("/tenants", response_model=list[TenantListItemResponse])
+async def get_tenants() -> list[TenantListItemResponse]:
+    return [_build_tenant_list_item_response(tenant_id) for tenant_id in list_tenants()]
 
 
 @router.post("/validate", response_model=UploadResponse)
@@ -380,22 +402,11 @@ async def resolve_duplicate_rows(
             detail="keep_row_index must be one of the duplicate row_indices",
         )
 
-    deleted_row_indices = [
-        row_index
-        for row_index in normalized_indices
-        if row_index != payload.keep_row_index
-    ]
-    if not deleted_row_indices:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one duplicate row must be removed",
-        )
-
     try:
-        remaining_rows = delete_job_csv_rows_and_refresh(
+        resolution = resolve_duplicate_csv_rows_and_refresh(
             job_id,
             job_service,
-            row_indices=deleted_row_indices,
+            row_indices=normalized_indices,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -408,9 +419,10 @@ async def resolve_duplicate_rows(
 
     return DuplicateResolutionResponse(
         job_id=job_id,
-        kept_row_index=payload.keep_row_index,
-        deleted_row_indices=deleted_row_indices,
-        remaining_rows=remaining_rows,
+        kept_row_index=resolution.kept_row_index,
+        deleted_row_indices=resolution.deleted_row_indices,
+        remaining_rows=resolution.remaining_rows,
+        merged_columns=resolution.merged_columns,
     )
 
 

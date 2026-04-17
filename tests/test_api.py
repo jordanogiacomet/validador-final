@@ -22,6 +22,13 @@ CSV_CONTENT = (
     "002,,Cadeira,MarcaZ,ModeloW,SN2,Sala2,CC2,,\n"
 )
 
+DUPLICATE_SCOPE_CSV_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
+    "002,,Cadeira,MarcaZ,ModeloW,SN2,Sala2,CC2,,\n"
+    "001,,Armario,MarcaA,ModeloB,SN3,Sala3,CC3,Detalhe armario completo validado,\n"
+)
+
 REDESIM_CSV_CONTENT = (
     "Item,Descrição,Marca,Modelo,Complemento,NS\n"
     "001,MONITOR,Dell,P2419H,,SN1\n"
@@ -49,6 +56,18 @@ def test_frontend_page_renders_friendly_form():
     assert 'id="validation-form"' in response.text
 
 
+def test_list_tenants_returns_display_names():
+    response = client.get("/tenants")
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload
+    assert payload[0]["tenant_id"] == "default"
+    assert payload[0]["display_name"] == "Default Tenant"
+    assert payload[0]["is_default"] is True
+    assert any(tenant["tenant_id"] == "redesim" for tenant in payload)
+
+
 def test_upload_and_validate_creates_job():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
     response = client.post("/validate?tenant_id=default", files=files)
@@ -73,6 +92,16 @@ def test_upload_can_request_all_items_scope():
     response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
     assert response.status_code == 200
     assert response.json()["validation_scope"] == "all_items"
+
+
+def test_upload_can_request_duplicate_items_scope():
+    files = {"file": ("test.csv", BytesIO(DUPLICATE_SCOPE_CSV_CONTENT.encode()), "text/csv")}
+    response = client.post(
+        "/validate?tenant_id=default&validation_scope=duplicate_items",
+        files=files,
+    )
+    assert response.status_code == 200
+    assert response.json()["validation_scope"] == "duplicate_items"
 
 
 def test_upload_invalid_tenant():
@@ -292,6 +321,42 @@ def test_validation_result_can_include_all_items_scope():
         assert payload["summary"]["total_rows"] == 2
         assert payload["summary"]["source_total_rows"] == 2
         assert [row["item"] for row in payload["row_results"]] == ["001", "002"]
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_validation_result_can_include_duplicate_items_scope():
+    files = {
+        "file": (
+            "test.csv",
+            BytesIO(DUPLICATE_SCOPE_CSV_CONTENT.encode()),
+            "text/csv",
+        )
+    }
+    response = client.post(
+        "/validate?tenant_id=default&validation_scope=duplicate_items",
+        files=files,
+    )
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+    try:
+        result_response = client.get(f"/jobs/{job_id}/result")
+        assert result_response.status_code == 200
+
+        payload = result_response.json()
+        assert payload["summary"]["total_rows"] == 2
+        assert payload["summary"]["source_total_rows"] == 3
+        assert [row["item"] for row in payload["row_results"]] == ["001", "001"]
+        assert payload["duplicates"][0]["row_indices"] == [0, 2]
+        assert "DUPLICATE_ITEM" in payload["grouped_problems"]
     finally:
         if job.file_path:
             Path(job.file_path).unlink(missing_ok=True)
@@ -572,12 +637,14 @@ def test_get_job_row_returns_current_value_and_mapping():
     Path(csv_path).unlink(missing_ok=True)
 
 
-def test_resolve_duplicate_rows_deletes_unselected_occurrences_from_csv():
+def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fields():
     csv_content = (
         "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
-        "001,,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
-        "001,,Mesa reserva,MarcaX,ModeloY,SN2,Sala1,CC1,Detalhe,Obs\n"
-        "001,,Mesa antiga,MarcaX,ModeloY,SN3,Sala1,CC1,Detalhe,Obs\n"
+        "001,,Mesa antiga,MarcaAntiga,ModeloAntigo,SNAntigo,"
+        "SalaAntiga,CCAntigo,DetalheAntigo,ObsAntiga\n"
+        "001,,Mesa reserva,MarcaAnterior,ModeloAnterior,SNAnterior,"
+        "SalaAnterior,CCAnterior,DetalheAnterior,ObsAnterior\n"
+        "001,,Mesa atual,,ModeloAtual,,SalaAtual,CCAtual,,\n"
     )
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
         f.write(csv_content)
@@ -597,22 +664,35 @@ def test_resolve_duplicate_rows_deletes_unselected_occurrences_from_csv():
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["kept_row_index"] == 1
-    assert payload["deleted_row_indices"] == [0, 2]
+    assert payload["kept_row_index"] == 2
+    assert payload["deleted_row_indices"] == [0, 1]
     assert payload["remaining_rows"] == 1
+    assert payload["merged_columns"] == [
+        "Marca",
+        "NS",
+        "Complemento",
+        "Observação",
+    ]
 
     updated_csv = Path(csv_path).read_text(encoding="utf-8")
-    assert "Mesa reserva" in updated_csv
+    assert "Mesa atual" in updated_csv
+    assert "MarcaAnterior" in updated_csv
+    assert "ModeloAtual" in updated_csv
+    assert "SNAnterior" in updated_csv
+    assert "CCAtual" in updated_csv
+    assert "DetalheAnterior" in updated_csv
+    assert "ObsAnterior" in updated_csv
     assert "Mesa antiga" not in updated_csv
-    assert "MarcaX" in updated_csv
-    assert "Mesa," not in updated_csv
+    assert "Mesa reserva" not in updated_csv
+    assert "ModeloAnterior" not in updated_csv
+    assert "CCAnterior" not in updated_csv
 
     result_response = client.get(f"/jobs/{job.job_id}/result")
     assert result_response.status_code == 200
     result_payload = result_response.json()
     assert result_payload["summary"]["total_rows"] == 1
     assert result_payload["duplicates"] == []
-    assert [row["descricao"] for row in result_payload["row_results"]] == ["Mesa reserva"]
+    assert [row["descricao"] for row in result_payload["row_results"]] == ["Mesa atual"]
 
     Path(csv_path).unlink(missing_ok=True)
     refreshed_job = job_service.get_job(job.job_id)

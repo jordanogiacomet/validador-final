@@ -49,6 +49,7 @@ TANK_CATEGORY = CategoryConfig(
     display_name="TANQUE METALICO",
     keywords=["tanque metalico"],
     critical_checks=["liters_pattern"],
+    critical_check_fields={"liters_pattern": ["complemento"]},
 )
 
 MONITOR_CATEGORY = CategoryConfig(
@@ -169,7 +170,7 @@ def test_ac_missing_btu_pattern():
     assert len(issues) == 1
     assert issues[0].code == "CATEGORY_AR_CONDICIONADO_BTU_PATTERN_MISSING"
     assert issues[0].severity == "error"
-    assert issues[0].field == "descricao"
+    assert issues[0].field == "complemento"
 
 
 def test_ac_btu_in_complemento():
@@ -191,7 +192,8 @@ def test_ac_btu_in_descricao():
         "modelo": "",
     })
     issues = rule.validate(ctx)
-    assert len(issues) == 0
+    assert len(issues) == 1
+    assert "em Complemento" in issues[0].message
 
 
 def test_ac_btu_in_modelo():
@@ -202,7 +204,8 @@ def test_ac_btu_in_modelo():
         "modelo": "LG 9000 btus",
     })
     issues = rule.validate(ctx)
-    assert len(issues) == 0
+    assert len(issues) == 1
+    assert "em Complemento" in issues[0].message
 
 
 # --- validate tests: TV / inches ---
@@ -220,6 +223,7 @@ def test_tv_missing_inches_pattern():
     assert issues[0].code == "CATEGORY_TV_INCHES_PATTERN_MISSING"
     assert "polegadas" in issues[0].message
     assert "inches_pattern" not in issues[0].message
+    assert "em Complemento" in issues[0].message
 
 
 def test_tv_inches_in_complemento():
@@ -274,6 +278,18 @@ def test_dvr_channels_pattern_missing():
     assert "channels_pattern" not in issues[0].message
 
 
+def test_tank_liters_pattern_missing_mentions_complemento_only():
+    rule = CategoryCriticalCheckRule()
+    tenant = _make_tenant(categories=[TANK_CATEGORY])
+    ctx = _make_context({"descricao": "Tanque metalico", "complemento": ""}, tenant=tenant)
+    issues = rule.validate(ctx)
+    assert len(issues) == 1
+    assert issues[0].field == "complemento"
+    assert "em Complemento" in issues[0].message
+    assert "Descrição" not in issues[0].message
+    assert "Modelo" not in issues[0].message
+
+
 def test_tank_liters_pattern_in_complemento():
     rule = CategoryCriticalCheckRule()
     tenant = _make_tenant(categories=[TANK_CATEGORY])
@@ -283,6 +299,18 @@ def test_tank_liters_pattern_in_complemento():
     )
     issues = rule.validate(ctx)
     assert issues == []
+
+
+def test_tank_liters_pattern_in_descricao_does_not_satisfy_complemento_requirement():
+    rule = CategoryCriticalCheckRule()
+    tenant = _make_tenant(categories=[TANK_CATEGORY])
+    ctx = _make_context(
+        {"descricao": "Tanque metalico 1500 l", "complemento": ""},
+        tenant=tenant,
+    )
+    issues = rule.validate(ctx)
+    assert len(issues) == 1
+    assert "em Complemento" in issues[0].message
 
 
 # --- unknown critical check name is silently skipped ---
