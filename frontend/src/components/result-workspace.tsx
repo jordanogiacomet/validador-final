@@ -559,6 +559,18 @@ export function ResultWorkspace({
             >
               Baixar CSV corrigido
             </button>
+            <button
+              className="action-link"
+              type="button"
+              onClick={() =>
+                void handleDownload(
+                  `/jobs/${currentJobId}/export?format=xlsx`,
+                  `corrigido-${currentJobId}.xlsx`,
+                )
+              }
+            >
+              Exportar Excel
+            </button>
           </div>
           {downloadError ? <p className="inline-error">{downloadError}</p> : null}
 
@@ -644,6 +656,18 @@ export function ResultWorkspace({
               onClick={() => void handleDownload(`/jobs/${currentJobId}/csv`, `corrigido-${currentJobId}.csv`)}
             >
               Baixar CSV corrigido
+            </button>
+            <button
+              className="action-link"
+              type="button"
+              onClick={() =>
+                void handleDownload(
+                  `/jobs/${currentJobId}/export?format=xlsx`,
+                  `corrigido-${currentJobId}.xlsx`,
+                )
+              }
+            >
+              Exportar Excel
             </button>
             <button className="action-button primary" type="button" disabled={isReprocessing} onClick={onReprocess}>
               {isReprocessing ? "Rodando nova conferência..." : "Rodar nova conferência"}

@@ -3,10 +3,12 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from html import escape
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
@@ -1523,6 +1525,73 @@ def build_problem_group_export_csv(
             }
         )
 
+    return buffer.getvalue()
+
+
+XLSX_ERROR_FILL = PatternFill(start_color="FFF8CECC", end_color="FFF8CECC", fill_type="solid")
+XLSX_WARNING_FILL = PatternFill(start_color="FFFFF2CC", end_color="FFFFF2CC", fill_type="solid")
+
+
+def _xlsx_row_severity_by_source_column(
+    row_result: dict,
+    canonical_to_source_column: dict[str, str],
+) -> dict[str, str]:
+    severity_by_source_column: dict[str, str] = {}
+    for issue in row_result.get("issues") or []:
+        canonical_field = issue.get("field")
+        severity = issue.get("severity")
+        if not canonical_field or severity not in {"error", "warning"}:
+            continue
+        source_column = canonical_to_source_column.get(canonical_field, canonical_field)
+        if severity_by_source_column.get(source_column) == "error":
+            continue
+        severity_by_source_column[source_column] = severity
+    return severity_by_source_column
+
+
+def build_xlsx_export_bytes(
+    source_rows: list[dict[str, object]],
+    source_columns: list[str],
+    row_results: list[dict],
+    canonical_to_source_column: dict[str, str] | None = None,
+) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Resultado"
+
+    header_font = Font(bold=True)
+    for column_index, column_name in enumerate(source_columns, start=1):
+        cell = worksheet.cell(row=1, column=column_index, value=column_name)
+        cell.font = header_font
+
+    results_by_row_index: dict[int, dict] = {}
+    for row_result in row_results:
+        row_index = row_result.get("row_index")
+        if isinstance(row_index, int):
+            results_by_row_index[row_index] = row_result
+
+    canonical_map = canonical_to_source_column or {}
+    for row_offset, row in enumerate(source_rows):
+        excel_row_number = row_offset + 2
+        row_result = results_by_row_index.get(row_offset)
+        severity_by_source_column = (
+            _xlsx_row_severity_by_source_column(row_result, canonical_map)
+            if row_result is not None
+            else {}
+        )
+
+        for column_index, column_name in enumerate(source_columns, start=1):
+            raw_value = row.get(column_name, "")
+            cell_value = "" if raw_value is None else str(raw_value)
+            cell = worksheet.cell(row=excel_row_number, column=column_index, value=cell_value)
+            severity = severity_by_source_column.get(column_name)
+            if severity == "error":
+                cell.fill = XLSX_ERROR_FILL
+            elif severity == "warning":
+                cell.fill = XLSX_WARNING_FILL
+
+    buffer = BytesIO()
+    workbook.save(buffer)
     return buffer.getvalue()
 
 

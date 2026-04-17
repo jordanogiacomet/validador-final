@@ -46,6 +46,7 @@ from app.services.report_service import (
     build_full_report,
     build_partial_report,
     build_problem_group_export_csv,
+    build_xlsx_export_bytes,
     generate_pdf_report,
 )
 
@@ -719,6 +720,54 @@ def _resolve_source_column(
             return resolved
 
     raise ValueError(f"Column not found for field: {field_name}")
+
+
+def _build_canonical_to_source_column_map(
+    tenant_config: TenantConfig,
+    available_columns: list[str],
+) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for canonical_field in DEFAULT_TENANT_COLUMNS:
+        try:
+            mapping[canonical_field] = _resolve_source_column(
+                canonical_field, tenant_config.columns, available_columns
+            )
+        except ValueError:
+            continue
+    return mapping
+
+
+def _build_xlsx_export_name(job: JobRecord, file_path: Path) -> str:
+    original_name = job.file_name or file_path.name
+    original_path = Path(original_name)
+    stem = original_path.stem or "lote"
+    if stem.endswith("_corrigido"):
+        return f"{stem}.xlsx"
+    return f"{stem}_corrigido.xlsx"
+
+
+def get_job_xlsx_export(
+    job_id: str,
+    job_service: JobService,
+) -> tuple[bytes, str]:
+    job, file_path = _get_job_csv_file(job_id, job_service)
+    _, report_data = _get_job_result_data(job_id, job_service)
+
+    _, _, tenant_config, df = _get_job_csv_context(job_id, job_service)
+    source_columns = df.columns.tolist()
+    source_rows = _dataframe_to_raw_rows(df)
+    row_results = report_data.get("row_results") or []
+    canonical_to_source_column = _build_canonical_to_source_column_map(
+        tenant_config, source_columns
+    )
+
+    xlsx_bytes = build_xlsx_export_bytes(
+        source_rows=source_rows,
+        source_columns=source_columns,
+        row_results=row_results,
+        canonical_to_source_column=canonical_to_source_column,
+    )
+    return xlsx_bytes, _build_xlsx_export_name(job, file_path)
 
 
 def update_job_csv_row(

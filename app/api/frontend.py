@@ -1576,6 +1576,7 @@ def build_frontend_html() -> str:
           <p class="panel-copy">Baixe a planilha corrigida no mesmo formato do arquivo de entrada ou inicie um novo processamento para refletir as mudanças no resumo consolidado e no PDF final.</p>
           <div class="correction-actions">
             <a id="download-corrected-csv" class="action-link" href="#">Baixar CSV corrigido</a>
+            <a id="download-corrected-xlsx" class="action-link" href="#">Exportar Excel</a>
             <button id="reprocess-button" class="action-button primary" type="button">Reprocessar lote</button>
           </div>
         </section>
@@ -1733,6 +1734,7 @@ def build_frontend_html() -> str:
     const downloadPdfLink = document.getElementById("download-pdf");
     const downloadJsonLink = document.getElementById("download-json");
     const downloadCorrectedCsvLink = document.getElementById("download-corrected-csv");
+    const downloadCorrectedXlsxLink = document.getElementById("download-corrected-xlsx");
     const correctionSection = document.getElementById("correction-section");
     const reprocessButton = document.getElementById("reprocess-button");
     const editModal = document.getElementById("edit-modal");
@@ -2079,6 +2081,9 @@ def build_frontend_html() -> str:
 
     function syncCorrectedCsvDownload(jobId = currentJobId) {
       downloadCorrectedCsvLink.href = jobId ? `/jobs/${jobId}/csv` : "#";
+      if (downloadCorrectedXlsxLink) {
+        downloadCorrectedXlsxLink.href = jobId ? `/jobs/${jobId}/export?format=xlsx` : "#";
+      }
     }
 
     function buildOperationalExportUrl(kind, problemCode = null) {

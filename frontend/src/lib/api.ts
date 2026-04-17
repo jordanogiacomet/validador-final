@@ -464,6 +464,10 @@ export function buildCorrectedCsvUrl(jobId: string): string {
   return buildApiUrl(`/jobs/${jobId}/csv`);
 }
 
+export function buildCorrectedXlsxUrl(jobId: string): string {
+  return buildApiUrl(`/jobs/${jobId}/export?format=xlsx`);
+}
+
 export function buildOperationalExportUrl(
   jobId: string,
   kind: "duplicates" | "problem_group",

@@ -1,4 +1,7 @@
+from io import BytesIO
 from pathlib import Path
+
+from openpyxl import load_workbook
 
 from app.core.issue import ValidationIssue
 from app.core.validation_scope import ValidationScope
@@ -13,6 +16,7 @@ from app.services.report_service import (
     build_partial_report,
     build_problem_group_export_csv,
     build_row_results,
+    build_xlsx_export_bytes,
     generate_pdf_report,
 )
 
@@ -500,3 +504,141 @@ def test_pdf_report_many_issues(tmp_path):
     generate_pdf_report(rows, results, pdf_path)
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 0
+
+
+# --- build_xlsx_export_bytes ---
+
+
+def _load_xlsx_worksheet(xlsx_bytes: bytes):
+    workbook = load_workbook(BytesIO(xlsx_bytes))
+    return workbook.active
+
+
+def test_xlsx_export_preserves_source_columns_and_rows():
+    source_columns = ["Item", "Descrição", "Marca"]
+    source_rows = [
+        {"Item": "A001", "Descrição": "Mesa", "Marca": "MarcaX"},
+        {"Item": "A002", "Descrição": "Cadeira", "Marca": "MarcaZ"},
+    ]
+    xlsx_bytes = build_xlsx_export_bytes(source_rows, source_columns, [])
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+
+    assert [cell.value for cell in worksheet[1]] == source_columns
+    assert [cell.value for cell in worksheet[2]] == ["A001", "Mesa", "MarcaX"]
+    assert [cell.value for cell in worksheet[3]] == ["A002", "Cadeira", "MarcaZ"]
+
+
+def test_xlsx_export_header_row_is_bold():
+    xlsx_bytes = build_xlsx_export_bytes(
+        [{"Item": "A"}], ["Item"], []
+    )
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+    assert worksheet.cell(row=1, column=1).font.bold is True
+
+
+def test_xlsx_export_highlights_error_and_warning_cells():
+    source_columns = ["Item", "Marca", "Modelo"]
+    source_rows = [
+        {"Item": "A001", "Marca": "", "Modelo": "ModeloY"},
+    ]
+    row_results = [
+        {
+            "row_index": 0,
+            "item": "A001",
+            "descricao": "Mesa",
+            "issues": [
+                {
+                    "code": "ZERO_ITEM_MARCA_MISSING",
+                    "severity": "error",
+                    "message": "Marca ausente",
+                    "field": "marca",
+                },
+                {
+                    "code": "ZERO_ITEM_MODELO_SHORT",
+                    "severity": "warning",
+                    "message": "Modelo curto",
+                    "field": "modelo",
+                },
+            ],
+            "has_errors": True,
+            "has_warnings": True,
+        }
+    ]
+    canonical_map = {"marca": "Marca", "modelo": "Modelo"}
+    xlsx_bytes = build_xlsx_export_bytes(
+        source_rows, source_columns, row_results, canonical_map
+    )
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+
+    marca_cell = worksheet.cell(row=2, column=2)
+    modelo_cell = worksheet.cell(row=2, column=3)
+    item_cell = worksheet.cell(row=2, column=1)
+
+    assert marca_cell.fill.fgColor.rgb == "FFF8CECC"
+    assert modelo_cell.fill.fgColor.rgb == "FFFFF2CC"
+    assert item_cell.fill.fgColor.rgb in (None, "00000000")
+
+
+def test_xlsx_export_error_overrides_warning_on_same_cell():
+    source_columns = ["Marca"]
+    source_rows = [{"Marca": ""}]
+    row_results = [
+        {
+            "row_index": 0,
+            "issues": [
+                {
+                    "code": "MARCA_WARNING",
+                    "severity": "warning",
+                    "message": "aviso",
+                    "field": "marca",
+                },
+                {
+                    "code": "MARCA_ERROR",
+                    "severity": "error",
+                    "message": "erro",
+                    "field": "marca",
+                },
+            ],
+        }
+    ]
+    xlsx_bytes = build_xlsx_export_bytes(
+        source_rows, source_columns, row_results, {"marca": "Marca"}
+    )
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+    assert worksheet.cell(row=2, column=1).fill.fgColor.rgb == "FFF8CECC"
+
+
+def test_xlsx_export_handles_none_values_and_missing_canonical_map():
+    source_columns = ["Item", "Descrição"]
+    source_rows = [{"Item": "A", "Descrição": None}, {"Item": None, "Descrição": "Mesa"}]
+    xlsx_bytes = build_xlsx_export_bytes(source_rows, source_columns, [])
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+
+    assert worksheet.cell(row=2, column=1).value == "A"
+    assert worksheet.cell(row=2, column=2).value in (None, "")
+    assert worksheet.cell(row=3, column=1).value in (None, "")
+    assert worksheet.cell(row=3, column=2).value == "Mesa"
+
+
+def test_xlsx_export_ignores_issues_without_matching_column():
+    source_columns = ["Item", "Descrição"]
+    source_rows = [{"Item": "A", "Descrição": "Mesa"}]
+    row_results = [
+        {
+            "row_index": 0,
+            "issues": [
+                {
+                    "code": "MARCA_MISSING",
+                    "severity": "error",
+                    "message": "Marca ausente",
+                    "field": "marca",
+                }
+            ],
+        }
+    ]
+    xlsx_bytes = build_xlsx_export_bytes(
+        source_rows, source_columns, row_results, {"marca": "Marca"}
+    )
+    worksheet = _load_xlsx_worksheet(xlsx_bytes)
+    assert worksheet.cell(row=2, column=1).fill.fgColor.rgb in (None, "00000000")
+    assert worksheet.cell(row=2, column=2).fill.fgColor.rgb in (None, "00000000")

@@ -1143,6 +1143,96 @@ def test_download_job_csv_not_found():
     assert response.status_code == 404
 
 
+def test_download_job_xlsx_export_for_completed_job():
+    from io import BytesIO as _BytesIO
+
+    from openpyxl import load_workbook
+
+    xlsx_csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Cadeira,,,SN1,Sala1,CC1,,\n"
+    )
+    files = {"file": ("lote_excel.csv", BytesIO(xlsx_csv_content.encode()), "text/csv")}
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    job_id = response.json()["job_id"]
+    job = job_service.get_job(job_id)
+    assert job is not None
+
+    try:
+        export_response = client.get(
+            f"/jobs/{job_id}/export?format=xlsx",
+            headers=auth_headers(),
+        )
+        assert export_response.status_code == 200
+        assert export_response.headers["content-type"].startswith(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert 'filename="lote_excel_corrigido.xlsx"' in (
+            export_response.headers["content-disposition"]
+        )
+
+        workbook = load_workbook(_BytesIO(export_response.content))
+        worksheet = workbook.active
+        header_row = [cell.value for cell in worksheet[1]]
+        assert header_row == [
+            "Item",
+            "Placa Anterior",
+            "Descrição",
+            "Marca",
+            "Modelo",
+            "NS",
+            "Local",
+            "CC",
+            "Complemento",
+            "Observação",
+        ]
+        assert worksheet.cell(row=1, column=1).font.bold is True
+        assert worksheet.cell(row=2, column=1).value == "001"
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_download_job_xlsx_export_unsupported_format():
+    job = job_service.create_job(tenant_id="default", file_name="lote.csv")
+    response = client.get(
+        f"/jobs/{job.job_id}/export?format=json",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "Unsupported export format" in response.json()["detail"]
+
+
+def test_download_job_xlsx_export_not_found():
+    response = client.get(
+        "/jobs/nonexistent/export?format=xlsx",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+
+
+def test_download_job_xlsx_export_rejects_other_tenant_job():
+    job = job_service.create_job(tenant_id="redesim", file_name="lote.csv")
+
+    response = client.get(
+        f"/jobs/{job.job_id}/export?format=xlsx",
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 403
+    assert "redesim" in response.json()["detail"]
+
+
 def test_upload_saves_file():
     files = {"file": ("inventory.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
     response = client.post(

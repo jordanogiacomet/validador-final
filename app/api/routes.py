@@ -37,12 +37,15 @@ from app.services.validation_service import (
     get_job_operational_export,
     get_job_report_download,
     get_job_result_payload,
+    get_job_xlsx_export,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
     set_job_row_review_flag,
     update_job_csv_row,
 )
+
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter()
 
@@ -681,6 +684,37 @@ async def download_job_operational_export(
 
     headers = {"Content-Disposition": f'attachment; filename="{download_name}"'}
     return Response(content=csv_content, media_type="text/csv", headers=headers)
+
+
+@router.get("/jobs/{job_id}/export")
+async def download_job_export(
+    request: Request,
+    job_id: str,
+    format: str = "xlsx",
+) -> Response:
+    _get_authorized_job(request, job_id)
+
+    if format != "xlsx":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported export format: {format}",
+        )
+
+    try:
+        xlsx_bytes, download_name = get_job_xlsx_export(job_id, job_service)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    headers = {"Content-Disposition": f'attachment; filename="{download_name}"'}
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MEDIA_TYPE,
+        headers=headers,
+    )
 
 
 @router.patch("/jobs/{job_id}/rows/{row_index}", response_model=RowUpdateResponse)
