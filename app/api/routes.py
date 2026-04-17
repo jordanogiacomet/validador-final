@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,13 @@ from app.services.validation_service import (
 
 router = APIRouter()
 
-job_service = JobService()
+
+def _build_job_service() -> JobService:
+    storage_path = os.getenv("VALIDATOR_JOB_STORE_PATH")
+    return JobService(storage_path=Path(storage_path) if storage_path else None)
+
+
+job_service = _build_job_service()
 
 
 class UploadResponse(BaseModel):
@@ -219,6 +226,7 @@ async def upload_and_validate(
 
     job.file_path = str(file_path)
     job.file_name = file.filename
+    job_service.save_job(job.job_id)
 
     background_tasks.add_task(run_validation_job, job.job_id, job_service)
 

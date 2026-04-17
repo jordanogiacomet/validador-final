@@ -1,9 +1,14 @@
+import json
+from pathlib import Path
+
 from app.core.job import JobRecord, JobStatus
 
 
 class JobService:
-    def __init__(self) -> None:
+    def __init__(self, storage_path: Path | str | None = None) -> None:
         self._jobs: dict[str, JobRecord] = {}
+        self._storage_path = Path(storage_path) if storage_path is not None else None
+        self._load_jobs()
 
     def create_job(
         self,
@@ -19,6 +24,7 @@ class JobService:
             params=params or {},
         )
         self._jobs[job.job_id] = job
+        self._persist_jobs()
         return job
 
     def get_job(self, job_id: str) -> JobRecord | None:
@@ -45,6 +51,7 @@ class JobService:
     def start_job(self, job_id: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         job.mark_running()
+        self._persist_jobs()
         return job
 
     def complete_job(
@@ -66,20 +73,24 @@ class JobService:
             rows_with_issues=rows_with_issues,
             total_issues=total_issues,
         )
+        self._persist_jobs()
         return job
 
     def fail_job(self, job_id: str, error_message: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         job.mark_failed(error_message)
+        self._persist_jobs()
         return job
 
     def request_job_cancellation(self, job_id: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         if job.status == JobStatus.QUEUED:
             job.mark_canceled("O lote foi cancelado antes do início do processamento.")
+            self._persist_jobs()
             return job
         if job.status == JobStatus.RUNNING:
             job.request_cancellation()
+            self._persist_jobs()
             return job
         if job.status == JobStatus.CANCELED:
             return job
@@ -92,6 +103,7 @@ class JobService:
         if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
             raise ValueError("Only queued or running jobs can be canceled")
         job.mark_canceled(detail)
+        self._persist_jobs()
         return job
 
     def update_progress(
@@ -107,6 +119,7 @@ class JobService:
             status_title=status_title,
             status_detail=status_detail,
         )
+        self._persist_jobs()
         return job
 
     def update_partial_result(
@@ -151,6 +164,12 @@ class JobService:
                 status_detail=status_detail,
             )
 
+        self._persist_jobs()
+        return job
+
+    def save_job(self, job_id: str) -> JobRecord:
+        job = self._get_or_raise(job_id)
+        self._persist_jobs()
         return job
 
     def _get_or_raise(self, job_id: str) -> JobRecord:
@@ -158,3 +177,32 @@ class JobService:
         if job is None:
             raise KeyError(f"Job not found: {job_id}")
         return job
+
+    def _load_jobs(self) -> None:
+        if self._storage_path is None or not self._storage_path.exists():
+            return
+
+        payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("Job storage payload must be a list")
+
+        self._jobs = {}
+        for item in payload:
+            job = JobRecord.model_validate(item)
+            self._jobs[job.job_id] = job
+
+    def _persist_jobs(self) -> None:
+        if self._storage_path is None:
+            return
+
+        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = [
+            job.model_dump(mode="json")
+            for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
+        ]
+        temp_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_path.replace(self._storage_path)

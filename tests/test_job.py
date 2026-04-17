@@ -358,3 +358,65 @@ class TestJobService:
         )
         assert job.status == JobStatus.COMPLETED
         assert job.total_issues == 22
+
+    def test_file_backed_service_reloads_created_jobs(self, tmp_path):
+        storage_path = tmp_path / "jobs.json"
+        service = JobService(storage_path=storage_path)
+
+        job = service.create_job(
+            tenant_id="default",
+            file_path="/uploads/inventory.csv",
+            file_name="inventory.csv",
+            params={"validation_scope": "duplicate_items"},
+        )
+
+        reloaded_service = JobService(storage_path=storage_path)
+        reloaded_job = reloaded_service.get_job(job.job_id)
+
+        assert reloaded_job is not None
+        assert reloaded_job.tenant_id == "default"
+        assert reloaded_job.file_path == "/uploads/inventory.csv"
+        assert reloaded_job.file_name == "inventory.csv"
+        assert reloaded_job.params["validation_scope"] == "duplicate_items"
+
+    def test_file_backed_service_persists_lifecycle_updates(self, tmp_path):
+        storage_path = tmp_path / "jobs.json"
+        service = JobService(storage_path=storage_path)
+        job = service.create_job(tenant_id="default")
+
+        service.start_job(job.job_id)
+        service.complete_job(
+            job.job_id,
+            result_path="/results/result.json",
+            report_path="/results/report.pdf",
+            total_rows=10,
+            source_total_rows=12,
+            rows_with_issues=2,
+            total_issues=3,
+        )
+
+        reloaded_job = JobService(storage_path=storage_path).get_job(job.job_id)
+
+        assert reloaded_job is not None
+        assert reloaded_job.status == JobStatus.COMPLETED
+        assert reloaded_job.result_path == "/results/result.json"
+        assert reloaded_job.report_path == "/results/report.pdf"
+        assert reloaded_job.total_rows == 10
+        assert reloaded_job.source_total_rows == 12
+        assert reloaded_job.rows_with_issues == 2
+        assert reloaded_job.total_issues == 3
+
+    def test_save_job_persists_external_file_path_assignment(self, tmp_path):
+        storage_path = tmp_path / "jobs.json"
+        service = JobService(storage_path=storage_path)
+        job = service.create_job(tenant_id="default")
+
+        job.file_path = "/uploads/current.csv"
+        job.file_name = "current.csv"
+        service.save_job(job.job_id)
+
+        reloaded_job = JobService(storage_path=storage_path).get_job(job.job_id)
+
+        assert reloaded_job is not None
+        assert reloaded_job.file_path == "/uploads/current.csv"
+        assert reloaded_job.file_name == "current.csv"

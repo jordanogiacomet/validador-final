@@ -1,3 +1,29 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: validador-final-uploads
+  namespace: validador-final
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: validador-final-results
+  namespace: validador-final
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 5Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +50,8 @@ spec:
           env:
             - name: VALIDATOR_FRONTEND_ORIGIN_REGEX
               value: "^https?://[^/]+:30092$"
+            - name: VALIDATOR_JOB_STORE_PATH
+              value: /app/results/jobs.json
           readinessProbe:
             httpGet:
               path: /health
@@ -50,6 +78,8 @@ spec:
               mountPath: /app/results
       volumes:
         - name: uploads
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: validador-final-uploads
         - name: results
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: validador-final-results

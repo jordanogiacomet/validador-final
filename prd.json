@@ -220,6 +220,22 @@
       "priority": 12,
       "passes": true,
       "notes": "Implemented in the CSV correction service and exposed through the existing duplicate resolution API. Global US-011 remains open because the full suite still has a known legacy integrity-rule expectation failure."
+    },
+    {
+      "id": "US-013",
+      "title": "Persist operational jobs across API pod restarts",
+      "description": "As an operator, I need completed jobs and corrected CSV artifacts to remain available while resolving duplicates, even when the API pod restarts or a rollout happens.",
+      "acceptanceCriteria": [
+        "Persist job metadata outside the in-memory JobService when configured",
+        "Reload completed job records after API process restart",
+        "Persist uploaded CSV and generated result artifacts on Kubernetes storage",
+        "Keep duplicate resolution available after an API deployment rollout",
+        "Keep the persistence mechanism tenant-agnostic",
+        "Backend, frontend, and deployment validation checks pass"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Implemented with optional JSON-backed JobService persistence through VALIDATOR_JOB_STORE_PATH and Kubernetes PVCs for uploads/results. Existing jobs from the previous emptyDir/in-memory deployment cannot be recovered after the old pod is gone."
     }
   ],
   "nonFunctionalRequirements": {

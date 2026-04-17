@@ -515,6 +515,7 @@ def create_reprocess_job(
 
     new_job.file_path = str(destination_path)
     new_job.file_name = source_file_name
+    job_service.save_job(new_job.job_id)
     return new_job
 
 

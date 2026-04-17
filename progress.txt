@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-17 10:50 BRT
+Last Updated: 2026-04-17 11:20 BRT
 
 ---
 
@@ -260,4 +260,33 @@ Expected architectural direction:
   - Duplicate consolidation belongs in the CSV correction service, not in row validation rules, because it mutates the corrected artifact and triggers job artifact regeneration
   - Keep duplicate merge behavior generic: operate on row indices and CSV values without tenant-name branching
   - `ttl.sh` images expire after 24h; use a persistent registry for durable deployments
+---
+
+## 2026-04-17 - US-013
+- Fixed job loss during duplicate resolution after API pod restart or rollout
+- Added optional JSON-backed persistence to `JobService`, enabled by `VALIDATOR_JOB_STORE_PATH`
+- API upload and reprocess flows now persist direct `file_path`/`file_name` assignments before background work continues
+- Updated the API Kubernetes deployment to mount `uploads` and `results` through PVCs instead of `emptyDir`
+- Added `VALIDATOR_JOB_STORE_PATH=/app/results/jobs.json` to the API deployment
+- Added job service tests for reloading persisted jobs, lifecycle persistence, and explicit persistence after external file-path assignment
+- Deployed:
+  - API image: `ttl.sh/validador-final-api-20260417111500:24h`
+  - PVCs: `validador-final-uploads`, `validador-final-results`
+  - Storage class: `nfs-client`
+- Validation performed:
+  - Uploaded a duplicate test CSV through the deployed API
+  - Confirmed the job completed with one duplicate group
+  - Restarted `deployment/validador-final`
+  - Confirmed the same completed job was still available after restart
+  - Resolved duplicates after restart and confirmed merged columns plus zero duplicate groups
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - In-memory job state is not acceptable for operational correction flows because the UI can hold a job id across backend rollouts
+  - Job metadata and CSV/result artifacts must move together; persisting only one side still leaves duplicate resolution fragile
+  - Jobs created before this fix while the API used `emptyDir` cannot be recovered after that pod is terminated
 ---
