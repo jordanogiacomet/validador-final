@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-17 11:20 BRT
+Last Updated: 2026-04-17 15:49 -02
 
 ---
 
@@ -26,6 +26,10 @@ Last Updated: 2026-04-17 11:20 BRT
 - Cross-row rules (e.g., duplicate detection) should cache computed data in `shared_context` to avoid re-computing per row.
 - Use Protocol-based abstractions for external service clients (e.g., LLM) to enable testability without mocking internals.
 - Tenant-specific prompt files live under `app/tenants/{tenant_id}/prompts/`; reference via `prompt_file` in tenant YAML.
+- Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
+- Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
+- For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
+- Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
 
 ---
 
@@ -288,5 +292,116 @@ Expected architectural direction:
 - **Learnings for future iterations:**
   - In-memory job state is not acceptable for operational correction flows because the UI can hold a job id across backend rollouts
   - Job metadata and CSV/result artifacts must move together; persisting only one side still leaves duplicate resolution fragile
-  - Jobs created before this fix while the API used `emptyDir` cannot be recovered after that pod is terminated
+- Jobs created before this fix while the API used `emptyDir` cannot be recovered after that pod is terminated
+---
+
+## 2026-04-17 - US-014
+- Expanded duplicate-resolution media extraction in `frontend/src/lib/row-media.ts` to preserve every renderable image source from raw row payloads while keeping first-photo compatibility helpers
+- Added focused media parsing tests for mixed HTTPS/local-path lists, `data:image` payloads, raw base64 payloads, and multi-column deduplication in `frontend/src/lib/__tests__/row-media.test.ts`
+- Reworked the duplicate-resolution modal cards to show a stable in-card photo gallery with horizontal scroll, discrete previous/next controls, load-error fallback, and responsive layout preservation
+- Added a frontend lightbox for duplicate-row photos with same-row navigation and keyboard support in `frontend/src/components/duplicate-resolution-modal.tsx`
+- Kept the implementation frontend-only; the existing `GET /jobs/{job_id}/rows/{row_index}` row payload was sufficient and no API/backend change was required
+- Updated `prd.json` and `TASKS.md` for the duplicate photo gallery rollout
+- Deployed:
+  - Frontend image: `ttl.sh/validador-final-frontend-20260417125614:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL reused unchanged: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new image
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+  - Confirmed `GET http://127.0.0.1:30091/health` returned `{"status":"ok"}`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - Real Redesim `foto_complementar_memento` cells can contain several HTTPS URLs in a textual list; the example dataset observed up to 7 browser-renderable URLs in one cell
+  - When a media cell mixes HTTPS URLs with Android-local paths, only the browser-renderable sources should participate in gallery/lightbox navigation and the rest should be silently ignored
+---
+
+## 2026-04-17 - US-015
+- Added a duplicate-result filter in `frontend/src/components/result-workspace.tsx` with `Todos`, `Nomes iguais`, and `Nomes diferentes` views plus per-filter counts
+- Moved duplicate conflict detection and filtering into shared presentation helpers in `frontend/src/lib/presentation.ts` so red-card styling and the new filter use the same conflict rule
+- Added focused frontend tests for explicit duplicate conflict detection and filter partitioning in `frontend/src/lib/__tests__/presentation.test.ts`
+- Added frontend styles for the duplicate filter chips and empty filtered state in `frontend/src/app/globals.css`
+- Reset the duplicate filter to `Todos` whenever the operator opens a different job to avoid carrying stale UI state across lots
+- Renamed the operator-facing filter labels from generic severity wording to comparison wording so the UI now speaks in terms of `Nomes iguais` and `Nomes diferentes`
+- Updated `prd.json` and `TASKS.md` for the duplicate filter rollout
+- Deployed:
+  - Frontend image: `ttl.sh/validador-final-frontend-20260417144230:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL reused unchanged: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new image
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+  - Confirmed `GET http://127.0.0.1:30091/health` returned `{"status":"ok"}`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - The duplicate list can be filtered entirely on the frontend because the backend already returns enough duplicate metadata (`has_description_conflict`, `descricao`, `row_indices`, `count`) to classify cards without extra API work
+  - UI filters that derive from operational severity should default back to the broadest view when the active job changes, otherwise operators can miss items because of stale local state
+---
+
+## 2026-04-17 - US-016
+- Updated duplicate consolidation in `app/services/validation_service.py` to detect `Nomes iguais` groups through the current duplicate description rule and keep the physical highest-row survivor only as a CSV persistence detail
+- Same-name duplicate enrichment now ignores photo/media columns and date/time-like columns before filling missing values from older occurrences
+- Preserved the current resolution behavior for `Nomes diferentes` duplicate groups
+- Added focused service and API tests covering same-name consolidation with media columns, explicit date/time columns, and a value-based datetime fallback column (`registro`)
+- Updated duplicate-resolution copy in `frontend/src/components/duplicate-resolution-modal.tsx`, `frontend/src/components/operational-workspace.tsx`, and `frontend/src/components/result-workspace.tsx` to speak in terms of consolidation/mescla instead of “manter maior linha”
+- Conflict rule kept intentionally conservative for `Nomes iguais`: if the surviving row already has a non-empty allowed value, that value wins; older occurrences only fill blanks
+- Updated `prd.json` and `TASKS.md` for the same-name consolidation rollout
+- Deployed:
+  - API image: `ttl.sh/validador-final-api-20260417153018:24h`
+  - Frontend image: `ttl.sh/validador-final-frontend-20260417153018:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final` rolled out successfully with the new API image
+  - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new frontend image
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+  - Confirmed `GET http://127.0.0.1:30091/health` returned `{"status":"ok"}`
+- Checks passed:
+  - `ruff check app/services/validation_service.py tests/test_validation_service.py tests/test_api.py`
+  - `pytest tests/test_validation_service.py tests/test_api.py`
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - The current `Nomes iguais` vs `Nomes diferentes` split still depends on the existing duplicate-description rule: one distinct non-empty `Descrição` means same-name; more than one means different-name
+  - Date/time skip detection is safest when combining normalized column-name tokens with a small sample of datetime-like values, because real tenant files may not use stable headers for timestamps
+  - When the raw CSV cannot resolve the `Descrição` source column during duplicate resolution, falling back to the existing different-name path is the safer default than applying the stricter same-name merge rules
+---
+
+## 2026-04-17 - US-017
+- Added a mass-consolidation shortcut in `frontend/src/components/result-workspace.tsx` for duplicate groups classified as `Nomes iguais`
+- Kept the bulk shortcut intentionally limited to groups with exactly 2 occurrences for now
+- Added shared helper logic in `frontend/src/lib/presentation.ts` to identify eligible groups and sort them from the highest row indices to the lowest before the UI invokes the existing per-group resolution API
+- Updated `frontend/src/components/operational-workspace.tsx` to execute the eligible consolidations sequentially, refresh the completed job once at the end, and surface partial-progress errors if a batch fails mid-run
+- Added focused frontend coverage in `frontend/src/lib/__tests__/presentation.test.ts` for bulk eligibility and descending ordering
+- Updated `prd.json` and `TASKS.md` for the bulk same-name consolidation shortcut
+- Deployed:
+  - Frontend image: `ttl.sh/validador-final-frontend-20260417154751:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL reused unchanged: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new image
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+  - Confirmed `GET http://127.0.0.1:30091/health` returned `{"status":"ok"}`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - Reusing the existing duplicate-resolution endpoint is safe for bulk actions as long as eligible groups are processed from the end of the CSV toward the beginning
+  - Keeping the eligibility rule in a shared presentation helper avoids subtle drift between the button visibility, the count shown in the UI, and the actual groups sent to the API
 ---

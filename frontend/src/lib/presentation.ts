@@ -9,6 +9,8 @@ import type {
   ValidationScope,
 } from "@/lib/types";
 
+export type DuplicateDisplayFilter = "all" | "normal" | "conflict";
+
 export const PROCESS_STEPS = [
   {
     id: "file_received",
@@ -174,6 +176,46 @@ export function buildScopeSummaryCopy(
   }
 
   return "Todas as linhas entraram no escopo.";
+}
+
+export function hasDuplicateDescriptionConflict(duplicate: DuplicateGroup): boolean {
+  if (duplicate.has_description_conflict !== undefined) {
+    return duplicate.has_description_conflict;
+  }
+
+  return Boolean(duplicate.descricao?.includes(" / "));
+}
+
+export function filterDuplicates(
+  duplicates: DuplicateGroup[],
+  filter: DuplicateDisplayFilter,
+): DuplicateGroup[] {
+  if (filter === "all") {
+    return duplicates;
+  }
+
+  return duplicates.filter((duplicate) => {
+    const hasConflict = hasDuplicateDescriptionConflict(duplicate);
+    return filter === "conflict" ? hasConflict : !hasConflict;
+  });
+}
+
+export function getBulkConsolidatableSameNameDuplicates(
+  duplicates: DuplicateGroup[],
+): DuplicateGroup[] {
+  return duplicates
+    .filter(
+      (duplicate) =>
+        !hasDuplicateDescriptionConflict(duplicate) &&
+        duplicate.count === 2 &&
+        duplicate.row_indices.length === 2,
+    )
+    .slice()
+    .sort((left, right) => {
+      const leftMaxRowIndex = Math.max(...left.row_indices);
+      const rightMaxRowIndex = Math.max(...right.row_indices);
+      return rightMaxRowIndex - leftMaxRowIndex;
+    });
 }
 
 function humanizeCategoryToken(categoryToken: string): string {

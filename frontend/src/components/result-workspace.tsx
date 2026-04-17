@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import {
   buildCorrectedCsvUrl,
   buildOperationalExportUrl,
@@ -7,15 +9,19 @@ import {
 import {
   buildScopeSummaryCopy,
   describeIssue,
+  filterDuplicates,
   formatFieldName,
+  getBulkConsolidatableSameNameDuplicates,
   getSourceTotalRows,
   getValidatedTotalRows,
+  hasDuplicateDescriptionConflict,
   isDuplicateItemsScope,
   isZeroItemsScope,
   lineNumber,
   resolveEditableField,
   slugify,
 } from "@/lib/presentation";
+import type { DuplicateDisplayFilter } from "@/lib/presentation";
 import type {
   DuplicateGroup,
   JobResultPayload,
@@ -35,11 +41,19 @@ interface ResultWorkspaceProps {
   hasPendingCorrections: boolean;
   visibleProblemOccurrencesByCode: Record<string, number>;
   isReprocessing: boolean;
+  isResolvingBulkSameNameDuplicates: boolean;
   onShowMore: (code: string) => void;
   onEditOccurrence: (occurrence: ProblemOccurrence) => void;
   onResolveDuplicate: (duplicate: DuplicateGroup) => void;
+  onResolveBulkSameNameDuplicates: () => void;
   onReprocess: () => void;
 }
+
+const DUPLICATE_FILTER_LABELS: Record<DuplicateDisplayFilter, string> = {
+  all: "Todos",
+  normal: "Nomes iguais",
+  conflict: "Nomes diferentes",
+};
 
 function sortProblemGroups(
   groupedProblems: Record<string, ProblemOccurrence[]>,
@@ -59,14 +73,6 @@ function sortProblemGroups(
 
       return left.code.localeCompare(right.code);
     });
-}
-
-function hasDuplicateDescriptionConflict(duplicate: DuplicateGroup): boolean {
-  if (duplicate.has_description_conflict !== undefined) {
-    return duplicate.has_description_conflict;
-  }
-
-  return Boolean(duplicate.descricao?.includes(" / "));
 }
 
 function SummarySection({
@@ -213,24 +219,38 @@ export function ResultWorkspace({
   hasPendingCorrections,
   visibleProblemOccurrencesByCode,
   isReprocessing,
+  isResolvingBulkSameNameDuplicates,
   onShowMore,
   onEditOccurrence,
   onResolveDuplicate,
+  onResolveBulkSameNameDuplicates,
   onReprocess,
 }: ResultWorkspaceProps) {
+  const [duplicateFilter, setDuplicateFilter] = useState<DuplicateDisplayFilter>("all");
   const activeData = previewData || reportData;
   const isPartial = Boolean(previewData);
+
+  useEffect(() => {
+    setDuplicateFilter("all");
+  }, [currentJobId]);
 
   if (!activeData) {
     return <EmptyState job={job} />;
   }
 
   const summary = activeData.summary;
-  const duplicates = activeData.duplicates || [];
-  const groupedProblems = activeData.grouped_problems || {};
+  const duplicates = activeData.duplicates ?? [];
+  const groupedProblems = activeData.grouped_problems ?? {};
   const groups = sortProblemGroups(groupedProblems);
   const processedRows = Number(summary.processed_rows ?? job?.processed_rows ?? getValidatedTotalRows(summary));
   const showCleanState = Number(summary.rows_with_issues ?? 0) === 0;
+  const duplicateFilterCounts = {
+    all: duplicates.length,
+    normal: duplicates.filter((duplicate) => !hasDuplicateDescriptionConflict(duplicate)).length,
+    conflict: duplicates.filter((duplicate) => hasDuplicateDescriptionConflict(duplicate)).length,
+  };
+  const bulkConsolidatableSameNameDuplicates = getBulkConsolidatableSameNameDuplicates(duplicates);
+  const filteredDuplicates = filterDuplicates(duplicates, duplicateFilter);
 
   return (
     <>
@@ -319,9 +339,41 @@ export function ResultWorkspace({
         <section className="panel duplicates-card">
           <div className="panel-kicker">Duplicidades</div>
           <h2 className="panel-title">Itens repetidos</h2>
+          {bulkConsolidatableSameNameDuplicates.length ? (
+            <div className="duplicate-bulk-actions">
+              <p>
+                Consolida em massa apenas grupos de <b>Nomes iguais</b> com <b>2 ocorrências</b>.
+              </p>
+              <button
+                className="action-button primary"
+                type="button"
+                disabled={isPartial || isResolvingBulkSameNameDuplicates}
+                onClick={onResolveBulkSameNameDuplicates}
+              >
+                {isResolvingBulkSameNameDuplicates
+                  ? "Consolidando..."
+                  : `Consolidar em massa (${bulkConsolidatableSameNameDuplicates.length})`}
+              </button>
+            </div>
+          ) : null}
+          <div className="duplicate-filter-list" role="tablist" aria-label="Filtrar duplicidades">
+            {(["all", "normal", "conflict"] as DuplicateDisplayFilter[]).map((filterKey) => (
+              <button
+                key={filterKey}
+                className={`duplicate-filter-chip ${duplicateFilter === filterKey ? "active" : ""}`.trim()}
+                type="button"
+                role="tab"
+                aria-selected={duplicateFilter === filterKey}
+                onClick={() => setDuplicateFilter(filterKey)}
+              >
+                <span>{DUPLICATE_FILTER_LABELS[filterKey]}</span>
+                <strong>{duplicateFilterCounts[filterKey]}</strong>
+              </button>
+            ))}
+          </div>
 
           <div className="duplicates-grid">
-            {duplicates.map((duplicate, index) => {
+            {filteredDuplicates.length ? filteredDuplicates.map((duplicate, index) => {
               const hasDescriptionConflict = hasDuplicateDescriptionConflict(duplicate);
               return (
                 <article
@@ -346,15 +398,28 @@ export function ResultWorkspace({
                     <button
                       className="action-button"
                       type="button"
-                      disabled={isPartial}
+                      disabled={isPartial || isResolvingBulkSameNameDuplicates}
                       onClick={() => onResolveDuplicate(duplicate)}
                     >
-                      {isPartial ? "Disponível após conclusão" : "Escolher linha para manter"}
+                      {isPartial
+                        ? "Disponível após conclusão"
+                        : hasDescriptionConflict
+                          ? "Resolver duplicidade"
+                          : "Consolidar ocorrências"}
                     </button>
                   </div>
                 </article>
               );
-            })}
+            }) : (
+              <article className="duplicate-card duplicate-card-empty">
+                <strong>Nenhum item neste filtro</strong>
+                <p>
+                  {duplicateFilter === "normal"
+                    ? "Não há duplicados com nomes iguais para revisar neste lote."
+                    : "Não há duplicados com nomes diferentes para revisar neste lote."}
+                </p>
+              </article>
+            )}
           </div>
         </section>
       ) : null}

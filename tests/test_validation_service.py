@@ -550,6 +550,83 @@ def test_resolve_duplicate_csv_rows_keeps_highest_row_and_merges_previous_values
     assert refreshed_payload["row_results"][0]["descricao"] == "Mesa atual"
 
 
+def test_resolve_duplicate_csv_rows_same_name_skips_media_and_datetime_columns(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(
+        (
+            "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,"
+            "Observação,foto_complementar_memento,data_inventario,hora_inventario,"
+            "updated_at,registro,usuario\n"
+            "001,,Mesa,Marca antiga,Modelo antigo,SN antigo,Sala antiga,CC antigo,"
+            "Detalhe antigo,Obs antiga,https://example.com/foto-1.jpg,2026-01-01,"
+            "08:00,2026-01-01T08:00:00,2026-02-01 10:15:00,Ana\n"
+            "001,PA-100,Mesa,Marca intermediaria,Modelo intermediario,,"
+            "Sala intermediaria,,Detalhe intermediario,,"
+            "https://example.com/foto-2.jpg,2026-01-02,09:00,"
+            "2026-01-02T09:00:00,2026-02-02 11:45:00,Bruno\n"
+            "001,,Mesa,Marca atual,,SN atual,,CC atual,,Obs atual,,,,,,Carla\n"
+        ),
+        encoding="utf-8",
+    )
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, service)
+
+    resolution = resolve_duplicate_csv_rows_and_refresh(
+        job.job_id,
+        service,
+        row_indices=[0, 1, 2],
+    )
+
+    assert resolution.kept_row_index == 2
+    assert resolution.deleted_row_indices == [0, 1]
+    assert resolution.remaining_rows == 1
+    assert resolution.merged_columns == [
+        "Placa Anterior",
+        "Modelo",
+        "Local",
+        "Complemento",
+    ]
+
+    row, _ = read_job_csv_row(job.job_id, service, row_index=0)
+    assert row["Descrição"] == "Mesa"
+    assert row["Marca"] == "Marca atual"
+    assert row["Modelo"] == "Modelo intermediario"
+    assert row["NS"] == "SN atual"
+    assert row["Placa Anterior"] == "PA-100"
+    assert row["Local"] == "Sala intermediaria"
+    assert row["CC"] == "CC atual"
+    assert row["Complemento"] == "Detalhe intermediario"
+    assert row["Observação"] == "Obs atual"
+    assert row["usuario"] == "Carla"
+    assert row["foto_complementar_memento"] == ""
+    assert row["data_inventario"] == ""
+    assert row["hora_inventario"] == ""
+    assert row["updated_at"] == ""
+    assert row["registro"] == ""
+
+    refreshed_job = service.get_job(job.job_id)
+    assert refreshed_job is not None
+    assert refreshed_job.result_path is not None
+    refreshed_payload = json.loads(
+        Path(refreshed_job.result_path).read_text(encoding="utf-8")
+    )
+    assert refreshed_payload["duplicates"] == []
+    assert refreshed_payload["summary"]["total_rows"] == 1
+
+
 def test_run_validation_job_can_be_canceled_after_batch_checkpoint(
     tmp_path,
     monkeypatch,

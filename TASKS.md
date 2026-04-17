@@ -70,3 +70,11 @@ Tests
 [ ] Test zero-item rules
 [ ] Test category critical checks
 [ ] Test job lifecycle
+
+Operational Frontend
+
+[x] Support multiple renderable photos in duplicate resolution cards
+[x] Open duplicate-row photos in an enlarged viewer with same-row navigation
+[x] Filter duplicate cards between todos, nomes iguais e nomes diferentes
+[x] Consolidate nomes iguais without mesclar foto/mídia ou data/hora
+[x] Add bulk consolidation for nomes iguais with exactly 2 occurrences

@@ -27,6 +27,8 @@ import {
   buildFinalScopeCopy,
   buildPreviewReportData,
   formatFieldName,
+  getBulkConsolidatableSameNameDuplicates,
+  hasDuplicateDescriptionConflict,
   getDuplicateSuggestedKeepRow,
   getSourceTotalRows,
   getValidatedTotalRows,
@@ -199,6 +201,7 @@ export function OperationalWorkspace() {
   const [duplicateModalState, setDuplicateModalState] = useState<DuplicateModalState | null>(null);
   const [selectedKeepRowIndex, setSelectedKeepRowIndex] = useState<number | null>(null);
   const [isSavingDuplicateResolution, setIsSavingDuplicateResolution] = useState(false);
+  const [isBulkResolvingSameNameDuplicates, setIsBulkResolvingSameNameDuplicates] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const latestEditRequestRef = useRef(0);
@@ -636,13 +639,14 @@ export function OperationalWorkspace() {
         kind: "warning",
         label: "Linha pendente",
         detail:
-          "A maior linha do grupo precisa estar carregada antes de consolidar a duplicidade.",
+          "A linha-base técnica do grupo precisa estar carregada antes de consolidar a duplicidade.",
       });
       return;
     }
 
     setIsSavingDuplicateResolution(true);
     try {
+      const hasDescriptionConflict = hasDuplicateDescriptionConflict(duplicateModalState.duplicate);
       const payload = await resolveDuplicateRows({
         jobId: currentJobId,
         rowIndices: duplicateModalState.rows.map((entry) => entry.rowIndex),
@@ -658,7 +662,9 @@ export function OperationalWorkspace() {
       setManualBanner({
         kind: "success",
         label: "Duplicidade resolvida",
-        detail: `Linha ${lineNumber(payload.kept_row_index)} mantida. As demais ocorrências foram removidas do CSV corrigido.${mergedDetail}`,
+        detail: hasDescriptionConflict
+          ? `A ocorrência-base foi atualizada e as demais ocorrências foram removidas do CSV corrigido.${mergedDetail}`
+          : `Os dados das ocorrências foram consolidados. Foto, mídia e colunas de data/hora ficaram fora da mescla.${mergedDetail}`,
       });
     } catch (caughtError) {
       const message =
@@ -670,6 +676,77 @@ export function OperationalWorkspace() {
       });
     } finally {
       setIsSavingDuplicateResolution(false);
+    }
+  }
+
+  async function handleResolveBulkSameNameDuplicates() {
+    if (!currentJobId || !reportData) {
+      setManualBanner({
+        kind: "error",
+        label: "Consolidação indisponível",
+        detail: "Nenhum resultado concluído foi encontrado para consolidar em massa.",
+      });
+      return;
+    }
+
+    const eligibleDuplicates = getBulkConsolidatableSameNameDuplicates(reportData.duplicates ?? []);
+    if (!eligibleDuplicates.length) {
+      setManualBanner({
+        kind: "warning",
+        label: "Nada para consolidar",
+        detail: "Por enquanto, o atalho em massa consolida apenas grupos de nomes iguais com exatamente 2 ocorrências.",
+      });
+      return;
+    }
+
+    const activeJobId = currentJobId;
+    let processedGroups = 0;
+    setIsBulkResolvingSameNameDuplicates(true);
+    try {
+      for (const duplicate of eligibleDuplicates) {
+        const keepRowIndex = getDuplicateSuggestedKeepRow(duplicate);
+        if (keepRowIndex === null) {
+          continue;
+        }
+
+        await resolveDuplicateRows({
+          jobId: activeJobId,
+          rowIndices: duplicate.row_indices,
+          keepRowIndex,
+        });
+        processedGroups += 1;
+      }
+
+      setDuplicateModalState(null);
+      setSelectedKeepRowIndex(null);
+      setHasPendingCorrections(false);
+      await loadCompletedJob(activeJobId);
+      setManualBanner({
+        kind: "success",
+        label: "Consolidação em massa concluída",
+        detail:
+          `${processedGroups} grupo(s) de nomes iguais com 2 ocorrências foram consolidados. ` +
+          "Os grupos foram processados em lote do fim para o início do CSV.",
+      });
+    } catch (caughtError) {
+      try {
+        await loadCompletedJob(activeJobId);
+      } catch {
+        // Best-effort refresh after partial bulk updates.
+      }
+
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Não foi possível consolidar em massa.";
+      const detail = processedGroups
+        ? `${processedGroups} grupo(s) já tinham sido consolidados antes da falha. ${message}`
+        : message;
+      setManualBanner({
+        kind: "error",
+        label: "Falha na consolidação em massa",
+        detail,
+      });
+    } finally {
+      setIsBulkResolvingSameNameDuplicates(false);
     }
   }
 
@@ -780,9 +857,11 @@ export function OperationalWorkspace() {
             hasPendingCorrections={hasPendingCorrections}
             visibleProblemOccurrencesByCode={visibleProblemOccurrencesByCode}
             isReprocessing={isReprocessing}
+            isResolvingBulkSameNameDuplicates={isBulkResolvingSameNameDuplicates}
             onShowMore={showMoreProblemOccurrences}
             onEditOccurrence={handleEditOccurrence}
             onResolveDuplicate={handleResolveDuplicate}
+            onResolveBulkSameNameDuplicates={handleResolveBulkSameNameDuplicates}
             onReprocess={handleReprocess}
           />
         </main>

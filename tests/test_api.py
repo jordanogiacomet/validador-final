@@ -702,6 +702,77 @@ def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fiel
         Path(refreshed_job.report_path).unlink(missing_ok=True)
 
 
+def test_resolve_duplicate_rows_same_name_skips_media_and_datetime_columns():
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,"
+        "Observação,foto_complementar_memento,data_inventario,hora_inventario,"
+        "updated_at,registro,usuario\n"
+        "001,,Mesa,Marca antiga,Modelo antigo,SN antigo,Sala antiga,CC antigo,"
+        "Detalhe antigo,Obs antiga,https://example.com/foto-1.jpg,2026-01-01,"
+        "08:00,2026-01-01T08:00:00,2026-02-01 10:15:00,Ana\n"
+        "001,PA-100,Mesa,Marca intermediaria,Modelo intermediario,,"
+        "Sala intermediaria,,Detalhe intermediario,,"
+        "https://example.com/foto-2.jpg,2026-01-02,09:00,"
+        "2026-01-02T09:00:00,2026-02-02 11:45:00,Bruno\n"
+        "001,,Mesa,Marca atual,,SN atual,,CC atual,,Obs atual,,,,,,Carla\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_path=csv_path,
+        file_name="duplicados.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, job_service)
+
+    response = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1, 2], "keep_row_index": 2},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["kept_row_index"] == 2
+    assert payload["deleted_row_indices"] == [0, 1]
+    assert payload["remaining_rows"] == 1
+    assert payload["merged_columns"] == [
+        "Placa Anterior",
+        "Modelo",
+        "Local",
+        "Complemento",
+    ]
+
+    updated_csv = Path(csv_path).read_text(encoding="utf-8")
+    assert "Marca atual" in updated_csv
+    assert "Modelo intermediario" in updated_csv
+    assert "PA-100" in updated_csv
+    assert "Sala intermediaria" in updated_csv
+    assert "Detalhe intermediario" in updated_csv
+    assert "https://example.com/foto-1.jpg" not in updated_csv
+    assert "2026-01-01T08:00:00" not in updated_csv
+    assert "2026-01-02T09:00:00" not in updated_csv
+    assert ",,,Carla" in updated_csv
+
+    result_response = client.get(f"/jobs/{job.job_id}/rows/0")
+    assert result_response.status_code == 200
+    row_payload = result_response.json()["row"]
+    assert row_payload["foto_complementar_memento"] == ""
+    assert row_payload["data_inventario"] == ""
+    assert row_payload["hora_inventario"] == ""
+    assert row_payload["updated_at"] == ""
+    assert row_payload["registro"] == ""
+    assert row_payload["usuario"] == "Carla"
+
+    Path(csv_path).unlink(missing_ok=True)
+    refreshed_job = job_service.get_job(job.job_id)
+    if refreshed_job and refreshed_job.result_path:
+        Path(refreshed_job.result_path).unlink(missing_ok=True)
+    if refreshed_job and refreshed_job.report_path:
+        Path(refreshed_job.report_path).unlink(missing_ok=True)
+
+
 def test_resolve_duplicate_rows_requires_completed_job_for_in_place_refresh():
     job = job_service.create_job(tenant_id="default")
     job.mark_running()

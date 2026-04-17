@@ -3,6 +3,7 @@ import json
 import math
 import re
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -54,6 +55,46 @@ class _CachedJobCsvContext:
 
 
 _JOB_CSV_CONTEXT_CACHE: dict[str, _CachedJobCsvContext] = {}
+
+MEDIA_COLUMN_NAMES = {
+    "foto",
+    "foto_complementar",
+    "foto_complementar_memento",
+    "imagem",
+    "image",
+    "photo",
+    "media",
+    "midia",
+}
+MEDIA_COLUMN_TOKENS = {
+    "foto",
+    "imagem",
+    "image",
+    "photo",
+    "media",
+    "midia",
+    "memento",
+}
+DATE_TIME_COLUMN_TOKENS = {
+    "data",
+    "date",
+    "hora",
+    "hour",
+    "time",
+    "timestamp",
+    "datetime",
+    "dt",
+    "dh",
+}
+DATE_TIME_VALUE_PATTERNS = (
+    re.compile(
+        r"^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?"
+        r"(?:Z|[+-]\d{2}:\d{2})?$"
+    ),
+    re.compile(r"^\d{2}/\d{2}/\d{4}(?: \d{2}:\d{2}(?::\d{2})?)?$"),
+    re.compile(r"^\d{2}-\d{2}-\d{4}(?: \d{2}:\d{2}(?::\d{2})?)?$"),
+    re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$"),
+)
 
 
 def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
@@ -355,16 +396,134 @@ def _is_missing_csv_value(value: object) -> bool:
         return False
 
 
+def _normalize_csv_column_name(column_name: object) -> str:
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(column_name or ""))
+    normalized = unicodedata.normalize("NFD", text.strip().lower())
+    normalized = "".join(
+        char for char in normalized if unicodedata.category(char) != "Mn"
+    )
+    return re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+
+
+def _get_normalized_csv_column_tokens(column_name: object) -> set[str]:
+    normalized_name = _normalize_csv_column_name(column_name)
+    if not normalized_name:
+        return set()
+    return {token for token in normalized_name.split("_") if token}
+
+
+def _is_media_like_column(column_name: object) -> bool:
+    normalized_name = _normalize_csv_column_name(column_name)
+    if not normalized_name:
+        return False
+    if normalized_name in MEDIA_COLUMN_NAMES:
+        return True
+
+    tokens = _get_normalized_csv_column_tokens(column_name)
+    return any(token in MEDIA_COLUMN_TOKENS for token in tokens)
+
+
+def _looks_like_date_or_time_value(value: object) -> bool:
+    if _is_missing_csv_value(value):
+        return False
+
+    text = str(value).strip()
+    if not text:
+        return False
+
+    return any(pattern.fullmatch(text) for pattern in DATE_TIME_VALUE_PATTERNS)
+
+
+def _is_date_or_time_like_column(
+    column_name: object,
+    sample_values: list[object],
+) -> bool:
+    normalized_name = _normalize_csv_column_name(column_name)
+    if not normalized_name:
+        return False
+
+    if normalized_name.endswith("_at"):
+        return True
+
+    tokens = _get_normalized_csv_column_tokens(column_name)
+    if any(token in DATE_TIME_COLUMN_TOKENS for token in tokens):
+        return True
+
+    non_empty_values = [value for value in sample_values if not _is_missing_csv_value(value)]
+    if not non_empty_values:
+        return False
+
+    inspected_values = non_empty_values[:5]
+    return len(inspected_values) >= 2 and all(
+        _looks_like_date_or_time_value(value) for value in inspected_values
+    )
+
+
+def _get_same_name_merge_skipped_columns(
+    df: pd.DataFrame,
+    row_indices: list[int],
+) -> set[str]:
+    skipped_columns: set[str] = set()
+
+    for column_name in df.columns:
+        sample_values = [df.at[row_index, column_name] for row_index in row_indices]
+        if _is_media_like_column(column_name) or _is_date_or_time_like_column(
+            column_name,
+            sample_values,
+        ):
+            skipped_columns.add(str(column_name))
+
+    return skipped_columns
+
+
+def _has_duplicate_description_conflict(
+    df: pd.DataFrame,
+    tenant_config: TenantConfig,
+    row_indices: list[int],
+) -> bool:
+    try:
+        description_column = _resolve_source_column(
+            "descricao",
+            tenant_config.columns,
+            df.columns.tolist(),
+        )
+    except ValueError:
+        return True
+
+    description_values: list[str] = []
+    seen_values: set[str] = set()
+    for row_index in row_indices:
+        description_value = df.at[row_index, description_column]
+        if _is_missing_csv_value(description_value):
+            continue
+
+        description_text = str(description_value).strip()
+        if not description_text or description_text in seen_values:
+            continue
+
+        seen_values.add(description_text)
+        description_values.append(description_text)
+        if len(description_values) > 1:
+            return True
+
+    return False
+
+
 def _merge_missing_duplicate_values(
     df: pd.DataFrame,
     *,
     keep_row_index: int,
     source_row_indices: list[int],
+    skipped_columns: set[str] | None = None,
 ) -> list[str]:
     merged_columns: list[str] = []
     source_indices = sorted(set(source_row_indices), reverse=True)
+    skipped = skipped_columns or set()
 
     for column_name in df.columns:
+        if str(column_name) in skipped:
+            continue
+
         current_value = df.at[keep_row_index, column_name]
         if not _is_missing_csv_value(current_value):
             continue
@@ -454,10 +613,20 @@ def resolve_duplicate_csv_rows_and_refresh(
     if normalized_indices[-1] >= len(df):
         raise ValueError(f"Row index out of range: {normalized_indices[-1]}")
 
+    has_description_conflict = _has_duplicate_description_conflict(
+        df,
+        tenant_config,
+        normalized_indices,
+    )
+    skipped_columns: set[str] | None = None
+    if not has_description_conflict:
+        skipped_columns = _get_same_name_merge_skipped_columns(df, normalized_indices)
+
     merged_columns = _merge_missing_duplicate_values(
         df,
         keep_row_index=keep_row_index,
         source_row_indices=deleted_row_indices,
+        skipped_columns=skipped_columns,
     )
 
     df = df.drop(index=deleted_row_indices).reset_index(drop=True)

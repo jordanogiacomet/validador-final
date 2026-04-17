@@ -236,6 +236,74 @@
       "priority": 13,
       "passes": true,
       "notes": "Implemented with optional JSON-backed JobService persistence through VALIDATOR_JOB_STORE_PATH and Kubernetes PVCs for uploads/results. Existing jobs from the previous emptyDir/in-memory deployment cannot be recovered after the old pod is gone."
+    },
+    {
+      "id": "US-014",
+      "title": "Compare duplicate rows through multi-photo gallery and lightbox",
+      "description": "As an operator, I need to browse all renderable photos for each duplicate row so I can compare occurrences quickly before keeping the surviving line.",
+      "acceptanceCriteria": [
+        "Show a stable in-card gallery when a duplicate row has multiple renderable photos",
+        "Allow quick horizontal navigation within the duplicate card, with optional previous/next controls",
+        "Open an enlarged photo view and keep navigation scoped to the same duplicate row",
+        "Preserve the existing single-photo and no-photo fallback states without breaking layout",
+        "Ignore non-renderable local mobile-app paths while preserving HTTP/HTTPS and data/base64 images",
+        "Keep the implementation frontend-only over the existing row payload API",
+        "Focused frontend checks and deployment validation pass"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Implemented in the operational frontend by expanding raw row media parsing and adding gallery/lightbox behavior to the duplicate resolution modal. No backend/API contract change was required."
+    },
+    {
+      "id": "US-015",
+      "title": "Filter duplicate results between all, same-name, and different-name groups",
+      "description": "As an operator, I need to filter duplicate cards between all occurrences, same-name duplicates, and different-name duplicates so I can prioritize review faster.",
+      "acceptanceCriteria": [
+        "Expose a duplicate filter with all, same-name, and different-name views in the operational frontend",
+        "Keep the different-name filter aligned with the same rule that drives red duplicate cards",
+        "Show counts per filter and keep the duplicate card layout stable",
+        "Provide a sensible empty state when the selected filter has no matches",
+        "Reset the filter safely when the active job changes",
+        "Keep the implementation frontend-only over the existing duplicate payload",
+        "Focused frontend checks and deployment validation pass"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Implemented in the result workspace with shared duplicate conflict helpers in the frontend presentation layer. Operator-facing labels use comparison wording (`Nomes iguais` and `Nomes diferentes`) while preserving the same underlying conflict rule. No backend/API contract change was required."
+    },
+    {
+      "id": "US-016",
+      "title": "Consolidate same-name duplicates without meshing media or timestamps",
+      "description": "As an operator, I need same-name duplicate resolution to consolidate useful data from duplicate occurrences without copying photo/media or date/time columns into the corrected CSV.",
+      "acceptanceCriteria": [
+        "Treat `Nomes iguais` duplicate resolution as data consolidation rather than an operator-facing keep-highest-row rule",
+        "Ignore photo and media columns during same-name duplicate enrichment",
+        "Ignore date, time, timestamp, and datetime-like columns during same-name duplicate enrichment",
+        "Preserve the current duplicate-resolution behavior for `Nomes diferentes` groups",
+        "Keep CSV correction, reprocessing, report generation, and download flows working",
+        "Add focused backend tests for same-name consolidation and API coverage",
+        "Run backend/frontend checks and validate the published deployment"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "Implemented in the duplicate CSV correction service by classifying groups through the current `Descrição` conflict rule, skipping media/date-time enrichment only for same-name groups, and updating the operational frontend copy to speak in terms of consolidation instead of keeping the highest row."
+    },
+    {
+      "id": "US-017",
+      "title": "Bulk consolidate same-name duplicate pairs",
+      "description": "As an operator, I need a bulk action to consolidate same-name duplicates so I can clear the straightforward duplicate pairs without opening each card individually.",
+      "acceptanceCriteria": [
+        "Expose a bulk consolidation action in the duplicate workspace for `Nomes iguais`",
+        "Only include groups with exactly 2 occurrences in the bulk shortcut for now",
+        "Process eligible groups safely without breaking row indices after each CSV consolidation",
+        "Keep the existing single-group resolution flow unchanged",
+        "Keep the implementation tenant-agnostic and over the existing duplicate-resolution API",
+        "Add focused frontend coverage for eligibility and ordering",
+        "Run checks and validate the published deployment"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "Implemented in the operational frontend by filtering eligible same-name pairs, processing them from the end of the CSV toward the beginning, and reusing the existing per-group duplicate resolution endpoint without adding new backend branching."
     }
   ],
   "nonFunctionalRequirements": {

@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildScopeSummaryCopy,
   describeIssue,
+  filterDuplicates,
   formatStatusChip,
+  getBulkConsolidatableSameNameDuplicates,
   getValidationScopeLabel,
+  hasDuplicateDescriptionConflict,
   normalizeValidationScope,
 } from "@/lib/presentation";
 
@@ -51,6 +54,73 @@ describe("presentation helpers", () => {
 
   it("describes duplicate issues with operational copy", () => {
     expect(describeIssue("DUPLICATE_ITEM").title).toBe("Identificador patrimonial repetido");
+  });
+
+  it("treats explicit duplicate description conflicts as vermelho", () => {
+    expect(
+      hasDuplicateDescriptionConflict({
+        item: "1100",
+        descricao: "Mesa",
+        has_description_conflict: true,
+        row_indices: [0, 1],
+        count: 2,
+      }),
+    ).toBe(true);
+  });
+
+  it("filters duplicate groups between normal and vermelho cards", () => {
+    const duplicates = [
+      {
+        item: "1100",
+        descricao: "Mesa",
+        row_indices: [0, 1],
+        count: 2,
+      },
+      {
+        item: "2200",
+        descricao: "Mesa / Cadeira",
+        row_indices: [4, 9],
+        count: 2,
+      },
+    ];
+
+    expect(filterDuplicates(duplicates, "all")).toHaveLength(2);
+    expect(filterDuplicates(duplicates, "normal")).toEqual([duplicates[0]]);
+    expect(filterDuplicates(duplicates, "conflict")).toEqual([duplicates[1]]);
+  });
+
+  it("returns only same-name duplicate groups with exactly two occurrences for bulk consolidation", () => {
+    const duplicates = [
+      {
+        item: "3300",
+        descricao: "Mesa",
+        row_indices: [2, 4],
+        count: 2,
+      },
+      {
+        item: "1100",
+        descricao: "Mesa",
+        row_indices: [0, 1, 3],
+        count: 3,
+      },
+      {
+        item: "2200",
+        descricao: "Mesa / Cadeira",
+        row_indices: [10, 12],
+        count: 2,
+      },
+      {
+        item: "4400",
+        descricao: "Armário",
+        row_indices: [8, 9],
+        count: 2,
+      },
+    ];
+
+    expect(getBulkConsolidatableSameNameDuplicates(duplicates)).toEqual([
+      duplicates[3],
+      duplicates[0],
+    ]);
   });
 
   it("uses the backend target field for category critical operational copy", () => {
