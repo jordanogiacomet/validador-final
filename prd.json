@@ -434,8 +434,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 25,
-      "passes": false,
-      "notes": "Depende do dicionário da US-024. Manter a regra opt-in para evitar ruído em tenants sem dicionário."
+      "passes": true,
+      "notes": "Implementado com `BrandModelConsistencyRule` opt-in, lookup `tenant.normalization.model_brands` e inferência sobre o `Modelo` já normalizado. A regra permanece silenciosa quando o modelo não está dicionarizado para evitar ruído em tenants sem cobertura."
     },
     {
       "id": "US-026",

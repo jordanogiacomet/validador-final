@@ -47,6 +47,7 @@ def _normalize_alias_value(
 class BrandModelNormalizer:
     brand_lookup: dict[str, str] = field(default_factory=dict)
     model_lookup: dict[str, str] = field(default_factory=dict)
+    model_brand_lookup: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_config(
@@ -56,9 +57,18 @@ class BrandModelNormalizer:
         if config is None:
             return cls()
 
+        model_lookup = _build_alias_lookup(config.model_aliases)
+        model_brand_lookup = _build_alias_lookup(config.model_brands)
+        for alias, canonical_model in model_lookup.items():
+            canonical_model_key = normalize_lookup_key(canonical_model)
+            canonical_brand = model_brand_lookup.get(canonical_model_key)
+            if canonical_brand is not None:
+                model_brand_lookup.setdefault(alias, canonical_brand)
+
         return cls(
             brand_lookup=_build_alias_lookup(config.brand_aliases),
-            model_lookup=_build_alias_lookup(config.model_aliases),
+            model_lookup=model_lookup,
+            model_brand_lookup=model_brand_lookup,
         )
 
     def normalize_row(
@@ -69,3 +79,18 @@ class BrandModelNormalizer:
         row["marca"] = _normalize_alias_value(row.get("marca"), self.brand_lookup)
         row["modelo"] = _normalize_alias_value(row.get("modelo"), self.model_lookup)
         return row
+
+    def infer_brand_for_model(self, model: RowValue) -> str | None:
+        if not isinstance(model, str):
+            return None
+
+        normalized_model = normalize_lookup_key(model)
+        if not normalized_model:
+            return None
+
+        canonical_model = self.model_lookup.get(normalized_model, model)
+        canonical_model_key = normalize_lookup_key(canonical_model)
+        if not canonical_model_key:
+            return None
+
+        return self.model_brand_lookup.get(canonical_model_key)

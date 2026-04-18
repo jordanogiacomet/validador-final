@@ -28,6 +28,7 @@ categories: []
 normalization:
   brand_aliases: {}
   model_aliases: {}
+  model_brands: {}
 
 llm:
   enabled: false

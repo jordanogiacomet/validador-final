@@ -87,6 +87,7 @@ critical checks
 LLM settings
 prompt selection
 normalization dictionaries for canonical text fields
+brand/model consistency dictionaries keyed by canonical model when tenant rules need to infer expected Marca from Modelo
 
 Keep a working default tenant at all times.
 

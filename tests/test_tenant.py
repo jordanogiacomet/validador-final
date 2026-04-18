@@ -27,6 +27,7 @@ class TestTenantConfig:
         assert config.categories == []
         assert config.normalization.brand_aliases == {}
         assert config.normalization.model_aliases == {}
+        assert config.normalization.model_brands == {}
         assert config.csv.delimiter == ","
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
@@ -79,6 +80,7 @@ class TestTenantConfig:
             normalization=NormalizationConfig(
                 brand_aliases={"samsúng": "Samsung"},
                 model_aliases={"thinkpad t14 g1": "ThinkPad T14 Gen 1"},
+                model_brands={"ThinkPad T14 Gen 1": "Lenovo"},
             ),
         )
         assert config.normalization.brand_aliases["samsúng"] == "Samsung"
@@ -86,6 +88,7 @@ class TestTenantConfig:
             config.normalization.model_aliases["thinkpad t14 g1"]
             == "ThinkPad T14 Gen 1"
         )
+        assert config.normalization.model_brands["ThinkPad T14 Gen 1"] == "Lenovo"
 
     def test_config_with_api_keys(self) -> None:
         config = TenantConfig(
@@ -118,6 +121,7 @@ class TestTenantLoader:
             config.normalization.model_aliases["thinkpad t14 g1"]
             == "ThinkPad T14 Gen 1"
         )
+        assert config.normalization.model_brands["ThinkPad T14 Gen 1"] == "Lenovo"
         assert config.llm.enabled is True
         assert config.thresholds["short_complement_max_words"] == 5
 

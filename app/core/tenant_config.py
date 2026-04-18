@@ -23,6 +23,7 @@ class LLMConfig(BaseModel):
 class NormalizationConfig(BaseModel):
     brand_aliases: dict[str, str] = Field(default_factory=dict)
     model_aliases: dict[str, str] = Field(default_factory=dict)
+    model_brands: dict[str, str] = Field(default_factory=dict)
 
 
 class CSVConfig(BaseModel):

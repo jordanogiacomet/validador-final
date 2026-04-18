@@ -26,6 +26,7 @@ from app.core.validation_scope import (
     ValidationScope,
     parse_validation_scope,
 )
+from app.rules.brand_model_consistency import BrandModelConsistencyRule
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
 from app.rules.llm_audit import LLMAuditRule
@@ -830,6 +831,7 @@ def ensure_rules_registered() -> None:
         return
     register_rule(DuplicateItemRule())
     register_rule(FlagConsistencyRule())
+    register_rule(BrandModelConsistencyRule())
     register_rule(ZeroItemQualityRule())
     register_rule(CategoryRequiredFieldsRule())
     register_rule(CategoryCriticalCheckRule())
