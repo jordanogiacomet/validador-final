@@ -304,6 +304,254 @@
       "priority": 17,
       "passes": true,
       "notes": "Implemented in the operational frontend by filtering eligible same-name pairs, processing them from the end of the CSV toward the beginning, and reusing the existing per-group duplicate resolution endpoint without adding new backend branching."
+    },
+    {
+      "id": "US-018",
+      "title": "Emitir logs estruturados com correlação por tenant e job",
+      "description": "Como operador, preciso de logs estruturados em JSON com tenant_id, job_id e fase do pipeline para investigar falhas em produção sem perder contexto.",
+      "acceptanceCriteria": [
+        "Criar logger JSON central em app/core/logging.py com campos padronizados (ts, level, event, tenant_id, job_id, duration_ms, error)",
+        "Middleware FastAPI injeta request_id por requisição",
+        "JobService e ValidationService emitem eventos de ciclo de vida com tenant_id e job_id",
+        "LOG_LEVEL e formato configuráveis por variável de ambiente",
+        "Testes verificam que eventos principais são emitidos com os campos esperados",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "Logger JSON central em app/core/logging.py com configure_logging/log_event e contextvar de request_id. Middleware em app/api/middleware.py injeta X-Request-ID e devolve o mesmo header na resposta. JobService emite job.created/started/completed/failed/canceled e run_validation_job emite validation.started/completed/failed/canceled com tenant_id, job_id e duration_ms. LOG_LEVEL e LOG_FORMAT (json/text) são lidos do ambiente."
+    },
+    {
+      "id": "US-019",
+      "title": "Expor métricas de execução em endpoint /metrics",
+      "description": "Como operador, preciso de métricas de jobs (contagem por status, duração, issues por severidade, uso de LLM) expostas em /metrics para alimentar o pipeline de observabilidade.",
+      "acceptanceCriteria": [
+        "Adicionar dependência prometheus_client e expor endpoint /metrics",
+        "Counters e histograms com labels tenant_id, rule e severity",
+        "Métricas específicas para falhas e latência do LLM quando habilitado",
+        "Cardinalidade controlada (sem job_id como label)",
+        "Instrumentação opt-in por variável de ambiente",
+        "Testes de smoke para o endpoint",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "Evitar labels de alta cardinalidade. Manter o endpoint público apenas em ambiente interno e permitir desativação total via config."
+    },
+    {
+      "id": "US-020",
+      "title": "Enriquecer healthcheck com verificações de storage e LLM",
+      "description": "Como operador, preciso que /health reporte o estado dos volumes de uploads e results, da persistência do job store e, quando habilitado, da reachability do provedor LLM.",
+      "acceptanceCriteria": [
+        "Endpoint /health retorna status global e lista de checks com name, ok e latency_ms",
+        "Checks cobrem uploads, results, job store e LLM quando ativo",
+        "Timeouts curtos garantem que probes não derrubem o endpoint",
+        "Falha em check individual não impede resposta 200 se o status global permitir",
+        "Probes LLM são opt-in por tenant e respeitam timeout agressivo",
+        "Testes cobrem sucesso, falha de storage e LLM desabilitado",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "Manter a probe do LLM conservadora para não estourar custo. Evolução futura: expor versão do build no payload."
+    },
+    {
+      "id": "US-021",
+      "title": "Autenticar chamadas da API com API key escopada por tenant",
+      "description": "Como integrador, preciso autenticar chamadas da API com uma API key atrelada a um tenant para que operadores de um tenant não acessem dados de outro.",
+      "acceptanceCriteria": [
+        "API keys persistidas fora do código (config do tenant ou segredo externo)",
+        "Middleware FastAPI valida header X-API-Key e deriva tenant_id da key",
+        "Conflito entre tenant da key e tenant_id do request retorna 403",
+        "Endpoints de saúde permanecem públicos",
+        "Jobs só são retornados quando o tenant_id da key bate com o do job",
+        "Testes cobrem ausência de key, key inválida, conflito de tenant e acesso válido",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Manter o parâmetro tenant_id do request como hint apenas; a verdade é a key. Documentar rotação de keys na documentação do tenant."
+    },
+    {
+      "id": "US-022",
+      "title": "Isolar fisicamente uploads, results e reports por tenant",
+      "description": "Como operador, preciso que uploads, results e reports fiquem separados fisicamente por tenant para reduzir o blast radius de erro operacional ou vazamento.",
+      "acceptanceCriteria": [
+        "Paths derivados por tenant (uploads/{tenant_id}/..., results/{tenant_id}/...)",
+        "JobRecord passa a persistir paths já escopados por tenant",
+        "Jobs legados com paths antigos continuam legíveis via fallback",
+        "Criação e leitura de artefatos testadas para múltiplos tenants",
+        "Nenhuma lógica específica de tenant fora da resolução de path",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "Manter fallback para paths legados por um ciclo e documentar a migração em progress.txt. Reforça o caminho para histórico e retenção por tenant."
+    },
+    {
+      "id": "US-023",
+      "title": "Registrar audit log de execuções por tenant",
+      "description": "Como operador, preciso de um log persistente de quem rodou qual job, quando, e qual foi o resultado agregado, para auditoria e troubleshooting.",
+      "acceptanceCriteria": [
+        "Serviço AuditService persiste eventos job_created, job_completed e duplicates_resolved",
+        "Persistência JSON-backed análoga ao job store",
+        "Endpoint GET /audit com filtros por tenant_id e limite, restrito por API key",
+        "Eventos incluem api_key_id quando presente e tenant_id sempre",
+        "Testes cobrem gravação, listagem e filtragem por tenant",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "Manter o audit log tenant-agnostic no core e expor filtros por configuração. Sem retenção automática nesta story."
+    },
+    {
+      "id": "US-024",
+      "title": "Normalizar marcas e modelos via dicionário configurável por tenant",
+      "description": "Como operador, preciso que marcas e modelos escritos de forma inconsistente sejam normalizados antes da validação usando um dicionário configurável por tenant.",
+      "acceptanceCriteria": [
+        "Criar normalizador em app/core/normalization/ com API estável",
+        "Dicionário definido na tenant config (normalization.brand_aliases, normalization.model_aliases)",
+        "Normalização aplicada no pipeline antes das regras, preservando o valor original em raw_row",
+        "Nenhum mapeamento hardcoded por tenant no core",
+        "Testes cobrem mapeamento exato case e accent-insensitive, fallback e ausência de dicionário",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "Começar com match exato case e accent-insensitive. Fuzzy matching fica para uma próxima story se necessário."
+    },
+    {
+      "id": "US-025",
+      "title": "Validar consistência entre Marca e Modelo usando dicionário do tenant",
+      "description": "Como operador, preciso de uma regra que verifique se Marca e Modelo são coerentes entre si para capturar inconsistências óbvias.",
+      "acceptanceCriteria": [
+        "Criar BrandModelConsistencyRule em app/rules/",
+        "Regra consulta o dicionário criado em US-024 para inferir a marca canônica do modelo",
+        "Emite warning apontando para o campo Marca quando há divergência",
+        "Silenciosa quando o Modelo não está dicionarizado",
+        "Registrada via registry e habilitável por tenant",
+        "Testes cobrem match, mismatch e ausência do modelo no dicionário",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "Depende do dicionário da US-024. Manter a regra opt-in para evitar ruído em tenants sem dicionário."
+    },
+    {
+      "id": "US-026",
+      "title": "Detectar padrões suspeitos em Descrição e Complemento",
+      "description": "Como operador, preciso de uma regra que identifique descrições genéricas ou placeholders óbvios para priorizar revisão.",
+      "acceptanceCriteria": [
+        "Criar SuspiciousPatternRule em app/rules/suspicious_patterns.py",
+        "Lista de padrões literais e regex configurável por tenant",
+        "Severidade warning, com campo e código da regra identificáveis",
+        "Registrada via registry e habilitável por tenant",
+        "Testes cobrem padrões literais, regex e ausência de configuração",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "Manter a regra conservadora e opt-in para evitar ruído em tenants sem padrões conhecidos."
+    },
+    {
+      "id": "US-027",
+      "title": "Versionar prompts do LLM e registrar a versão usada no resultado",
+      "description": "Como operador, preciso saber qual versão de prompt e qual modelo foram usados em cada auditoria LLM para reproduzir descobertas depois.",
+      "acceptanceCriteria": [
+        "Prompts suportam frontmatter com chave version",
+        "LLMAuditRule lê a versão do prompt e a registra na ValidationIssue",
+        "Issues LLM carregam prompt_version e model em metadados estruturados",
+        "Report inclui a versão do prompt usada no job",
+        "Prompts existentes sem version seguem funcionando com valor padrão",
+        "Testes cobrem leitura de version, ausência de version e propagação para a issue",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "Preservar retrocompatibilidade com prompts legados. Abrir espaço para campo meta em ValidationIssue sem quebrar consumidores atuais."
+    },
+    {
+      "id": "US-028",
+      "title": "Cachear respostas do LLM por hash do payload para reduzir custo",
+      "description": "Como operador, preciso que respostas do LLM sejam cacheadas quando o payload de entrada é idêntico para reduzir custo e latência em reprocessamentos.",
+      "acceptanceCriteria": [
+        "Cache local persistente (arquivo ou SQLite) chaveado por tenant_id + prompt_version + modelo + payload normalizado",
+        "TTL configurável por tenant",
+        "Parâmetro force_refresh ignora o cache quando necessário",
+        "Instrumentação de hit/miss alinhada com as métricas da US-019",
+        "Testes cobrem hit, miss, TTL expirado e force_refresh",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "Cache single-node é aceitável por ora. Evoluir para cache compartilhado se houver múltiplas réplicas."
+    },
+    {
+      "id": "US-029",
+      "title": "Aplicar fallback de modelo LLM em falhas transientes",
+      "description": "Como operador, preciso que o sistema tente um modelo secundário quando o principal falha em erros transientes antes de emitir warning de falha.",
+      "acceptanceCriteria": [
+        "LLMConfig aceita fallback_model opcional",
+        "LLMAuditRule tenta o fallback em timeouts, 5xx e rate-limit",
+        "Warning final inclui sequência de modelos tentados e motivo da falha primária",
+        "Erros não retriable não disparam fallback",
+        "Testes cobrem sucesso primário, fallback após falha retriable e falha total",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "Manter a política de retry explícita e estreita. Considerar integração com o cache da US-028 para evitar repetir payloads já respondidos."
+    },
+    {
+      "id": "US-030",
+      "title": "Buscar textualmente dentro do resultado do job",
+      "description": "Como operador, preciso de uma busca por Item, Descrição, NS e Local dentro do resultado atual sem recarregar o job.",
+      "acceptanceCriteria": [
+        "Input de busca no workspace do resultado",
+        "Filtra linhas por substring normalizada case e accent-insensitive",
+        "Combina com filtros existentes de duplicatas",
+        "Debounce para evitar recomputação por tecla",
+        "Estado de busca reseta quando o operador troca de job",
+        "Testes de frontend cobrem match, reset e combinação com filtro de duplicatas",
+        "Checks de frontend (typecheck, test, lint) passam"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "Implementação puramente frontend sobre o payload já retornado pela API. Nenhuma mudança de contrato backend."
+    },
+    {
+      "id": "US-031",
+      "title": "Filtrar resultado por severidade, regra e categoria de item",
+      "description": "Como operador, preciso combinar filtros por severidade, regra e categoria para atacar subconjuntos específicos de problemas no resultado.",
+      "acceptanceCriteria": [
+        "UI de chips de filtro combináveis em AND",
+        "Fonte de verdade em presentation.ts reutilizável entre componentes",
+        "Filtros aparecem apenas quando há dados para eles",
+        "Contadores por chip mantidos coerentes com os filtros aplicados",
+        "Filtros resetam ao trocar de job",
+        "Testes de frontend cobrem combinação, ausência de dados e reset",
+        "Checks de frontend (typecheck, test, lint) passam"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "Manter o número de dimensões limitado para evitar densidade visual excessiva. Reutilizar o padrão dos filtros de duplicata."
+    },
+    {
+      "id": "US-032",
+      "title": "Marcar linhas para revisão posterior",
+      "description": "Como operador, preciso marcar linhas suspeitas como para revisão dentro do resultado para retomar o trabalho depois sem perder contexto.",
+      "acceptanceCriteria": [
+        "Endpoint PATCH /jobs/{job_id}/rows/{row_index}/flag aceita status review ou clear",
+        "Persistência em arquivo review_flags.json dentro do diretório results do job",
+        "Frontend exibe marcador por linha e filtro Para revisão",
+        "Marcações sobrevivem a reinício da API",
+        "Testes de backend cobrem flag/unflag e persistência",
+        "Testes de frontend cobrem marcador e filtro",
+        "Ruff lint, pytest e checks de frontend passam"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": "Manter o arquivo de marcações separado dos artefatos imutáveis do job para simplificar reprocessamento."
     }
   ],
   "nonFunctionalRequirements": {

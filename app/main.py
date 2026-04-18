@@ -3,9 +3,15 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.middleware import request_id_middleware
 from app.api.routes import router
+from app.core.logging import configure_logging
+
+configure_logging()
 
 app = FastAPI(title="Multi-Tenant Inventory Validator")
+
+app.middleware("http")(request_id_middleware)
 
 
 def _get_cors_origins() -> list[str]:

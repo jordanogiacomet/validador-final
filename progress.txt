@@ -30,6 +30,8 @@ Last Updated: 2026-04-17 15:49 -02
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
+- Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
+- Cross-request correlation comes from `app/api/middleware.py` (request_id contextvar + `X-Request-ID` header echoed back on responses); do not introduce a parallel request-id mechanism.
 
 ---
 
@@ -418,4 +420,20 @@ Expected architectural direction:
   - `derive_flags()` was only exercised indirectly through `normalize_row()` — acceptance criteria that name a specific helper deserve a direct unit test even when broader coverage exists
   - Treat "flags are mutually exclusive" as a property-style assertion to catch regressions if the placa-presence semantics ever shift
   - US-011 is behavior-focused coverage, not new functionality: it locks in existing domain semantics against future tenant-specific changes
+---
+
+## 2026-04-18 - US-018
+- Added central JSON structured logger at `app/core/logging.py` with standardized fields (`ts`, `level`, `event`, `tenant_id`, `job_id`, `request_id`, `duration_ms`, `error`), a `configure_logging()` entrypoint driven by `LOG_LEVEL` and `LOG_FORMAT` env vars, and a `log_event()` helper that every layer reuses without coupling to FastAPI or the job store
+- Added request-id contextvar and `app/api/middleware.py` injecting `X-Request-ID` per request; echoes the incoming header back or generates a uuid4 when absent, and flows the id into the logger context so service/worker logs correlate with the request
+- Wired the middleware and `configure_logging()` into `app/main.py`
+- Instrumented `JobService` lifecycle (`job.created`, `job.started`, `job.completed`, `job.failed`, `job.canceled`) with tenant/job ids and duration measured from creation; `run_validation_job` now emits `validation.started`, `validation.completed`, `validation.failed`, and `validation.canceled` with duration from the background-task entry point
+- Added focused tests in `tests/test_logging.py` covering env-driven level/format, JSON and text formatters, `log_event` field propagation, request-id middleware round-trip (incoming header vs. auto-generated), and lifecycle event emission from both `JobService` and the async validation pipeline
+- Files changed: `app/core/logging.py`, `app/api/middleware.py`, `app/main.py`, `app/services/job_service.py`, `app/services/validation_service.py`, `tests/test_logging.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (281 tests)
+- **Learnings for future iterations:**
+  - The structured logger uses its own `validator` namespace with `propagate=False`, so pytest's `caplog` will not capture records by default; attach a recording handler directly to the `validator` logger (and flip `_configured=True`) to intercept events in tests
+  - FastAPI `StreamHandler(stream=sys.stdout)` is captured by pytest's `capsys` as long as the handler is constructed after the fixture has swapped `sys.stdout`, so call `configure_logging(force=True)` inside the test body
+  - Keeping the logger as a thin function (`log_event`) avoids leaking a logging framework into rules, engines, or report code — the pattern is the expected extension point for future metrics/audit stories
 ---

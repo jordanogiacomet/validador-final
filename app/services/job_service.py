@@ -1,7 +1,16 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.job import JobRecord, JobStatus
+from app.core.logging import get_logger, log_event
+
+_logger = get_logger("job_service")
+
+
+def _job_duration_ms(job: JobRecord) -> float:
+    now = datetime.now(UTC)
+    return (now - job.created_at).total_seconds() * 1000.0
 
 
 class JobService:
@@ -25,6 +34,13 @@ class JobService:
         )
         self._jobs[job.job_id] = job
         self._persist_jobs()
+        log_event(
+            _logger,
+            "job.created",
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+            file_name=job.file_name,
+        )
         return job
 
     def get_job(self, job_id: str) -> JobRecord | None:
@@ -52,6 +68,12 @@ class JobService:
         job = self._get_or_raise(job_id)
         job.mark_running()
         self._persist_jobs()
+        log_event(
+            _logger,
+            "job.started",
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+        )
         return job
 
     def complete_job(
@@ -74,12 +96,31 @@ class JobService:
             total_issues=total_issues,
         )
         self._persist_jobs()
+        log_event(
+            _logger,
+            "job.completed",
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+            duration_ms=_job_duration_ms(job),
+            total_rows=job.total_rows,
+            rows_with_issues=job.rows_with_issues,
+            total_issues=job.total_issues,
+        )
         return job
 
     def fail_job(self, job_id: str, error_message: str) -> JobRecord:
         job = self._get_or_raise(job_id)
         job.mark_failed(error_message)
         self._persist_jobs()
+        log_event(
+            _logger,
+            "job.failed",
+            level="error",
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+            duration_ms=_job_duration_ms(job),
+            error=error_message,
+        )
         return job
 
     def request_job_cancellation(self, job_id: str) -> JobRecord:
@@ -104,6 +145,15 @@ class JobService:
             raise ValueError("Only queued or running jobs can be canceled")
         job.mark_canceled(detail)
         self._persist_jobs()
+        log_event(
+            _logger,
+            "job.canceled",
+            level="warning",
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+            duration_ms=_job_duration_ms(job),
+            detail=detail,
+        )
         return job
 
     def update_progress(

@@ -17,6 +17,7 @@ from app.core.canonical_fields import (
 )
 from app.core.engine import ValidationEngine
 from app.core.job import JobRecord, JobStatus
+from app.core.logging import get_logger, log_event
 from app.core.registry import register_rule
 from app.core.tenant_config import TenantConfig
 from app.core.tenant_loader import load_tenant_config
@@ -43,6 +44,8 @@ UPLOADS_DIR = Path("uploads")
 RESULTS_DIR = Path("results")
 DEFAULT_BATCH_SIZE = 200
 TARGET_PREVIEW_BATCHES = 10
+
+_logger = get_logger("validation_service")
 
 
 @dataclass
@@ -833,6 +836,14 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
     if job is None or job.status == JobStatus.CANCELED:
         return
 
+    started_at = datetime.now(UTC)
+    log_event(
+        _logger,
+        "validation.started",
+        tenant_id=job.tenant_id,
+        job_id=job_id,
+    )
+
     try:
         _raise_if_cancellation_requested(job_id, job_service)
         job_service.start_job(job_id)
@@ -1002,12 +1013,38 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             rows_with_issues=summary["rows_with_issues"],
             total_issues=summary["total_issues"],
         )
+        log_event(
+            _logger,
+            "validation.completed",
+            tenant_id=job.tenant_id,
+            job_id=job_id,
+            duration_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000.0,
+            total_rows=summary["total_rows"],
+        )
 
     except JobCancellationRequestedError as exc:
         current_job = job_service.get_job(job_id)
         if current_job is not None and current_job.status != JobStatus.CANCELED:
             job_service.cancel_job(job_id, str(exc))
+        log_event(
+            _logger,
+            "validation.canceled",
+            level="warning",
+            tenant_id=job.tenant_id,
+            job_id=job_id,
+            duration_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000.0,
+            detail=str(exc),
+        )
     except Exception as exc:
         current_job = job_service.get_job(job_id)
         if current_job is not None and current_job.status != JobStatus.CANCELED:
             job_service.fail_job(job_id, str(exc))
+        log_event(
+            _logger,
+            "validation.failed",
+            level="error",
+            tenant_id=job.tenant_id,
+            job_id=job_id,
+            duration_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000.0,
+            error=str(exc),
+        )
