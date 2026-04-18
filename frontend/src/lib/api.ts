@@ -392,6 +392,31 @@ function resolveDownloadFileName(
   return plainMatch?.[1] || fallbackFileName;
 }
 
+function triggerBrowserDownload(blob: Blob, fileName: string): void {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  link.rel = "noreferrer";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+export function downloadGeneratedFile(
+  content: string | Blob,
+  fileName: string,
+  options: { type?: string } = {},
+): void {
+  const blob =
+    content instanceof Blob
+      ? content
+      : new Blob([content], { type: options.type ?? "application/octet-stream" });
+  triggerBrowserDownload(blob, fileName);
+}
+
 export async function downloadApiFile(
   path: string,
   fallbackFileName: string,
@@ -403,19 +428,10 @@ export async function downloadApiFile(
   }
 
   const blob = await response.blob();
-  const objectUrl = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = resolveDownloadFileName(
-    response.headers.get("content-disposition"),
-    fallbackFileName,
+  triggerBrowserDownload(
+    blob,
+    resolveDownloadFileName(response.headers.get("content-disposition"), fallbackFileName),
   );
-  link.rel = "noreferrer";
-  link.style.display = "none";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(objectUrl);
 }
 
 export function buildReportUrl(jobId: string): string {

@@ -669,8 +669,8 @@
         "Checks de frontend passam"
       ],
       "priority": 39,
-      "passes": false,
-      "notes": "Melhoria incremental do workspace operacional, reaproveitando os filtros existentes em vez de criar uma nova taxonomia de resultado."
+      "passes": true,
+      "notes": "Implementado no frontend com exportacao operacional filtrada derivada dos filtros existentes de busca, duplicidades, severidade, regra, categoria e marcacao para revisao. O CSV filtrado e gerado no cliente a partir de helpers compartilhados em `presentation.ts`, enquanto os downloads protegidos existentes continuam passando pelos helpers centralizados de `frontend/src/lib/api.ts`."
     },
     {
       "id": "US-040",

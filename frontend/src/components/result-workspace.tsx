@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 
 import {
   downloadApiFile,
+  downloadGeneratedFile,
 } from "@/lib/api";
 import {
+  buildFilteredOperationalExportCsv,
   buildResultFilterGroups,
   buildScopeSummaryCopy,
   describeIssue,
@@ -27,6 +29,7 @@ import {
   resetResultSearchState,
   resolveEditableField,
   slugify,
+  sortProblemGroups,
   toggleResultFilter,
 } from "@/lib/presentation";
 import type { DuplicateDisplayFilter, ResultFilterState } from "@/lib/presentation";
@@ -113,26 +116,6 @@ const DUPLICATE_FILTER_LABELS: Record<DuplicateDisplayFilter, string> = {
   normal: "Nomes iguais",
   conflict: "Nomes diferentes",
 };
-
-function sortProblemGroups(
-  groupedProblems: Record<string, ProblemOccurrence[]>,
-): Array<{ code: string; occurrences: ProblemOccurrence[] }> {
-  return Object.entries(groupedProblems)
-    .map(([code, occurrences]) => ({ code, occurrences }))
-    .sort((left, right) => {
-      const leftHasError = left.occurrences.some((occurrence) => occurrence.severity === "error");
-      const rightHasError = right.occurrences.some((occurrence) => occurrence.severity === "error");
-      if (leftHasError !== rightHasError) {
-        return leftHasError ? -1 : 1;
-      }
-
-      if (left.occurrences.length !== right.occurrences.length) {
-        return right.occurrences.length - left.occurrences.length;
-      }
-
-      return left.code.localeCompare(right.code);
-    });
-}
 
 function SummarySection({
   summary,
@@ -370,6 +353,9 @@ export function ResultWorkspace({
   const canReviewRows = !isPartial && Boolean(currentJobId);
   const showResultFilterEmptyState =
     (hasSearch || hasActiveFilters) && filteredDuplicates.length === 0 && groups.length === 0;
+  const hasActiveOperationalExportFilters =
+    hasSearch || hasActiveFilters || duplicateFilter !== "all";
+  const filteredOperationalExportCount = filteredDuplicates.length + searchProblemOccurrenceCount;
 
   async function handleDownload(path: string, fallbackFileName: string) {
     try {
@@ -380,6 +366,35 @@ export function ResultWorkspace({
         caughtError instanceof Error
           ? caughtError.message
           : "Não foi possível baixar o arquivo solicitado.";
+      setDownloadError(message);
+    }
+  }
+
+  function handleDownloadFilteredOperationalExport() {
+    if (!currentJobId) {
+      return;
+    }
+
+    try {
+      setDownloadError(null);
+      downloadGeneratedFile(
+        buildFilteredOperationalExportCsv({
+          duplicates,
+          groupedProblems,
+          query: debouncedSearchQuery,
+          duplicateFilter,
+          filters: resultFilters,
+          reviewFlags,
+          reviewOnly: showReviewOnly,
+        }),
+        `operacional-${hasActiveOperationalExportFilters ? "filtrado-" : ""}${currentJobId}.csv`,
+        { type: "text/csv;charset=utf-8" },
+      );
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Não foi possível gerar o CSV filtrado.";
       setDownloadError(message);
     }
   }
@@ -531,6 +546,22 @@ export function ResultWorkspace({
               </div>
 
               <div className="export-actions-grid">
+                <article className="export-card">
+                  <small>{hasActiveOperationalExportFilters ? "Filtros atuais" : "Visão atual"}</small>
+                  <strong>CSV operacional do que está na tela</strong>
+                  <p>{filteredOperationalExportCount} registro(s) visíveis.</p>
+                  <button
+                    className="action-link"
+                    type="button"
+                    disabled={filteredOperationalExportCount === 0}
+                    onClick={() => handleDownloadFilteredOperationalExport()}
+                  >
+                    {hasActiveOperationalExportFilters
+                      ? "Baixar visão filtrada em CSV"
+                      : "Baixar resumo operacional em CSV"}
+                  </button>
+                </article>
+
                 {duplicates.length ? (
                   <article className="export-card">
                     <small>Duplicidades</small>

@@ -425,6 +425,26 @@ export function getDuplicateFilterCounts(
   };
 }
 
+export function sortProblemGroups(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+): Array<{ code: string; occurrences: ProblemOccurrence[] }> {
+  return Object.entries(groupedProblems)
+    .map(([code, occurrences]) => ({ code, occurrences }))
+    .sort((left, right) => {
+      const leftHasError = left.occurrences.some((occurrence) => occurrence.severity === "error");
+      const rightHasError = right.occurrences.some((occurrence) => occurrence.severity === "error");
+      if (leftHasError !== rightHasError) {
+        return leftHasError ? -1 : 1;
+      }
+
+      if (left.occurrences.length !== right.occurrences.length) {
+        return right.occurrences.length - left.occurrences.length;
+      }
+
+      return left.code.localeCompare(right.code);
+    });
+}
+
 interface ProblemOccurrenceEntry {
   code: string;
   occurrence: ProblemOccurrence;
@@ -660,6 +680,111 @@ export function buildResultFilterGroups(
   ];
 
   return groups.filter((group) => group.options.length > 0);
+}
+
+function escapeCsvValue(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const text = String(value);
+  if (!/["\n\r,]/.test(text)) {
+    return text;
+  }
+
+  return `"${text.replace(/"/g, "\"\"")}"`;
+}
+
+function buildCsvRow(values: Array<string | number | null | undefined>): string {
+  return values.map((value) => escapeCsvValue(value)).join(",");
+}
+
+function describeDuplicateExportMessage(duplicate: DuplicateGroup): string {
+  return hasDuplicateDescriptionConflict(duplicate)
+    ? "Item repetido com nomes diferentes"
+    : "Item repetido com nomes iguais";
+}
+
+export function buildFilteredOperationalExportCsv({
+  duplicates,
+  groupedProblems,
+  query,
+  duplicateFilter,
+  filters = EMPTY_RESULT_FILTERS,
+  reviewFlags,
+  reviewOnly = false,
+}: {
+  duplicates: DuplicateGroup[];
+  groupedProblems: Record<string, ProblemOccurrence[]>;
+  query: string | null | undefined;
+  duplicateFilter: DuplicateDisplayFilter;
+  filters?: ResultFilterState;
+  reviewFlags?: ReviewFlagPayload[];
+  reviewOnly?: boolean;
+}): string {
+  const filteredDuplicates = filterDuplicatesForResultSearch(
+    duplicates,
+    duplicateFilter,
+    query,
+    reviewFlags,
+    reviewOnly,
+  );
+  const filteredGroups = sortProblemGroups(
+    filterProblemGroupsForResultView(groupedProblems, query, filters, reviewFlags, reviewOnly),
+  );
+
+  const rows = [
+    buildCsvRow([
+      "Tipo",
+      "Código",
+      "Linha",
+      "Item",
+      "Descrição",
+      "Severidade",
+      "Campo",
+      "Mensagem",
+      "Quantidade de Ocorrências",
+      "Linhas Envolvidas",
+    ]),
+  ];
+
+  for (const duplicate of filteredDuplicates) {
+    rows.push(
+      buildCsvRow([
+        "Duplicidade",
+        "DUPLICATE_ITEM",
+        "",
+        duplicate.item,
+        duplicate.descricao,
+        "",
+        "",
+        describeDuplicateExportMessage(duplicate),
+        duplicate.count,
+        duplicate.row_indices.map((rowIndex) => lineNumber(rowIndex)).join(", "),
+      ]),
+    );
+  }
+
+  for (const { code, occurrences } of filteredGroups) {
+    for (const occurrence of occurrences.slice().sort((left, right) => left.row_index - right.row_index)) {
+      rows.push(
+        buildCsvRow([
+          "Problema",
+          code,
+          lineNumber(occurrence.row_index),
+          occurrence.item,
+          occurrence.descricao,
+          occurrence.severity,
+          formatFieldName(occurrence.field),
+          occurrence.message,
+          "",
+          "",
+        ]),
+      );
+    }
+  }
+
+  return rows.join("\r\n");
 }
 
 export function getBulkConsolidatableSameNameDuplicates(

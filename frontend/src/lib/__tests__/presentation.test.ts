@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildFilteredOperationalExportCsv,
   buildResultFilterGroups,
   buildScopeSummaryCopy,
   describeIssue,
@@ -239,6 +240,76 @@ describe("presentation helpers", () => {
       normal: 0,
       conflict: 1,
     });
+  });
+
+  it("builds a filtered operational CSV from the active result view state", () => {
+    const duplicates: DuplicateGroup[] = [
+      {
+        item: "1100",
+        descricao: "Mesa",
+        row_indices: [0, 1],
+        count: 2,
+      },
+      {
+        item: "2200",
+        descricao: "Monitor / TV",
+        has_description_conflict: true,
+        row_indices: [4, 9],
+        count: 2,
+      },
+    ];
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      CATEGORY_MONITOR_INCHES_PATTERN_MISSING: [
+        {
+          row_index: 4,
+          item: "2200",
+          descricao: "Monitor LG",
+          severity: "warning",
+          message: "Espécie 'MONITOR': informar polegadas em Complemento",
+          field: "complemento",
+        },
+      ],
+      ZERO_ITEM_MODELO_MISSING: [
+        {
+          row_index: 1,
+          item: "1100",
+          descricao: "Mesa",
+          severity: "warning",
+          message: "Modelo não informado",
+          field: "modelo",
+        },
+      ],
+    };
+
+    const csv = buildFilteredOperationalExportCsv({
+      duplicates,
+      groupedProblems,
+      query: "monitor",
+      duplicateFilter: "conflict",
+      filters: {
+        severity: "warning",
+        rule: null,
+        category: "monitor",
+      },
+      reviewFlags: [
+        { row_index: 4, status: "review" },
+        { row_index: 9, status: "review" },
+      ],
+      reviewOnly: true,
+    });
+
+    expect(csv).toContain(
+      "Tipo,Código,Linha,Item,Descrição,Severidade,Campo,Mensagem,Quantidade de Ocorrências,Linhas Envolvidas",
+    );
+    expect(csv).toContain(
+      'Duplicidade,DUPLICATE_ITEM,,2200,Monitor / TV,,,Item repetido com nomes diferentes,2,"6, 11"',
+    );
+    expect(csv).toContain(
+      "Problema,CATEGORY_MONITOR_INCHES_PATTERN_MISSING,6,2200,Monitor LG,warning,Complemento,Espécie 'MONITOR': informar polegadas em Complemento,,",
+    );
+    expect(csv).not.toContain("ZERO_ITEM_MODELO_MISSING");
+    expect(csv).not.toContain("\r\nProblema,ZERO_ITEM_MODELO_MISSING");
+    expect(csv).not.toContain("1100,Mesa");
   });
 
   it("combines severity, rule, and category result filters with AND semantics", () => {

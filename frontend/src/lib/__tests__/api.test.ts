@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearApiSession,
+  downloadGeneratedFile,
   downloadApiFile,
   getApiSession,
   getApiSessionExpiresAtMs,
@@ -206,5 +207,31 @@ describe("api auth session helpers", () => {
     expect(removeSpy).toHaveBeenCalledTimes(1);
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:download");
+  });
+
+  it("downloads generated files through the shared browser helper", () => {
+    const createObjectUrl = vi.fn(() => "blob:generated");
+    const revokeObjectUrl = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    const link = originalCreateElement("a");
+    const clickSpy = vi.spyOn(link, "click").mockImplementation(() => {});
+    const removeSpy = vi.spyOn(link, "remove");
+
+    window.URL.createObjectURL = createObjectUrl;
+    window.URL.revokeObjectURL = revokeObjectUrl;
+    vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === "a") {
+        return link;
+      }
+      return originalCreateElement(tagName);
+    }) as typeof document.createElement);
+
+    downloadGeneratedFile("csv-data", "operacional.csv", { type: "text/csv" });
+
+    expect(link.download).toBe("operacional.csv");
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:generated");
   });
 });
