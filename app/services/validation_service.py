@@ -797,6 +797,8 @@ def read_job_csv_row(
 def create_reprocess_job(
     job_id: str,
     job_service: JobService,
+    *,
+    api_key_id: str | None = None,
 ) -> JobRecord:
     source_job, source_file_path, _, _ = _get_job_csv_context(job_id, job_service)
     source_file_name = source_job.file_name or source_file_path.name
@@ -804,6 +806,7 @@ def create_reprocess_job(
     new_job = job_service.create_job(
         tenant_id=source_job.tenant_id,
         file_name=source_file_name,
+        api_key_id=api_key_id,
         params=source_job.params,
     )
     destination_path = build_job_upload_path(

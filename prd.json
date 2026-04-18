@@ -401,8 +401,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 23,
-      "passes": false,
-      "notes": "Manter o audit log tenant-agnostic no core e expor filtros por configuração. Sem retenção automática nesta story."
+      "passes": true,
+      "notes": "Implementado com `AuditEvent`/`AuditService`, persistência JSON opcional via `VALIDATOR_AUDIT_STORE_PATH`, integração com job_created/job_completed/duplicates_resolved e endpoint autenticado `GET /audit` filtrado por tenant e limite."
     },
     {
       "id": "US-024",

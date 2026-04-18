@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 10:44 -03
+Last Updated: 2026-04-18 10:54 -03
 
 ---
 
@@ -36,6 +36,7 @@ Last Updated: 2026-04-18 10:44 -03
 - Keep `/health` thin by delegating probes to `app/core/health.py`; uploads/results/job_store are critical checks, while LLM reachability is an optional degradation path that is opt-in per tenant via `llm.healthcheck_enabled`.
 - LLM health probes should stay conservative: use low-cost provider reachability checks with aggressive timeout defaults instead of triggering a full audit completion.
 - Tenant-scoped API auth should derive tenant context from `X-API-Key`; any `tenant_id` request parameter is only a hint and must be rejected on mismatch.
+- Persist auth-related operational metadata with the configured `api_key_id`, never the raw API key secret.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 
@@ -498,4 +499,16 @@ Expected architectural direction:
   - Keep artifact path derivation centralized so tenant isolation changes do not leak into routes or job callers
   - When migrating on-disk layouts, preserve read fallback for one cycle so persisted legacy jobs remain operable during rollout
   - Cover upload path assertions at the API layer because the initial CSV path is assigned before the validation worker runs
+---
+
+## 2026-04-18 10:54 -03 - US-023
+- Implemented persistent audit events with `AuditEvent`/`AuditService`, including JSON-backed storage compatible with reloads and tenant-scoped listing
+- Wired audit emission into job creation/completion and duplicate resolution, preserving `api_key_id` as metadata without storing the raw API key secret
+- Exposed authenticated `GET /audit` with tenant hint validation and limit support
+- Added focused tests for audit persistence/filtering plus API coverage for listing and emitted events
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/core/audit.py`, `app/core/job.py`, `app/services/audit_service.py`, `app/services/job_service.py`, `app/services/validation_service.py`, `tests/test_api.py`, `tests/test_audit.py`, `prd.json`, `progress.txt`
+- **Learnings for future iterations:**
+  - Keep operational audit persistence parallel to `JobService`: optional JSON-backed storage is enough for single-node retention without coupling audit reads to job internals
+  - Capture `api_key_id` at job creation time if background completion events need to preserve who initiated the run after request context is gone
+  - Audit endpoints should reuse the authenticated tenant context and only accept `tenant_id` as a scoped hint, matching the rest of the API
 ---

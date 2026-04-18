@@ -5,18 +5,21 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.api.routes import job_service
+from app.api.routes import audit_service, job_service
+from app.core.audit import AuditEventType
 from app.main import app
 from app.services.validation_service import run_validation_job
 
 client = TestClient(app)
 
 DEFAULT_API_KEY = "default-local-test-key"
+DEFAULT_API_KEY_ID = "default-local"
 REDESIM_API_KEY = "redesim-local-test-key"
 
 
 def setup_function():
     job_service._jobs.clear()
+    audit_service.clear()
 
 
 def auth_headers(api_key: str = DEFAULT_API_KEY) -> dict[str, str]:
@@ -82,6 +85,48 @@ def test_list_tenants_returns_display_names():
     assert len(payload) == 1
 
 
+def test_list_audit_events_returns_tenant_scoped_entries_in_reverse_chronological_order():
+    first = audit_service.record_event(
+        AuditEventType.JOB_CREATED,
+        tenant_id="default",
+        job_id="job-1",
+        api_key_id="default",
+        details={"file_name": "a.csv"},
+    )
+    audit_service.record_event(
+        AuditEventType.JOB_COMPLETED,
+        tenant_id="redesim",
+        job_id="job-2",
+        api_key_id="redesim",
+    )
+    latest = audit_service.record_event(
+        AuditEventType.DUPLICATES_RESOLVED,
+        tenant_id="default",
+        job_id="job-3",
+        api_key_id="default",
+        details={"remaining_rows": 1},
+    )
+
+    response = client.get("/audit?tenant_id=default&limit=1", headers=auth_headers())
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["event_id"] == latest.event_id
+    assert payload[0]["event_type"] == "duplicates_resolved"
+    assert payload[0]["tenant_id"] == "default"
+    assert payload[0]["job_id"] == "job-3"
+    assert payload[0]["api_key_id"] == "default"
+    assert payload[0]["details"]["remaining_rows"] == 1
+    assert payload[0]["event_id"] != first.event_id
+
+
+def test_list_audit_events_rejects_other_tenant_hint():
+    response = client.get("/audit?tenant_id=redesim", headers=auth_headers())
+    assert response.status_code == 403
+    assert "redesim" in response.json()["detail"]
+
+
 def test_protected_routes_require_api_key():
     response = client.get("/jobs")
     assert response.status_code == 401
@@ -107,6 +152,17 @@ def test_upload_and_validate_creates_job():
     assert data["tenant_id"] == "default"
     assert data["validation_scope"] == "zero_items"
     assert data["status"] == "queued"
+
+    audit_events = [
+        event for event in audit_service.list_events() if event.job_id == data["job_id"]
+    ]
+    assert [event.event_type.value for event in audit_events] == [
+        "job_completed",
+        "job_created",
+    ]
+    assert audit_events[0].api_key_id == DEFAULT_API_KEY_ID
+    assert audit_events[1].details["file_name"] == "test.csv"
+    assert audit_events[1].details["validation_scope"] == "zero_items"
 
 
 def test_upload_default_tenant():
@@ -815,6 +871,18 @@ def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fiel
     assert result_payload["summary"]["total_rows"] == 1
     assert result_payload["duplicates"] == []
     assert [row["descricao"] for row in result_payload["row_results"]] == ["Mesa atual"]
+
+    audit_events = [
+        event for event in audit_service.list_events() if event.job_id == job.job_id
+    ]
+    assert [event.event_type.value for event in audit_events[:2]] == [
+        "duplicates_resolved",
+        "job_completed",
+    ]
+    assert audit_events[0].api_key_id == DEFAULT_API_KEY_ID
+    assert audit_events[0].details["row_indices"] == [0, 1, 2]
+    assert audit_events[0].details["kept_row_index"] == 2
+    assert audit_events[0].details["deleted_row_indices"] == [0, 1]
 
     Path(csv_path).unlink(missing_ok=True)
     refreshed_job = job_service.get_job(job.job_id)

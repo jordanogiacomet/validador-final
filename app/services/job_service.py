@@ -2,9 +2,11 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.audit import AuditEventType
 from app.core.job import JobRecord, JobStatus
 from app.core.logging import get_logger, log_event
 from app.core.metrics import record_job_duration, record_job_status_transition
+from app.services.audit_service import AuditService
 
 _logger = get_logger("job_service")
 
@@ -15,9 +17,15 @@ def _job_duration_ms(job: JobRecord) -> float:
 
 
 class JobService:
-    def __init__(self, storage_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        storage_path: Path | str | None = None,
+        *,
+        audit_service: AuditService | None = None,
+    ) -> None:
         self._jobs: dict[str, JobRecord] = {}
         self._storage_path = Path(storage_path) if storage_path is not None else None
+        self._audit_service = audit_service
         self._load_jobs()
 
     @property
@@ -29,16 +37,26 @@ class JobService:
         tenant_id: str,
         file_path: str | None = None,
         file_name: str | None = None,
+        api_key_id: str | None = None,
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> JobRecord:
         job = JobRecord(
             tenant_id=tenant_id,
             file_path=file_path,
             file_name=file_name,
+            api_key_id=api_key_id,
             params=params or {},
         )
         self._jobs[job.job_id] = job
         self._persist_jobs()
+        self._record_audit_event(
+            AuditEventType.JOB_CREATED,
+            job,
+            details={
+                "file_name": job.file_name,
+                "validation_scope": job.params.get("validation_scope"),
+            },
+        )
         record_job_status_transition(job.tenant_id, job.status.value)
         log_event(
             _logger,
@@ -103,6 +121,17 @@ class JobService:
             total_issues=total_issues,
         )
         self._persist_jobs()
+        self._record_audit_event(
+            AuditEventType.JOB_COMPLETED,
+            job,
+            details={
+                "total_rows": job.total_rows,
+                "source_total_rows": job.source_total_rows,
+                "rows_with_issues": job.rows_with_issues,
+                "total_issues": job.total_issues,
+                "validation_scope": job.params.get("validation_scope"),
+            },
+        )
         record_job_status_transition(job.tenant_id, job.status.value)
         record_job_duration(job.tenant_id, job.status.value, _job_duration_ms(job))
         log_event(
@@ -271,3 +300,24 @@ class JobService:
             encoding="utf-8",
         )
         temp_path.replace(self._storage_path)
+
+    def _record_audit_event(
+        self,
+        event_type: AuditEventType,
+        job: JobRecord,
+        *,
+        details: dict[str, object | None] | None = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        payload = {
+            key: value for key, value in (details or {}).items() if value is not None
+        }
+        self._audit_service.record_event(
+            event_type,
+            tenant_id=job.tenant_id,
+            job_id=job.job_id,
+            api_key_id=job.api_key_id,
+            details=payload,
+        )

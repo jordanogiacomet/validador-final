@@ -3,12 +3,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from app.api.auth import get_authenticated_tenant, resolve_request_tenant_id
 from app.api.frontend import build_frontend_html
+from app.core.audit import AuditEvent, AuditEventType
 from app.core.tenant_config import DEFAULT_TENANT_ID
 from app.core.tenant_loader import load_tenant_config
 from app.core.validation_scope import (
@@ -17,6 +18,7 @@ from app.core.validation_scope import (
     ValidationScope,
     parse_validation_scope,
 )
+from app.services.audit_service import AuditService
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
@@ -35,11 +37,20 @@ from app.services.validation_service import (
 router = APIRouter()
 
 
+def _build_audit_service() -> AuditService:
+    storage_path = os.getenv("VALIDATOR_AUDIT_STORE_PATH")
+    return AuditService(storage_path=Path(storage_path) if storage_path else None)
+
+
 def _build_job_service() -> JobService:
     storage_path = os.getenv("VALIDATOR_JOB_STORE_PATH")
-    return JobService(storage_path=Path(storage_path) if storage_path else None)
+    return JobService(
+        storage_path=Path(storage_path) if storage_path else None,
+        audit_service=audit_service,
+    )
 
 
+audit_service = _build_audit_service()
 job_service = _build_job_service()
 
 
@@ -131,6 +142,16 @@ class DuplicateResolutionResponse(BaseModel):
     merged_columns: list[str] = Field(default_factory=list)
 
 
+class AuditEventResponse(BaseModel):
+    event_id: str
+    event_type: str
+    tenant_id: str
+    job_id: str | None = None
+    api_key_id: str | None = None
+    created_at: datetime
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 def _get_job_validation_scope_value(job) -> ValidationScope:
     return parse_validation_scope(job.params.get(VALIDATION_SCOPE_PARAM))
 
@@ -191,6 +212,18 @@ def _build_tenant_list_item_response(tenant_id: str) -> TenantListItemResponse:
     )
 
 
+def _build_audit_event_response(event: AuditEvent) -> AuditEventResponse:
+    return AuditEventResponse(
+        event_id=event.event_id,
+        event_type=event.event_type.value,
+        tenant_id=event.tenant_id,
+        job_id=event.job_id,
+        api_key_id=event.api_key_id,
+        created_at=event.created_at,
+        details=event.details,
+    )
+
+
 def _get_authorized_job(request: Request, job_id: str):
     job = job_service.get_job(job_id)
     if job is None:
@@ -217,6 +250,17 @@ async def get_tenants(request: Request) -> list[TenantListItemResponse]:
     return [_build_tenant_list_item_response(auth.tenant_id)]
 
 
+@router.get("/audit", response_model=list[AuditEventResponse])
+async def list_audit_events(
+    request: Request,
+    tenant_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[AuditEventResponse]:
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    events = audit_service.list_events(tenant_id=resolved_tenant_id, limit=limit)
+    return [_build_audit_event_response(event) for event in events]
+
+
 @router.post("/validate", response_model=UploadResponse)
 async def upload_and_validate(
     request: Request,
@@ -225,12 +269,14 @@ async def upload_and_validate(
     validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
+    auth = get_authenticated_tenant(request)
     resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
 
     stored_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
     job = job_service.create_job(
         tenant_id=resolved_tenant_id,
         file_name=stored_file_name,
+        api_key_id=auth.api_key_id,
         params={VALIDATION_SCOPE_PARAM: validation_scope.value},
     )
     file_path = build_job_upload_path(
@@ -426,7 +472,8 @@ async def resolve_duplicate_rows(
     job_id: str,
     payload: DuplicateResolutionRequest,
 ) -> DuplicateResolutionResponse:
-    _get_authorized_job(request, job_id)
+    job = _get_authorized_job(request, job_id)
+    auth = get_authenticated_tenant(request)
     normalized_indices = sorted(set(payload.row_indices))
     if payload.keep_row_index not in normalized_indices:
         raise HTTPException(
@@ -449,6 +496,20 @@ async def resolve_duplicate_rows(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from None
 
+    audit_service.record_event(
+        AuditEventType.DUPLICATES_RESOLVED,
+        tenant_id=job.tenant_id,
+        job_id=job.job_id,
+        api_key_id=auth.api_key_id,
+        details={
+            "row_indices": normalized_indices,
+            "kept_row_index": resolution.kept_row_index,
+            "deleted_row_indices": resolution.deleted_row_indices,
+            "remaining_rows": resolution.remaining_rows,
+            "merged_columns": resolution.merged_columns,
+        },
+    )
+
     return DuplicateResolutionResponse(
         job_id=job_id,
         kept_row_index=resolution.kept_row_index,
@@ -465,8 +526,13 @@ async def reprocess_job(
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
     _get_authorized_job(request, job_id)
+    auth = get_authenticated_tenant(request)
     try:
-        new_job = create_reprocess_job(job_id, job_service)
+        new_job = create_reprocess_job(
+            job_id,
+            job_service,
+            api_key_id=auth.api_key_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except FileNotFoundError as exc:

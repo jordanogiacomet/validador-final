@@ -17,6 +17,7 @@ class JobStatus(StrEnum):
 class JobRecord(BaseModel):
     job_id: str = Field(default_factory=lambda: uuid4().hex)
     tenant_id: str
+    api_key_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
     file_path: str | None = None
     file_name: str | None = None
