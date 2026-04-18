@@ -273,3 +273,125 @@ def test_issue_api_key_rejects_operator_for_wrong_tenant() -> None:
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Operator is not allowed for this tenant"
+
+
+def test_create_operator_persists_only_hashed_password_and_supports_login_after_reload(
+    tmp_path,
+):
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+
+    operator = service.create_operator(
+        tenant_id="default",
+        username="novo.operador",
+        password="NovaSenha@2026",
+    )
+
+    payload = json.loads(operator_storage_path.read_text(encoding="utf-8"))
+    assert payload[0]["tenant_id"] == "default"
+    assert payload[0]["operator_id"] == operator.operator_id
+    assert payload[0]["username"] == "novo.operador"
+    assert payload[0]["password_hash"] != "NovaSenha@2026"
+    assert "NovaSenha@2026" not in operator_storage_path.read_text(encoding="utf-8")
+
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    issued_key = reloaded.issue_api_key(
+        tenant_id="default",
+        username="novo.operador",
+        password="NovaSenha@2026",
+    )
+
+    assert issued_key.record.tenant_id == "default"
+    assert issued_key.record.operator_id == operator.operator_id
+
+
+def test_disable_operator_blocks_login_and_revokes_active_api_keys() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    operator = service.create_operator(
+        tenant_id="default",
+        username="ativo.operador",
+        password="SenhaAtiva@2026",
+        created_by_api_key_id="default-local",
+    )
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="ativo.operador",
+        password="SenhaAtiva@2026",
+    )
+
+    disabled = service.disable_operator(
+        tenant_id="default",
+        operator_id=operator.operator_id,
+        disabled_by_api_key_id="default-local",
+    )
+
+    assert disabled.disabled is True
+    resolution = service.inspect_issued_api_key(issued_key.raw_api_key)
+    assert resolution.status is IssuedAPIKeyStatus.REVOKED
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.issue_api_key(
+            tenant_id="default",
+            username="ativo.operador",
+            password="SenhaAtiva@2026",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Operator is disabled"
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.OPERATOR_DISABLED,
+        AuditEventType.API_KEY_REVOKED,
+    ]
+    assert events[0].details["operator_id"] == operator.operator_id
+    assert events[0].details["revoked_api_key_count"] == 1
+
+
+def test_disable_operator_rejects_last_active_operator() -> None:
+    service = AuthService()
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.disable_operator(
+            tenant_id="default",
+            operator_id="default-local-operator",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Cannot disable the last active operator"
+
+
+def test_rotate_seed_operator_password_replaces_bootstrap_credentials() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+
+    rotated = service.rotate_seed_operator_password(
+        tenant_id="default",
+        new_password="NovaSeed@2026",
+        rotated_by_api_key_id="default-local",
+    )
+
+    assert rotated.operator_id == "default-local-operator"
+    assert rotated.is_seed is True
+    events = audit_service.list_events(tenant_id="default")
+    assert events[0].event_type == AuditEventType.OPERATOR_PASSWORD_ROTATED
+    assert events[0].details["operator_id"] == "default-local-operator"
+    assert events[0].details["is_seed"] is True
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.issue_api_key(
+            tenant_id="default",
+            username="default.operator",
+            password=DEFAULT_PASSWORD,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid credentials"
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="default.operator",
+        password="NovaSeed@2026",
+    )
+    assert issued_key.record.operator_id == "default-local-operator"

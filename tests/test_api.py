@@ -341,6 +341,156 @@ def test_issued_api_key_rejects_conflicting_tenant_hint():
     assert "default" in response.json()["detail"]
 
 
+def test_list_operators_returns_tenant_scoped_summaries_without_hashes():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="novo.operador",
+        password="NovaSenha@2026",
+    )
+
+    response = client.get(
+        "/operators",
+        params={"tenant_id": "default"},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    seed_operator = next(
+        item for item in payload if item["operator_id"] == "default-local-operator"
+    )
+    created_operator = next(item for item in payload if item["username"] == "novo.operador")
+    assert seed_operator["is_seed"] is True
+    assert created_operator["disabled"] is False
+    assert created_operator["is_seed"] is False
+    assert "password_hash" not in created_operator
+
+
+def test_create_operator_endpoint_creates_tenant_scoped_operator():
+    response = client.post(
+        "/operators",
+        headers=auth_headers(),
+        json={
+            "tenant_id": "default",
+            "username": "novo.operador",
+            "password": "NovaSenha@2026",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["tenant_id"] == "default"
+    assert payload["username"] == "novo.operador"
+    assert payload["disabled"] is False
+    assert payload["is_seed"] is False
+
+    login_response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "novo.operador",
+            "password": "NovaSenha@2026",
+        },
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["operator_id"] == payload["operator_id"]
+
+
+def test_disable_operator_endpoint_revokes_active_operator_session():
+    create_response = client.post(
+        "/operators",
+        headers=auth_headers(),
+        json={
+            "tenant_id": "default",
+            "username": "ativo.operador",
+            "password": "SenhaAtiva@2026",
+        },
+    )
+    operator_id = create_response.json()["operator_id"]
+    operator_headers, _login_payload = login_headers(
+        tenant_id="default",
+        username="ativo.operador",
+        password="SenhaAtiva@2026",
+    )
+
+    response = client.post(
+        f"/operators/{operator_id}/disable",
+        headers=auth_headers(),
+        json={"tenant_id": "default"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == operator_id
+    assert payload["disabled"] is True
+
+    denied = client.get("/tenants", headers=operator_headers)
+    assert denied.status_code == 401
+    assert denied.json()["detail"] == "Revoked API key"
+
+
+def test_seed_password_rotation_endpoint_replaces_bootstrap_password():
+    response = client.post(
+        "/operators/seed/rotate-password",
+        headers=auth_headers(),
+        json={
+            "tenant_id": "default",
+            "new_password": "NovaSeed@2026",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == "default-local-operator"
+    assert payload["is_seed"] is True
+
+    old_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "default.operator",
+            "password": DEFAULT_OPERATOR_PASSWORD,
+        },
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "default.operator",
+            "password": "NovaSeed@2026",
+        },
+    )
+    assert new_login.status_code == 200
+
+    audit_response = client.get(
+        "/audit",
+        params={"tenant_id": "default"},
+        headers=auth_headers(),
+    )
+    assert audit_response.status_code == 200
+    assert any(
+        event["event_type"] == "operator_password_rotated"
+        for event in audit_response.json()
+    )
+
+
+def test_operator_management_rejects_other_tenant_scope():
+    response = client.post(
+        "/operators",
+        headers=auth_headers(),
+        json={
+            "tenant_id": "redesim",
+            "username": "bloqueado.operador",
+            "password": "SenhaBloqueada@2026",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "redesim" in response.json()["detail"]
+
+
 def test_jobs_are_scoped_to_issued_api_key_tenant():
     default_job = job_service.create_job(tenant_id="default", file_name="default.csv")
     job_service.create_job(tenant_id="redesim", file_name="redesim.csv")

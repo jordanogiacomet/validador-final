@@ -20,7 +20,13 @@ _PUBLIC_PREFIXES = ("/docs", "/redoc")
 
 def _build_auth_service() -> AuthService:
     storage_path = os.getenv("VALIDATOR_API_KEY_STORE_PATH")
-    return AuthService(storage_path=Path(storage_path) if storage_path else None)
+    operator_storage_path = os.getenv("VALIDATOR_OPERATOR_STORE_PATH")
+    return AuthService(
+        storage_path=Path(storage_path) if storage_path else None,
+        operator_storage_path=Path(operator_storage_path)
+        if operator_storage_path
+        else None,
+    )
 
 
 auth_service = _build_auth_service()

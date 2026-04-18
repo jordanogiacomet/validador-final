@@ -26,7 +26,7 @@ from app.core.validation_scope import (
     parse_validation_scope,
 )
 from app.services.audit_service import AuditService
-from app.services.auth_service import AuthServiceError
+from app.services.auth_service import AuthServiceError, EffectiveOperator
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
@@ -80,10 +80,8 @@ class TenantListItemResponse(BaseModel):
     is_default: bool = False
 
 
-class LoginRequest(BaseModel):
+class TenantScopedRequest(BaseModel):
     tenant_id: str = Field(min_length=1)
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=1)
 
     @field_validator("tenant_id")
     @classmethod
@@ -92,6 +90,11 @@ class LoginRequest(BaseModel):
         if not LOGIN_TENANT_ID_PATTERN.fullmatch(normalized_value):
             raise ValueError("tenant_id contains invalid characters")
         return normalized_value
+
+
+class LoginRequest(TenantScopedRequest):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
 
     @field_validator("username")
     @classmethod
@@ -109,6 +112,35 @@ class LoginResponse(BaseModel):
     x_api_key: str
     expires_at: datetime
     header_name: str = API_KEY_HEADER
+
+
+class OperatorResponse(BaseModel):
+    tenant_id: str
+    operator_id: str
+    username: str
+    disabled: bool
+    is_seed: bool
+
+
+class OperatorCreateRequest(TenantScopedRequest):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not LOGIN_USERNAME_PATTERN.fullmatch(normalized_value):
+            raise ValueError("username contains invalid characters")
+        return normalized_value
+
+
+class OperatorDisableRequest(TenantScopedRequest):
+    pass
+
+
+class SeedOperatorPasswordRotationRequest(TenantScopedRequest):
+    new_password: str = Field(min_length=1)
 
 
 class JobStatusResponse(BaseModel):
@@ -308,6 +340,16 @@ def _build_audit_event_response(event: AuditEvent) -> AuditEventResponse:
     )
 
 
+def _build_operator_response(operator: EffectiveOperator) -> OperatorResponse:
+    return OperatorResponse(
+        tenant_id=operator.tenant_id,
+        operator_id=operator.operator_id,
+        username=operator.username,
+        disabled=operator.disabled,
+        is_seed=operator.is_seed,
+    )
+
+
 def _get_authorized_job(request: Request, job_id: str):
     job = job_service.get_job(job_id)
     if job is None:
@@ -396,6 +438,78 @@ async def revoke_api_key(
 async def get_tenants(request: Request) -> list[TenantListItemResponse]:
     auth = get_authenticated_tenant(request)
     return [_build_tenant_list_item_response(auth.tenant_id)]
+
+
+@router.get("/operators", response_model=list[OperatorResponse])
+async def list_operators(
+    request: Request,
+    tenant_id: str = Query(min_length=1),
+) -> list[OperatorResponse]:
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    try:
+        operators = auth_service.list_operators(tenant_id=resolved_tenant_id)
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return [_build_operator_response(operator) for operator in operators]
+
+
+@router.post("/operators", response_model=OperatorResponse, status_code=201)
+async def create_operator(
+    request: Request,
+    payload: OperatorCreateRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    try:
+        operator = auth_service.create_operator(
+            tenant_id=resolved_tenant_id,
+            username=payload.username,
+            password=payload.password,
+            created_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post("/operators/{operator_id}/disable", response_model=OperatorResponse)
+async def disable_operator(
+    request: Request,
+    operator_id: str,
+    payload: OperatorDisableRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    try:
+        operator = auth_service.disable_operator(
+            tenant_id=resolved_tenant_id,
+            operator_id=operator_id,
+            disabled_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post(
+    "/operators/seed/rotate-password",
+    response_model=OperatorResponse,
+)
+async def rotate_seed_operator_password(
+    request: Request,
+    payload: SeedOperatorPasswordRotationRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    try:
+        operator = auth_service.rotate_seed_operator_password(
+            tenant_id=resolved_tenant_id,
+            new_password=payload.new_password,
+            rotated_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
 
 
 @router.get("/audit", response_model=list[AuditEventResponse])

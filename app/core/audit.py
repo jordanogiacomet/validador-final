@@ -15,6 +15,9 @@ class AuditEventType(StrEnum):
     API_KEY_EXPIRED = "api_key_expired"
     API_KEY_REVOKED = "api_key_revoked"
     API_KEY_RENEWED = "api_key_renewed"
+    OPERATOR_CREATED = "operator_created"
+    OPERATOR_DISABLED = "operator_disabled"
+    OPERATOR_PASSWORD_ROTATED = "operator_password_rotated"
 
 
 class AuditEvent(BaseModel):

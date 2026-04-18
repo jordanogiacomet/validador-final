@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 15:20 -03
+Last Updated: 2026-04-18 15:36 -03
 
 ---
 
@@ -58,6 +58,8 @@ Last Updated: 2026-04-18 15:20 -03
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
+- Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
+- Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
 
 ---
 
@@ -835,4 +837,20 @@ Expected architectural direction:
   - Keep new tenant-scoped operational panels frontend-only over existing authenticated endpoints when the backend contract already exists; add the API consumption in `frontend/src/lib/api.ts` instead of ad hoc `fetch` calls inside components.
   - Put panel-specific filter and reset rules in `frontend/src/lib/presentation.ts` so tenant/job context changes stay consistent across operational views.
   - Audit event summaries should map known event types explicitly but degrade gracefully to generic detail rendering for future event payloads.
+---
+
+## 2026-04-18 15:36 -03 - US-041
+- Added tenant-scoped operator management to `AuthService`, keeping seed operators from tenant config as bootstrap data while overlaying created/disabled/rotated operators through optional auth-layer storage.
+- Added thin API routes for `GET /operators`, `POST /operators`, `POST /operators/{operator_id}/disable`, and `POST /operators/seed/rotate-password`, all resolved through the existing authenticated tenant context.
+- Added focused auth/API coverage for operator creation, password-hash persistence, disabling with issued-key revocation, seed-password rotation, and tenant-scope enforcement.
+- Files changed: `app/core/audit.py`, `app/services/auth_service.py`, `app/api/auth.py`, `app/api/routes.py`, `tests/test_auth_service.py`, `tests/test_api.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app/services/auth_service.py app/api/auth.py app/api/routes.py tests/test_auth_service.py tests/test_api.py`
+  - `pytest tests/test_auth_service.py tests/test_api.py -q`
+  - `ruff check app tests`
+  - `pytest -q`
+- **Learnings for future iterations:**
+  - Keep operator-management business rules in `AuthService`; routes should only resolve tenant scope and shape request/response models.
+  - Treat tenant-configured operators as immutable bootstrap credentials and persist runtime operator changes in a dedicated auth store overlay so production does not depend on editing tenant YAML.
+  - When disabling an operator, revoke that operator's active issued API keys in the same service flow to make the access change effective immediately and keep audit events coherent.
 ---

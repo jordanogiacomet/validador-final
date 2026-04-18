@@ -703,8 +703,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 41,
-      "passes": false,
-      "notes": "Evolução natural da autenticação multi-tenant atual. Deve evitar hardcode adicional de operadores em produção e substituir a dependência operacional da senha bootstrap."
+      "passes": true,
+      "notes": "Implementado com gestão de operadores tenant-scoped em `AuthService`, mantendo os operadores seed no tenant config e sobrepondo alterações/cadastros via storage opcional da camada de auth. A API expõe listagem, criação, desabilitação e rotação da senha seed sem expor hashes; desabilitar um operador também revoga suas issued API keys ativas."
     },
     {
       "id": "US-042",
