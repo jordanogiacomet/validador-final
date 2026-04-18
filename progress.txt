@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 10:54 -03
+Last Updated: 2026-04-18 11:26 -03
 
 ---
 
@@ -26,6 +26,7 @@ Last Updated: 2026-04-18 10:54 -03
 - Cross-row rules (e.g., duplicate detection) should cache computed data in `shared_context` to avoid re-computing per row.
 - Use Protocol-based abstractions for external service clients (e.g., LLM) to enable testability without mocking internals.
 - Tenant-specific prompt files live under `app/tenants/{tenant_id}/prompts/`; reference via `prompt_file` in tenant YAML.
+- Parse optional YAML frontmatter for tenant prompt files at load time and default legacy prompts to a stable version token so LLM audit/report metadata stays reproducible without breaking older prompts.
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
@@ -555,4 +556,19 @@ Expected architectural direction:
 - **Learnings for future iterations:**
   - Regex-backed tenant config should be validated when the tenant is loaded, not lazily during rule execution
   - Suspicious text detection should stay opt-in and operate over normalized canonical fields rather than raw upload parsing
+---
+
+## 2026-04-18 11:26 -03 - US-027
+- Implemented versioned LLM prompt loading with optional YAML frontmatter, defaulting legacy prompts to `legacy`
+- Added structured `meta` support to `ValidationIssue` and propagated `prompt_version` plus `model` through LLM findings/failures and final report artifacts
+- Included LLM prompt/model metadata in the structured job result and PDF identity panel, even when the audit returns no findings, by recording job-level LLM metadata in shared validation context
+- Updated the example tenant prompt with an explicit version and added focused tests for frontmatter parsing, metadata propagation, and final result/PDF reporting
+- Files changed: `AGENTS.md`, `app/core/issue.py`, `app/rules/llm_audit.py`, `app/services/report_service.py`, `app/services/validation_service.py`, `app/tenants/empresa_exemplo/prompts/audit.txt`, `tests/test_llm_audit.py`, `tests/test_report_service.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (325 tests)
+- **Learnings for future iterations:**
+  - Parse prompt version metadata where prompt files are loaded, not inside report generation, so legacy/default handling stays centralized and future cache keys can reuse the same contract
+  - Carry LLM audit provenance through `ValidationIssue.meta` for row-level consumers, but also mirror job-level LLM metadata in `shared_context` so final reports still know the prompt version when the LLM returns no findings
+  - Report metadata should be derived in the service/report layer from structured issue/shared-context data rather than hardcoded route-level fields
 ---

@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -6,3 +8,4 @@ class ValidationIssue(BaseModel):
     severity: str
     message: str
     field: str | None = None
+    meta: dict[str, Any] | None = None

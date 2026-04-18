@@ -161,7 +161,54 @@ def _normalize_metadata(metadata: ReportMetadata | None) -> ReportMetadata:
         "file_name": metadata.get("file_name") or "Arquivo não informado",
         "job_id": metadata.get("job_id") or "-",
         "generated_at": _format_timestamp(metadata.get("generated_at")),
+        "llm_prompt_version": metadata.get("llm_prompt_version") or "-",
+        "llm_model": metadata.get("llm_model") or "-",
     }
+
+
+def _merge_unique(values: list[str], candidates: list[object]) -> None:
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        value = str(candidate).strip()
+        if not value or value in values:
+            continue
+        values.append(value)
+
+
+def _resolve_llm_audit_report_metadata(
+    validation_results: ValidationResults,
+    row_indices: list[int],
+    llm_audit_metadata: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]] | None:
+    prompt_versions: list[str] = []
+    models: list[str] = []
+
+    if llm_audit_metadata is not None:
+        _merge_unique(prompt_versions, llm_audit_metadata.get("prompt_versions", []))
+        _merge_unique(models, llm_audit_metadata.get("models", []))
+
+    for row_index in row_indices:
+        for issue in validation_results.get(row_index, []):
+            if not issue.code.startswith("LLM_AUDIT"):
+                continue
+            meta = issue.meta or {}
+            _merge_unique(prompt_versions, [meta.get("prompt_version")])
+            _merge_unique(models, [meta.get("model")])
+
+    if not prompt_versions and not models:
+        return None
+
+    return {
+        "prompt_versions": prompt_versions,
+        "models": models,
+    }
+
+
+def _format_llm_audit_metadata_value(values: list[str]) -> str:
+    if not values:
+        return "-"
+    return ", ".join(values)
 
 
 def _build_scope_note(
@@ -738,6 +785,8 @@ def _build_identity_panel(
         ("Arquivo de origem", metadata["file_name"]),
         ("Job", metadata["job_id"]),
         ("Gerado em", metadata["generated_at"]),
+        ("Prompt LLM", metadata["llm_prompt_version"]),
+        ("Modelo LLM", metadata["llm_model"]),
     ):
         card = Table(
             [[[
@@ -756,7 +805,8 @@ def _build_identity_panel(
         ]))
         cells.append(card)
 
-    panel = Table([cells[:2], cells[2:]], colWidths=[249, 249], hAlign="LEFT")
+    panel_rows = [cells[index : index + 2] for index in range(0, len(cells), 2)]
+    panel = Table(panel_rows, colWidths=[249, 249], hAlign="LEFT")
     panel.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -1349,6 +1399,7 @@ def build_full_report(
     validation_results: ValidationResults,
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
+    llm_audit_metadata: dict[str, list[str]] | None = None,
 ) -> dict:
     validated_indices = _resolve_validated_row_indices(
         normalized_rows, validated_row_indices
@@ -1357,7 +1408,7 @@ def build_full_report(
         len(normalized_rows) if source_total_rows is None else source_total_rows
     )
 
-    return {
+    report = {
         "summary": _build_summary_payload(
             validation_results,
             validated_indices,
@@ -1380,6 +1431,14 @@ def build_full_report(
             row_indices=validated_indices,
         ),
     }
+    resolved_llm_audit_metadata = _resolve_llm_audit_report_metadata(
+        validation_results,
+        validated_indices,
+        llm_audit_metadata=llm_audit_metadata,
+    )
+    if resolved_llm_audit_metadata is not None:
+        report["llm_audit"] = resolved_llm_audit_metadata
+    return report
 
 
 def build_duplicates_export_csv(duplicates: list[dict]) -> str:
@@ -1475,6 +1534,7 @@ def generate_pdf_report(
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
     validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+    llm_audit_metadata: dict[str, list[str]] | None = None,
 ) -> Path:
     output_path = Path(output_path)
     report_data = build_full_report(
@@ -1482,10 +1542,21 @@ def generate_pdf_report(
         validation_results,
         validated_row_indices=validated_row_indices,
         source_total_rows=source_total_rows,
+        llm_audit_metadata=llm_audit_metadata,
     )
     summary = report_data["summary"]
     duplicates = report_data["duplicates"]
     grouped_problems = report_data["grouped_problems"]
+    metadata = dict(metadata or {})
+    report_llm_audit = report_data.get("llm_audit") or {}
+    metadata.setdefault(
+        "llm_prompt_version",
+        _format_llm_audit_metadata_value(report_llm_audit.get("prompt_versions", [])),
+    )
+    metadata.setdefault(
+        "llm_model",
+        _format_llm_audit_metadata_value(report_llm_audit.get("models", [])),
+    )
     metadata = _normalize_metadata(metadata)
 
     doc = SimpleDocTemplate(

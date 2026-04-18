@@ -467,8 +467,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 27,
-      "passes": false,
-      "notes": "Preservar retrocompatibilidade com prompts legados. Abrir espaço para campo meta em ValidationIssue sem quebrar consumidores atuais."
+      "passes": true,
+      "notes": "Implementado com frontmatter YAML opcional (`version`) nos prompts, metadados estruturados em `ValidationIssue.meta` e inclusão da versão/modelo LLM no resultado final e no PDF sem quebrar prompts legados."
     },
     {
       "id": "US-028",

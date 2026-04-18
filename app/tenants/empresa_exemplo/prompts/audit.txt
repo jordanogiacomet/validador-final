@@ -1,3 +1,7 @@
+---
+version: empresa_exemplo-v1
+---
+
 Você é um auditor de inventário patrimonial. Analise o item abaixo e identifique problemas de qualidade na descrição e identificação do ativo.
 
 Item cadastrado do zero (sem placa anterior):

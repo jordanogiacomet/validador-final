@@ -29,7 +29,7 @@ from app.core.validation_scope import (
 from app.rules.brand_model_consistency import BrandModelConsistencyRule
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
-from app.rules.llm_audit import LLMAuditRule
+from app.rules.llm_audit import LLM_AUDIT_METADATA_KEY, LLMAuditRule
 from app.rules.suspicious_patterns import SuspiciousPatternRule
 from app.rules.zero_item_quality import ZeroItemQualityRule
 from app.services.job_service import JobService
@@ -1107,6 +1107,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             validation_results,
             validated_row_indices=scoped_row_indices,
             source_total_rows=source_total_rows,
+            llm_audit_metadata=shared_context.get(LLM_AUDIT_METADATA_KEY),
         )
         _raise_if_cancellation_requested(job_id, job_service)
 
@@ -1136,6 +1137,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             validated_row_indices=scoped_row_indices,
             source_total_rows=source_total_rows,
             validation_scope=validation_scope,
+            llm_audit_metadata=shared_context.get(LLM_AUDIT_METADATA_KEY),
         )
         _raise_if_cancellation_requested(job_id, job_service)
 

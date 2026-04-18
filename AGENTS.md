@@ -150,6 +150,7 @@ Reports should be practical for operational correction workflows
 Report formatting should be separated from validation logic
 Prefer structured issue data over report-specific logic inside rules
 Avoid coupling report generation tightly to rule internals
+LLM prompts may carry YAML frontmatter with `version`; keep legacy prompt files working with a default version and propagate `prompt_version` plus `model` through structured issue/report metadata instead of ad-hoc report-only fields
 Improvement Workflow
 
 When the user asks for an improvement:

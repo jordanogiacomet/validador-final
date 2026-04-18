@@ -6,6 +6,7 @@ import pytest
 
 import app.services.validation_service as validation_service
 from app.core.job import JobStatus
+from app.rules.llm_audit import set_default_client
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
@@ -47,6 +48,11 @@ REDESIM_V2_DUPLICATE_CONTENT = (
     "1;144;uuid-2;;001;MESA;;;;;;8327;A27;MATRIZ;;;;Letícia;;\n"
 )
 
+EMPRESA_EXEMPLO_LLM_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "900,,Mesa,Acme,Model X,SN900,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+)
+
 
 class RecordingJobService(JobService):
     def __init__(self) -> None:
@@ -64,6 +70,23 @@ class CancelAfterProgressJobService(RecordingJobService):
         if kwargs.get("processed_rows", 0) > 0 and not updated.cancel_requested:
             self.request_job_cancellation(job_id)
         return updated
+
+
+class FakeLLMClient:
+    def __init__(self, response: str = "[]") -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
+        self.calls.append(
+            {
+                "model": model,
+                "prompt": prompt,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+        )
+        return self.response
 
 
 def setup_function():
@@ -211,6 +234,49 @@ def test_run_validation_job_can_include_only_duplicate_items_when_scope_requests
     assert [row["row_index"] for row in payload["row_results"]] == [0, 2]
     assert payload["duplicates"][0]["row_indices"] == [0, 2]
     assert "DUPLICATE_ITEM" in payload["grouped_problems"]
+
+
+def test_run_validation_job_records_llm_prompt_version_in_result_and_pdf(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "empresa_exemplo.csv"
+    csv_path.write_text(EMPRESA_EXEMPLO_LLM_CONTENT, encoding="utf-8")
+
+    client = FakeLLMClient(response="[]")
+    set_default_client(client)
+    try:
+        service = RecordingJobService()
+        job = service.create_job(
+            tenant_id="empresa_exemplo",
+            file_path=str(csv_path),
+            file_name="empresa_exemplo.csv",
+        )
+
+        run_validation_job(job.job_id, service)
+
+        updated_job = service.get_job(job.job_id)
+        assert updated_job is not None
+        assert updated_job.status == JobStatus.COMPLETED
+        assert updated_job.result_path is not None
+        assert updated_job.report_path is not None
+        assert len(client.calls) == 1
+
+        payload = json.loads(Path(updated_job.result_path).read_text(encoding="utf-8"))
+        assert payload["llm_audit"] == {
+            "prompt_versions": ["empresa_exemplo-v1"],
+            "models": ["claude-sonnet-4-20250514"],
+        }
+        assert payload["row_results"][0]["issues"] == []
+
+        report_content = Path(updated_job.report_path).read_bytes()
+        assert b"empresa_exemplo-v1" in report_content
+        assert b"claude-sonnet-4-20250514" in report_content
+    finally:
+        set_default_client(None)
 
 
 def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplicates(

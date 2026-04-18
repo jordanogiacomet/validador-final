@@ -5,8 +5,11 @@ import logging
 import re
 import socket
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+import yaml
 
 from app.core.context import ValidationContext
 from app.core.issue import ValidationIssue
@@ -21,6 +24,19 @@ TENANTS_DIR = Path(__file__).resolve().parent.parent / "tenants"
 VALID_SEVERITIES = {"warning", "error"}
 DEFAULT_LLM_PROVIDER_HOST = "api.anthropic.com"
 DEFAULT_LLM_PROVIDER_PORT = 443
+DEFAULT_PROMPT_VERSION = "legacy"
+UNKNOWN_PROMPT_VERSION = "unknown"
+LLM_AUDIT_METADATA_KEY = "llm_audit_metadata"
+_PROMPT_FRONTMATTER_RE = re.compile(
+    r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z",
+    re.DOTALL,
+)
+
+
+@dataclass(frozen=True)
+class LoadedPromptTemplate:
+    version: str
+    template: str
 
 
 class LLMClient(Protocol):
@@ -70,11 +86,31 @@ def probe_llm_provider(model: str, timeout_ms: int = 500) -> str:
         return f"{host}:{port}"
 
 
-def load_prompt_template(tenant_id: str, prompt_file: str) -> str:
+def parse_prompt_template(content: str) -> LoadedPromptTemplate:
+    match = _PROMPT_FRONTMATTER_RE.match(content)
+    if not match:
+        return LoadedPromptTemplate(
+            version=DEFAULT_PROMPT_VERSION,
+            template=content,
+        )
+
+    raw_frontmatter, template = match.groups()
+    parsed_frontmatter = yaml.safe_load(raw_frontmatter) or {}
+    if not isinstance(parsed_frontmatter, dict):
+        parsed_frontmatter = {}
+
+    version = parsed_frontmatter.get("version") or DEFAULT_PROMPT_VERSION
+    return LoadedPromptTemplate(
+        version=str(version),
+        template=template.lstrip("\r\n"),
+    )
+
+
+def load_prompt_template(tenant_id: str, prompt_file: str) -> LoadedPromptTemplate:
     prompt_path = TENANTS_DIR / tenant_id / prompt_file
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
+    return parse_prompt_template(prompt_path.read_text(encoding="utf-8"))
 
 
 def format_prompt(template: str, row: dict[str, Any]) -> str:
@@ -86,6 +122,36 @@ def format_prompt(template: str, row: dict[str, Any]) -> str:
         complemento=row.get("complemento") or "",
         observacao=row.get("observacao") or "",
     )
+
+
+def build_llm_issue_meta(
+    *,
+    model: str,
+    prompt_version: str,
+) -> dict[str, str]:
+    return {
+        "model": model,
+        "prompt_version": prompt_version,
+    }
+
+
+def record_llm_audit_metadata(
+    shared_context: dict,
+    *,
+    model: str,
+    prompt_version: str,
+) -> None:
+    metadata = shared_context.setdefault(
+        LLM_AUDIT_METADATA_KEY,
+        {"models": [], "prompt_versions": []},
+    )
+    models = metadata.setdefault("models", [])
+    prompt_versions = metadata.setdefault("prompt_versions", [])
+
+    if model and model not in models:
+        models.append(model)
+    if prompt_version and prompt_version not in prompt_versions:
+        prompt_versions.append(prompt_version)
 
 
 def parse_llm_response(response_text: str) -> list[dict[str, str]]:
@@ -111,8 +177,17 @@ def parse_llm_response(response_text: str) -> list[dict[str, str]]:
     return valid
 
 
-def normalize_findings(findings: list[dict[str, str]]) -> list[ValidationIssue]:
+def normalize_findings(
+    findings: list[dict[str, str]],
+    *,
+    model: str,
+    prompt_version: str,
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    issue_meta = build_llm_issue_meta(
+        model=model,
+        prompt_version=prompt_version,
+    )
     for i, f in enumerate(findings):
         issues.append(
             ValidationIssue(
@@ -120,6 +195,7 @@ def normalize_findings(findings: list[dict[str, str]]) -> list[ValidationIssue]:
                 severity=f.get("severity", "warning"),
                 message=f"Auditoria LLM: {f['issue']}",
                 field=f.get("field"),
+                meta=issue_meta,
             )
         )
     return issues
@@ -145,7 +221,10 @@ class LLMAuditRule(BaseRule):
         llm_config: LLMConfig = context.tenant.llm
 
         try:
-            template = load_prompt_template(context.tenant.tenant_id, llm_config.prompt_file)
+            loaded_prompt = load_prompt_template(
+                context.tenant.tenant_id,
+                llm_config.prompt_file,
+            )
         except FileNotFoundError:
             return [
                 ValidationIssue(
@@ -153,10 +232,19 @@ class LLMAuditRule(BaseRule):
                     severity="warning",
                     message=f"Arquivo de prompt não encontrado: {llm_config.prompt_file}",
                     field=None,
+                    meta=build_llm_issue_meta(
+                        model=llm_config.model,
+                        prompt_version=UNKNOWN_PROMPT_VERSION,
+                    ),
                 )
             ]
 
-        prompt = format_prompt(template, context.normalized_row)
+        record_llm_audit_metadata(
+            context.shared_context,
+            model=llm_config.model,
+            prompt_version=loaded_prompt.version,
+        )
+        prompt = format_prompt(loaded_prompt.template, context.normalized_row)
 
         try:
             started_at = time.perf_counter()
@@ -180,6 +268,10 @@ class LLMAuditRule(BaseRule):
                     severity="warning",
                     message=f"Auditoria LLM falhou: {type(exc).__name__}",
                     field=None,
+                    meta=build_llm_issue_meta(
+                        model=llm_config.model,
+                        prompt_version=loaded_prompt.version,
+                    ),
                 )
             ]
 
@@ -190,4 +282,8 @@ class LLMAuditRule(BaseRule):
             outcome="success",
         )
         findings = parse_llm_response(response_text)
-        return normalize_findings(findings)
+        return normalize_findings(
+            findings,
+            model=llm_config.model,
+            prompt_version=loaded_prompt.version,
+        )

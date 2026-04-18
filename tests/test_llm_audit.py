@@ -4,10 +4,13 @@ from app.core.context import ValidationContext
 from app.core.registry import RULE_REGISTRY, register_rule
 from app.core.tenant_config import LLMConfig, TenantConfig
 from app.rules.llm_audit import (
+    DEFAULT_PROMPT_VERSION,
+    LLM_AUDIT_METADATA_KEY,
     LLMAuditRule,
     format_prompt,
     normalize_findings,
     parse_llm_response,
+    parse_prompt_template,
 )
 
 
@@ -143,6 +146,20 @@ def test_parse_missing_field_key():
     assert findings[0]["field"] is None
 
 
+def test_parse_prompt_template_reads_frontmatter_version():
+    loaded = parse_prompt_template("---\nversion: v2\n---\nDesc: {descricao}")
+
+    assert loaded.version == "v2"
+    assert loaded.template == "Desc: {descricao}"
+
+
+def test_parse_prompt_template_defaults_legacy_without_frontmatter():
+    loaded = parse_prompt_template("Desc: {descricao}")
+
+    assert loaded.version == DEFAULT_PROMPT_VERSION
+    assert loaded.template == "Desc: {descricao}"
+
+
 # --- normalize_findings tests ---
 
 
@@ -151,17 +168,25 @@ def test_normalize_findings_creates_issues():
         {"issue": "Problema 1", "severity": "warning", "field": "descricao"},
         {"issue": "Problema 2", "severity": "error", "field": "marca"},
     ]
-    issues = normalize_findings(findings)
+    issues = normalize_findings(
+        findings,
+        model="claude-sonnet-4-20250514",
+        prompt_version="v1",
+    )
     assert len(issues) == 2
     assert issues[0].code == "LLM_AUDIT_FINDING_1"
     assert issues[0].severity == "warning"
     assert "Problema 1" in issues[0].message
+    assert issues[0].meta == {
+        "model": "claude-sonnet-4-20250514",
+        "prompt_version": "v1",
+    }
     assert issues[1].code == "LLM_AUDIT_FINDING_2"
     assert issues[1].severity == "error"
 
 
 def test_normalize_empty_findings():
-    assert normalize_findings([]) == []
+    assert normalize_findings([], model="claude", prompt_version="v1") == []
 
 
 # --- format_prompt tests ---
@@ -193,6 +218,14 @@ def test_validate_returns_findings():
     assert len(issues) == 1
     assert issues[0].code == "LLM_AUDIT_FINDING_1"
     assert "Descrição genérica" in issues[0].message
+    assert issues[0].meta == {
+        "model": "claude-sonnet-4-20250514",
+        "prompt_version": "empresa_exemplo-v1",
+    }
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY] == {
+        "models": ["claude-sonnet-4-20250514"],
+        "prompt_versions": ["empresa_exemplo-v1"],
+    }
     assert len(client.calls) == 1
     assert client.calls[0]["model"] == "claude-sonnet-4-20250514"
 
@@ -203,6 +236,9 @@ def test_validate_empty_response():
     ctx = _ctx()
     issues = rule.validate(ctx)
     assert issues == []
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["prompt_versions"] == [
+        "empresa_exemplo-v1"
+    ]
 
 
 def test_validate_llm_failure_returns_warning():
@@ -214,6 +250,10 @@ def test_validate_llm_failure_returns_warning():
     assert issues[0].code == "LLM_AUDIT_FAILURE"
     assert issues[0].severity == "warning"
     assert "TimeoutError" in issues[0].message
+    assert issues[0].meta == {
+        "model": "claude-sonnet-4-20250514",
+        "prompt_version": "empresa_exemplo-v1",
+    }
 
 
 def test_validate_generic_exception_returns_warning():
@@ -234,6 +274,10 @@ def test_validate_prompt_not_found():
     assert len(issues) == 1
     assert issues[0].code == "LLM_AUDIT_PROMPT_NOT_FOUND"
     assert issues[0].severity == "warning"
+    assert issues[0].meta == {
+        "model": "claude-sonnet-4-20250514",
+        "prompt_version": "unknown",
+    }
 
 
 def test_validate_passes_correct_params_to_client():

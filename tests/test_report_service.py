@@ -17,8 +17,14 @@ from app.services.report_service import (
 )
 
 
-def _make_issue(code="TEST", severity="error", message="test msg", field="item"):
-    return ValidationIssue(code=code, severity=severity, message=message, field=field)
+def _make_issue(code="TEST", severity="error", message="test msg", field="item", meta=None):
+    return ValidationIssue(
+        code=code,
+        severity=severity,
+        message=message,
+        field=field,
+        meta=meta,
+    )
 
 
 def _sample_rows():
@@ -310,6 +316,31 @@ def test_full_report_can_limit_to_scope_and_keep_source_total_rows():
     assert [row["row_index"] for row in report["row_results"]] == [1]
     assert list(report["grouped_problems"]) == ["ZERO_SCOPE"]
     assert report["duplicates"] == []
+
+
+def test_full_report_includes_llm_audit_metadata():
+    rows = [{"item": "A001", "descricao": "Mesa"}]
+    results = {
+        0: [
+            _make_issue(
+                code="LLM_AUDIT_FINDING_1",
+                severity="warning",
+                message="Auditoria LLM: revisar descricao",
+                field="descricao",
+                meta={
+                    "prompt_version": "v2",
+                    "model": "claude-sonnet-4-20250514",
+                },
+            )
+        ]
+    }
+
+    report = build_full_report(rows, results)
+
+    assert report["llm_audit"] == {
+        "prompt_versions": ["v2"],
+        "models": ["claude-sonnet-4-20250514"],
+    }
 
 
 def test_partial_report_limits_summary_and_rows_to_processed_slice():
