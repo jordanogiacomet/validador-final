@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from app.core.operational_sqlite import OperationalSQLiteStore, is_sqlite_path
 from app.core.tenant_config import TenantConfig
 from app.core.tenant_loader import list_tenants, load_tenant_config
 from app.rules.llm_audit import probe_llm_provider
@@ -65,6 +66,9 @@ def probe_job_store_storage(storage_path: Path | None) -> str:
         return "in-memory"
 
     probe_directory_storage(storage_path.parent)
+    if is_sqlite_path(storage_path):
+        return OperationalSQLiteStore(storage_path).probe()
+
     if storage_path.exists():
         payload = json.loads(storage_path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):

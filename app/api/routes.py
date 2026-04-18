@@ -17,6 +17,7 @@ from app.api.auth import (
 from app.api.frontend import build_frontend_html
 from app.core.audit import AuditEvent, AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
+from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_config import DEFAULT_TENANT_ID
 from app.core.tenant_loader import load_tenant_config
 from app.core.validation_scope import (
@@ -47,14 +48,20 @@ router = APIRouter()
 
 
 def _build_audit_service() -> AuditService:
+    sqlite_path = os.getenv(OPERATIONAL_SQLITE_PATH_ENV)
     storage_path = os.getenv("VALIDATOR_AUDIT_STORE_PATH")
-    return AuditService(storage_path=Path(storage_path) if storage_path else None)
+    return AuditService(
+        storage_path=Path(storage_path) if storage_path else None,
+        sqlite_path=Path(sqlite_path) if sqlite_path else None,
+    )
 
 
 def _build_job_service() -> JobService:
+    sqlite_path = os.getenv(OPERATIONAL_SQLITE_PATH_ENV)
     storage_path = os.getenv("VALIDATOR_JOB_STORE_PATH")
     return JobService(
         storage_path=Path(storage_path) if storage_path else None,
+        sqlite_path=Path(sqlite_path) if sqlite_path else None,
         audit_service=audit_service,
     )
 

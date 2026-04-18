@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 15:36 -03
+Last Updated: 2026-04-18 16:19 -03
 
 ---
 
@@ -34,6 +34,8 @@ Last Updated: 2026-04-18 15:36 -03
 - Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
 - Frontend category result filters derive available categories from `CATEGORY_*` grouped problem codes unless the backend explicitly adds category metadata to the result payload.
 - Mutable review markers for completed results should be stored as tenant-scoped sidecar files under `results/{tenant_id}/{job_id}/review_flags.json` and overlaid into the result payload at read time, leaving generated JSON/PDF artifacts immutable.
+- Low-volume operational persistence (jobs, audit events, issued API keys, managed operators) should go through `app/core/operational_sqlite.py` when `VALIDATOR_SQLITE_PATH` is configured; keep the legacy `VALIDATOR_*_STORE_PATH` JSON env vars as migration fallback.
+- Keep artifact-local outputs on the filesystem even when operational metadata moves to SQLite: uploaded CSVs, generated result/report files, per-job `review_flags.json`, and the LLM cache remain file-based.
 - Frontend review-marker filtering should stay in `frontend/src/lib/presentation.ts` over `review_flags`, and local review filters should reset together with search/result filters when `currentJobId` changes.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
@@ -45,7 +47,7 @@ Last Updated: 2026-04-18 15:36 -03
 - Tenant-scoped API auth should derive tenant context from `X-API-Key`; any `tenant_id` request parameter is only a hint and must be rejected on mismatch.
 - Persist auth-related operational metadata with the configured `api_key_id`, never the raw API key secret.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
-- Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via optional `VALIDATOR_API_KEY_STORE_PATH`, and middleware resolves issued keys before legacy tenant `api_keys`.
+- Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via the shared SQLite store or the legacy `VALIDATOR_API_KEY_STORE_PATH` fallback, and middleware resolves issued keys before legacy tenant `api_keys`.
 - Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` owns issue/expire/revoke transitions plus audit emission, and middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 - Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
@@ -874,4 +876,18 @@ Expected architectural direction:
   - Keep operator guidance text in shared presentation helpers or shared cards when the message depends on result/job state; this avoids divergent copy between status cards and review panels.
   - Secondary operational panels can stay available without crowding the main screen when they are clearly marked as optional and opened explicitly.
   - When adding frontend tests for JSX files under this repo's `jsx: preserve` config, remember to import `React` explicitly in any newly tested component or test file.
+---
+
+## 2026-04-18 16:19 -03 - US-043
+- Added centralized SQLite persistence in `app/core/operational_sqlite.py` for low-volume operational records and wired `JobService`, `AuditService`, and `AuthService` to use it when `VALIDATOR_SQLITE_PATH` is configured, while preserving the existing JSON-backed `VALIDATOR_*_STORE_PATH` fallback paths.
+- Kept uploaded/result artifacts, per-job `review_flags.json`, and the LLM cache file-based, documented that split in `README.md`, updated the job-store health probe to accept SQLite files, and switched the Kubernetes deployment example to the shared SQLite path.
+- Added focused SQLite coverage for job lifecycle persistence, auth/operator persistence, shared-store audit/job reload behavior, tenant filtering, and health probing after restart.
+- Files changed: `app/core/operational_sqlite.py`, `app/core/health.py`, `app/services/job_service.py`, `app/services/audit_service.py`, `app/services/auth_service.py`, `app/api/auth.py`, `app/api/routes.py`, `tests/test_operational_sqlite.py`, `README.md`, `deploy/k8s/deployment.yaml`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+- **Learnings for future iterations:**
+  - Shared low-volume operational persistence should go through `app/core/operational_sqlite.py` and be enabled with `VALIDATOR_SQLITE_PATH`; keep per-service JSON store env vars only as migration fallback.
+  - Keep artifact-local files on the filesystem even when metadata moves to SQLite, because generated reports/results and per-job sidecars belong to the job directory structure rather than the shared operational store.
+  - `/health` must probe the job store format-agnostically so deployments can switch between JSON and SQLite without changing the route contract.
 ---

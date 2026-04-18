@@ -1,14 +1,34 @@
-import json
 from pathlib import Path
 from typing import Any
 
 from app.core.audit import AuditEvent, AuditEventType
+from app.core.operational_sqlite import (
+    OperationalSQLiteStore,
+    resolve_operational_sqlite_path,
+)
 
 
 class AuditService:
-    def __init__(self, storage_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        storage_path: Path | str | None = None,
+        *,
+        sqlite_path: Path | str | None = None,
+    ) -> None:
         self._events: list[AuditEvent] = []
-        self._storage_path = Path(storage_path) if storage_path is not None else None
+        resolved_sqlite_path = resolve_operational_sqlite_path(sqlite_path, storage_path)
+        self._sqlite_store = (
+            OperationalSQLiteStore(resolved_sqlite_path)
+            if resolved_sqlite_path is not None
+            else None
+        )
+        self._storage_path = (
+            resolved_sqlite_path
+            if resolved_sqlite_path is not None
+            else Path(storage_path)
+            if storage_path is not None
+            else None
+        )
         self._load_events()
 
     @property
@@ -55,12 +75,19 @@ class AuditService:
         self._persist_events()
 
     def _load_events(self) -> None:
-        if self._storage_path is None or not self._storage_path.exists():
+        if self._storage_path is None:
             return
 
-        payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError("Audit storage payload must be a list")
+        if self._sqlite_store is not None:
+            payload = self._sqlite_store.load_audit_events()
+        else:
+            if not self._storage_path.exists():
+                return
+            import json
+
+            payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise ValueError("Audit storage payload must be a list")
 
         self._events = [AuditEvent.model_validate(item) for item in payload]
 
@@ -68,11 +95,17 @@ class AuditService:
         if self._storage_path is None:
             return
 
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         payload = [
             event.model_dump(mode="json")
             for event in sorted(self._events, key=lambda item: item.created_at)
         ]
+        if self._sqlite_store is not None:
+            self._sqlite_store.replace_audit_events(payload)
+            return
+
+        import json
+
+        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
         temp_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),

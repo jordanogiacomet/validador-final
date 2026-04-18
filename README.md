@@ -243,6 +243,37 @@ export VALIDATOR_FRONTEND_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
 uvicorn app.main:app --reload
 ```
 
+Operational Persistence
+
+Low-volume operational metadata can now share one optional SQLite database through
+`VALIDATOR_SQLITE_PATH`, for example:
+
+```bash
+export VALIDATOR_SQLITE_PATH="results/operational.sqlite3"
+uvicorn app.main:app --reload
+```
+
+When `VALIDATOR_SQLITE_PATH` is set, these service stores use the shared SQLite file:
+
+- job metadata
+- audit log events
+- issued API keys
+- managed operator records
+
+If `VALIDATOR_SQLITE_PATH` is not set, the legacy JSON-backed env vars remain supported:
+
+- `VALIDATOR_JOB_STORE_PATH`
+- `VALIDATOR_AUDIT_STORE_PATH`
+- `VALIDATOR_API_KEY_STORE_PATH`
+- `VALIDATOR_OPERATOR_STORE_PATH`
+
+Generated artifacts remain file-based on purpose:
+
+- uploaded CSV files
+- result JSON/PDF/CSV outputs under `results/`
+- per-job `review_flags.json` sidecars
+- LLM cache files from `VALIDATOR_LLM_CACHE_PATH`
+
 The new frontend is intended for patrimonial and inventory staff who need a friendlier view than
 the raw PDF:
 

@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -6,6 +5,10 @@ from app.core.audit import AuditEventType
 from app.core.job import JobRecord, JobStatus
 from app.core.logging import get_logger, log_event
 from app.core.metrics import record_job_duration, record_job_status_transition
+from app.core.operational_sqlite import (
+    OperationalSQLiteStore,
+    resolve_operational_sqlite_path,
+)
 from app.services.audit_service import AuditService
 
 _logger = get_logger("job_service")
@@ -21,10 +24,23 @@ class JobService:
         self,
         storage_path: Path | str | None = None,
         *,
+        sqlite_path: Path | str | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
         self._jobs: dict[str, JobRecord] = {}
-        self._storage_path = Path(storage_path) if storage_path is not None else None
+        resolved_sqlite_path = resolve_operational_sqlite_path(sqlite_path, storage_path)
+        self._sqlite_store = (
+            OperationalSQLiteStore(resolved_sqlite_path)
+            if resolved_sqlite_path is not None
+            else None
+        )
+        self._storage_path = (
+            resolved_sqlite_path
+            if resolved_sqlite_path is not None
+            else Path(storage_path)
+            if storage_path is not None
+            else None
+        )
         self._audit_service = audit_service
         self._load_jobs()
 
@@ -303,12 +319,19 @@ class JobService:
         return job
 
     def _load_jobs(self) -> None:
-        if self._storage_path is None or not self._storage_path.exists():
+        if self._storage_path is None:
             return
 
-        payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError("Job storage payload must be a list")
+        if self._sqlite_store is not None:
+            payload = self._sqlite_store.load_jobs()
+        else:
+            if not self._storage_path.exists():
+                return
+            import json
+
+            payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise ValueError("Job storage payload must be a list")
 
         self._jobs = {}
         for item in payload:
@@ -319,11 +342,17 @@ class JobService:
         if self._storage_path is None:
             return
 
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         payload = [
             job.model_dump(mode="json")
             for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ]
+        if self._sqlite_store is not None:
+            self._sqlite_store.replace_jobs(payload)
+            return
+
+        import json
+
+        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
         temp_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),

@@ -722,6 +722,75 @@
       "priority": 42,
       "passes": true,
       "notes": "Essa story existe para preservar simplicidade operacional como requisito permanente do produto. A intenção é manter o site entendível por operador patrimonial comum, sem transformar a UI em painel técnico carregado."
+    },
+    {
+      "id": "US-043",
+      "title": "Adotar SQLite para persistências operacionais locais de baixo volume",
+      "description": "Como operador e mantenedor, preciso substituir arquivos JSON soltos por SQLite onde fizer sentido para ganhar consultas mais seguras, consistência local e menor fragilidade operacional sem introduzir infraestrutura externa.",
+      "acceptanceCriteria": [
+        "Identificar persistências locais candidatas a SQLite como issued API keys, audit log, job store, cache local ou sidecars operacionais equivalentes",
+        "Criar camada de persistência centralizada para SQLite sem espalhar SQL bruto pela API ou pelo frontend",
+        "Manter fallback compatível com a arquitetura multi-tenant e sem hardcode de tenant no core",
+        "Preservar contratos atuais de serviço sempre que possível para permitir migração incremental",
+        "Criar testes de persistência cobrindo escrita, leitura, restart do processo e isolamento por tenant quando aplicável",
+        "Documentar claramente o que permanece em arquivo e o que passa a usar SQLite",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 43,
+      "passes": true,
+      "notes": "Implementado com `app/core/operational_sqlite.py` e `VALIDATOR_SQLITE_PATH` para jobs, audit log, issued API keys e operadores gerenciados, mantendo os `VALIDATOR_*_STORE_PATH` JSON como fallback. Artefatos do job, `review_flags.json` e `VALIDATOR_LLM_CACHE_PATH` permanecem em arquivo."
+    },
+    {
+      "id": "US-044",
+      "title": "Promover o tenant oficial redesim_v2 para redesim mantendo compatibilidade de transição",
+      "description": "Como operador, preciso que a configuração oficial ativa passe a ser a versão mais nova do tenant Redesim, usando o identificador `redesim`, para simplificar a operação sem perder compatibilidade durante a transição.",
+      "acceptanceCriteria": [
+        "Tratar a configuração atual de `redesim_v2` como base oficial do tenant `redesim`",
+        "Preservar uma estratégia de transição para leituras legadas enquanto o rename estiver em andamento",
+        "Evitar duplicação da engine ou branching específico de tenant no core durante a promoção",
+        "Atualizar seeds, testes e fluxos operacionais que dependam do tenant oficial",
+        "Garantir que upload, auth, jobs, resultados e auditoria continuem tenant-scoped após a mudança",
+        "Adicionar cobertura para carregamento e resolução correta do tenant oficial após a migração",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "A troca deve ser feita como migração de configuração e convenção operacional, não como exceção de lógica dentro da engine."
+    },
+    {
+      "id": "US-045",
+      "title": "Criar o primeiro usuário administrativo no bootstrap do projeto",
+      "description": "Como administrador, preciso que a montagem inicial do projeto crie o primeiro usuário de acesso de forma controlada para não depender de edição manual de credenciais em arquivo depois do setup.",
+      "acceptanceCriteria": [
+        "Definir um fluxo de bootstrap que crie o primeiro usuário administrativo durante a inicialização do ambiente",
+        "Persistir apenas hash da senha e metadados mínimos do usuário criado",
+        "Associar explicitamente o usuário inicial ao tenant oficial configurado no ambiente",
+        "Evitar credenciais hardcoded permanentes no código-fonte após o bootstrap",
+        "Permitir reexecução segura do bootstrap sem duplicar usuários ou sobrescrever credenciais sem intenção explícita",
+        "Cobrir em testes a criação inicial, a idempotência e a autenticação do usuário bootstrap",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "Essa story conversa diretamente com a futura gestão de operadores por tenant e reduz a dependência operacional de credenciais seed mantidas manualmente."
+    },
+    {
+      "id": "US-046",
+      "title": "Paralelizar partes seguras do processamento de validação para reduzir tempo de execução",
+      "description": "Como operador, preciso que jobs grandes terminem mais rápido por meio de paralelização controlada das etapas que não quebram a consistência do resultado.",
+      "acceptanceCriteria": [
+        "Mapear quais etapas podem ser paralelizadas com segurança sem alterar a semântica das regras ou dos relatórios",
+        "Manter uma única engine genérica de validação, sem duplicar lógica por tenant",
+        "Preservar regras cross-row e agregações compartilhadas com estratégia explícita para contexto comum",
+        "Tornar a paralelização configurável ou limitada a cenários em que ela realmente melhora throughput",
+        "Medir impacto em tempo de processamento com benchmarks ou testes focados",
+        "Garantir que resultado JSON, CSV corrigido, PDF e auditoria permaneçam determinísticos",
+        "Adicionar testes para equivalência entre execução serial e paralela nas rotas suportadas",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "A paralelização precisa ser pragmática: acelerar parsing, validação por lotes ou auditoria LLM quando seguro, sem quebrar regras dependentes de contexto compartilhado."
     }
   ],
   "nonFunctionalRequirements": {

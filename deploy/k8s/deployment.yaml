@@ -50,8 +50,8 @@ spec:
           env:
             - name: VALIDATOR_FRONTEND_ORIGIN_REGEX
               value: "^https?://[^/]+:30092$"
-            - name: VALIDATOR_JOB_STORE_PATH
-              value: /app/results/jobs.json
+            - name: VALIDATOR_SQLITE_PATH
+              value: /app/results/operational.sqlite3
           readinessProbe:
             httpGet:
               path: /health

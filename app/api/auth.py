@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_loader import resolve_tenant_api_key
 from app.services.auth_service import AuthService, IssuedAPIKeyStatus
 
@@ -19,6 +20,7 @@ _PUBLIC_PREFIXES = ("/docs", "/redoc")
 
 
 def _build_auth_service() -> AuthService:
+    sqlite_path = os.getenv(OPERATIONAL_SQLITE_PATH_ENV)
     storage_path = os.getenv("VALIDATOR_API_KEY_STORE_PATH")
     operator_storage_path = os.getenv("VALIDATOR_OPERATOR_STORE_PATH")
     return AuthService(
@@ -26,6 +28,7 @@ def _build_auth_service() -> AuthService:
         operator_storage_path=Path(operator_storage_path)
         if operator_storage_path
         else None,
+        sqlite_path=Path(sqlite_path) if sqlite_path else None,
     )
 
 
