@@ -14,16 +14,42 @@ class TenantAPIKeyMatch:
     api_key: APIKeyConfig
 
 
-def load_tenant_config(tenant_id: str) -> TenantConfig:
-    tenant_file = TENANTS_DIR / tenant_id / "tenant.yaml"
+def _iter_tenant_files() -> list[Path]:
+    if not TENANTS_DIR.is_dir():
+        return []
+    return sorted(
+        tenant_dir / "tenant.yaml"
+        for tenant_dir in TENANTS_DIR.iterdir()
+        if tenant_dir.is_dir() and (tenant_dir / "tenant.yaml").exists()
+    )
 
-    if not tenant_file.exists():
-        raise FileNotFoundError(f"Tenant config not found: {tenant_file}")
 
+def _read_tenant_config(tenant_file: Path) -> TenantConfig:
     with tenant_file.open("r", encoding="utf-8") as file:
         raw_data = yaml.safe_load(file)
-
     return TenantConfig.model_validate(raw_data)
+
+
+def load_tenant_config(tenant_id: str) -> TenantConfig:
+    normalized_tenant_id = tenant_id.strip()
+    matches: list[TenantConfig] = []
+    missing_path = TENANTS_DIR / normalized_tenant_id / "tenant.yaml"
+
+    for tenant_file in _iter_tenant_files():
+        config = _read_tenant_config(tenant_file)
+        if (
+            normalized_tenant_id == config.tenant_id
+            or normalized_tenant_id in config.aliases
+        ):
+            matches.append(config)
+
+    if not matches:
+        raise FileNotFoundError(f"Tenant config not found: {missing_path}")
+
+    if len(matches) > 1:
+        raise ValueError(f"Multiple tenant configs match identifier '{normalized_tenant_id}'")
+
+    return matches[0]
 
 
 def load_default_tenant_config() -> TenantConfig:
@@ -31,12 +57,20 @@ def load_default_tenant_config() -> TenantConfig:
 
 
 def list_tenants() -> list[str]:
-    if not TENANTS_DIR.is_dir():
-        return []
-    return sorted(
-        d.name
-        for d in TENANTS_DIR.iterdir()
-        if d.is_dir() and (d / "tenant.yaml").exists()
+    return sorted({config.tenant_id for config in map(_read_tenant_config, _iter_tenant_files())})
+
+
+def canonicalize_tenant_id(tenant_id: str) -> str:
+    normalized_tenant_id = tenant_id.strip()
+    try:
+        return load_tenant_config(normalized_tenant_id).tenant_id
+    except FileNotFoundError:
+        return normalized_tenant_id
+
+
+def tenant_ids_match(left_tenant_id: str, right_tenant_id: str) -> bool:
+    return canonicalize_tenant_id(left_tenant_id) == canonicalize_tenant_id(
+        right_tenant_id
     )
 
 

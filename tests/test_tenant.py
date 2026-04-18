@@ -24,6 +24,7 @@ class TestTenantConfig:
     def test_minimal_config(self) -> None:
         config = TenantConfig(tenant_id="test", display_name="Test")
         assert config.tenant_id == "test"
+        assert config.aliases == []
         assert config.columns == {}
         assert config.enabled_rules == []
         assert config.disabled_rules == []
@@ -187,7 +188,13 @@ class TestTenantLoader:
     def test_load_redesim(self) -> None:
         config = load_tenant_config("redesim")
         assert config.tenant_id == "redesim"
-        assert config.columns["descricao"] == "Descrição"
+        assert config.display_name == "RedeSim"
+        assert config.aliases == ["redesim_v2"]
+        assert config.csv.delimiter == ";"
+        assert config.csv.encoding == "iso-8859-1"
+        assert config.columns["item"] == "item"
+        assert config.columns["placa_anterior"] == "item_anterior"
+        assert config.columns["descricao"] == "descricao"
         assert "category_required_fields" in config.enabled_rules
         assert len(config.categories) > 5
         monitor = next(cat for cat in config.categories if cat.name == "monitor")
@@ -197,8 +204,8 @@ class TestTenantLoader:
 
     def test_load_redesim_v2(self) -> None:
         config = load_tenant_config("redesim_v2")
-        assert config.tenant_id == "redesim_v2"
-        assert config.display_name == "RedeSim V2"
+        assert config.tenant_id == "redesim"
+        assert config.display_name == "RedeSim"
         assert config.csv.delimiter == ";"
         assert config.csv.encoding == "iso-8859-1"
         assert config.columns["item"] == "item"
@@ -216,7 +223,7 @@ class TestTenantLoader:
         assert "default" in tenants
         assert "empresa_exemplo" in tenants
         assert "redesim" in tenants
-        assert "redesim_v2" in tenants
+        assert "redesim_v2" not in tenants
 
     def test_default_tenant_has_columns(self) -> None:
         config = load_default_tenant_config()
@@ -228,6 +235,12 @@ class TestTenantLoader:
         assert match is not None
         assert match.tenant.tenant_id == "redesim"
         assert match.api_key.key_id == "redesim-local"
+
+    def test_resolve_legacy_redesim_v2_api_key_returns_canonical_match(self) -> None:
+        match = resolve_tenant_api_key("redesim-v2-local-test-key")
+        assert match is not None
+        assert match.tenant.tenant_id == "redesim"
+        assert match.api_key.key_id == "redesim-v2-local"
 
     def test_resolve_tenant_api_key_returns_none_for_unknown_value(self) -> None:
         assert resolve_tenant_api_key("missing-key") is None

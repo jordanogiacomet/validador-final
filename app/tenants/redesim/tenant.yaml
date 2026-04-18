@@ -1,17 +1,23 @@
 tenant_id: redesim
 display_name: RedeSim
+aliases:
+  - redesim_v2
+
+csv:
+  delimiter: ";"
+  encoding: "iso-8859-1"
 
 columns:
-  item: Item
-  placa_anterior: Placa Anterior
-  descricao: Descrição
-  marca: Marca
-  modelo: Modelo
-  ns: NS
-  local: Local
-  cc: CC
-  complemento: Complemento
-  observacao: Observação
+  item: item
+  placa_anterior: item_anterior
+  descricao: descricao
+  marca: marca
+  modelo: modelo
+  ns: ns
+  local: local
+  cc: cc
+  complemento: complemento
+  observacao: observacao
 
 enabled_rules:
   - duplicate_item
@@ -213,6 +219,8 @@ llm:
 api_keys:
   - key_id: redesim-local
     value: redesim-local-test-key
+  - key_id: redesim-v2-local
+    value: redesim-v2-local-test-key
 
 operators:
   - operator_id: redesim-local-operator

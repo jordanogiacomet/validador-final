@@ -275,6 +275,18 @@ def test_issue_api_key_rejects_operator_for_wrong_tenant() -> None:
     assert exc_info.value.detail == "Operator is not allowed for this tenant"
 
 
+def test_issue_api_key_accepts_redesim_v2_alias_and_returns_canonical_tenant() -> None:
+    service = AuthService()
+
+    issued_key = service.issue_api_key(
+        tenant_id="redesim_v2",
+        username="redesim.operator",
+        password="redesim-password",
+    )
+
+    assert issued_key.record.tenant_id == "redesim"
+
+
 def test_create_operator_persists_only_hashed_password_and_supports_login_after_reload(
     tmp_path,
 ):

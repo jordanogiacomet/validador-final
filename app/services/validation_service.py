@@ -21,7 +21,7 @@ from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM, resolve_force_refresh
 from app.core.logging import get_logger, log_event
 from app.core.registry import register_rule
 from app.core.tenant_config import TenantConfig
-from app.core.tenant_loader import load_tenant_config
+from app.core.tenant_loader import canonicalize_tenant_id, load_tenant_config
 from app.core.validation_scope import (
     VALIDATION_SCOPE_PARAM,
     ValidationScope,
@@ -114,11 +114,11 @@ def _sanitize_job_file_name(
 
 
 def get_tenant_uploads_dir(tenant_id: str) -> Path:
-    return UPLOADS_DIR / tenant_id
+    return UPLOADS_DIR / canonicalize_tenant_id(tenant_id)
 
 
 def get_tenant_results_dir(tenant_id: str) -> Path:
-    return RESULTS_DIR / tenant_id
+    return RESULTS_DIR / canonicalize_tenant_id(tenant_id)
 
 
 def build_job_upload_path(

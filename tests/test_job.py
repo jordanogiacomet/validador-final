@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.core.audit import AuditEventType
@@ -205,6 +207,25 @@ class TestJobService:
         assert job.tenant_id == "default"
         assert job.file_path == "/tmp/test.csv"
         assert job.status == JobStatus.QUEUED
+
+    def test_create_job_canonicalizes_redesim_v2_alias(self):
+        job = self.service.create_job(tenant_id="redesim_v2", file_path="/tmp/test.csv")
+        assert job.tenant_id == "redesim"
+
+    def test_load_jobs_migrates_legacy_redesim_v2_records(self, tmp_path):
+        storage_path = tmp_path / "jobs.json"
+        legacy_job = JobRecord(tenant_id="redesim_v2", file_name="legacy.csv")
+        storage_path.write_text(
+            json.dumps([legacy_job.model_dump(mode="json")], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        reloaded = JobService(storage_path=storage_path)
+        jobs = reloaded.list_jobs(tenant_id="redesim")
+
+        assert len(jobs) == 1
+        assert jobs[0].job_id == legacy_job.job_id
+        assert jobs[0].tenant_id == "redesim"
 
     def test_get_job(self):
         job = self.service.create_job(tenant_id="default")

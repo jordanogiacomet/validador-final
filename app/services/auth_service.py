@@ -22,7 +22,11 @@ from app.core.tenant_config import (
     OperatorConfig,
     TenantConfig,
 )
-from app.core.tenant_loader import list_tenants, load_tenant_config
+from app.core.tenant_loader import (
+    canonicalize_tenant_id,
+    list_tenants,
+    load_tenant_config,
+)
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
@@ -187,7 +191,7 @@ class AuthService:
         self._audit_service = audit_service
 
     def list_operators(self, *, tenant_id: str) -> list[EffectiveOperator]:
-        normalized_tenant_id = tenant_id.strip()
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         self._load_tenant_for_login(normalized_tenant_id)
         return self._list_effective_operators(normalized_tenant_id)
 
@@ -199,7 +203,7 @@ class AuthService:
         password: str,
         created_by_api_key_id: str | None = None,
     ) -> EffectiveOperator:
-        normalized_tenant_id = tenant_id.strip()
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         normalized_username = username.strip()
         self._load_tenant_for_login(normalized_tenant_id)
 
@@ -230,7 +234,7 @@ class AuthService:
         operator_id: str,
         disabled_by_api_key_id: str | None = None,
     ) -> EffectiveOperator:
-        normalized_tenant_id = tenant_id.strip()
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
         if operator is None:
             raise AuthServiceError(404, "Operator not found")
@@ -269,7 +273,7 @@ class AuthService:
         new_password: str,
         rotated_by_api_key_id: str | None = None,
     ) -> EffectiveOperator:
-        normalized_tenant_id = tenant_id.strip()
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         seed_operators = [
             operator
             for operator in self._list_effective_operators(normalized_tenant_id)
@@ -302,7 +306,7 @@ class AuthService:
         username: str,
         password: str,
     ) -> IssuedAPIKey:
-        normalized_tenant_id = tenant_id.strip()
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         normalized_username = username.strip()
         tenant = self._load_tenant_for_login(normalized_tenant_id)
         operator = self._find_operator_by_username(
@@ -401,8 +405,9 @@ class AuthService:
         api_key_id: str,
         now: datetime | None = None,
     ) -> IssuedAPIKey:
+        resolved_tenant_id = canonicalize_tenant_id(tenant_id)
         record = self._records.get(api_key_id)
-        if record is None or record.tenant_id != tenant_id:
+        if record is None or record.tenant_id != resolved_tenant_id:
             raise AuthServiceError(404, "Issued API key not found")
 
         current_time = now or datetime.now(UTC)
@@ -453,8 +458,9 @@ class AuthService:
         revoked_by_api_key_id: str | None = None,
         now: datetime | None = None,
     ) -> IssuedAPIKeyRecord:
+        resolved_tenant_id = canonicalize_tenant_id(tenant_id)
         record = self._records.get(api_key_id)
-        if record is None or record.tenant_id != tenant_id:
+        if record is None or record.tenant_id != resolved_tenant_id:
             raise AuthServiceError(404, "Issued API key not found")
 
         persist_required = self._backfill_record_expiration(record)
@@ -504,8 +510,9 @@ class AuthService:
         username: str,
         requested_tenant_id: str,
     ) -> bool:
+        resolved_requested_tenant_id = canonicalize_tenant_id(requested_tenant_id)
         for tenant_id in list_tenants():
-            if tenant_id == requested_tenant_id:
+            if tenant_id == resolved_requested_tenant_id:
                 continue
             try:
                 self._load_tenant_for_login(tenant_id)
@@ -620,6 +627,10 @@ class AuthService:
         updated = False
         for item in payload:
             record = IssuedAPIKeyRecord.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(record.tenant_id)
+            if record.tenant_id != resolved_tenant_id:
+                record.tenant_id = resolved_tenant_id
+                updated = True
             updated = self._backfill_record_expiration(record) or updated
             self._records[record.key_id] = record
 
@@ -642,9 +653,17 @@ class AuthService:
                 raise ValueError("Operator storage payload must be a list")
 
         self._operator_records = {}
+        updated = False
         for item in payload:
             record = StoredOperatorRecord.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(record.tenant_id)
+            if record.tenant_id != resolved_tenant_id:
+                record.tenant_id = resolved_tenant_id
+                updated = True
             self._operator_records[self._operator_record_key(record)] = record
+
+        if updated:
+            self._persist_operator_records()
 
     def _persist_records(self) -> None:
         if self._storage_path is None:

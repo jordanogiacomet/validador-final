@@ -343,7 +343,8 @@ Tenant Example: RedeSim
 
 The repository now includes a tenant example at `app/tenants/redesim/tenant.yaml` that demonstrates:
 
-- canonical `descricao` sourced from the tenant column `Espécie`
+- canonical `descricao` sourced from the tenant column `descricao`
+- semicolon-separated CSV input with `iso-8859-1` encoding
 - species-specific required fields such as `marca`, `modelo`, `complemento`, and `ns`
 - species-specific critical pattern checks such as polegadas, BTUs, portas, canais, and litros
 

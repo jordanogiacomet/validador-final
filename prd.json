@@ -754,8 +754,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 44,
-      "passes": false,
-      "notes": "A troca deve ser feita como migração de configuração e convenção operacional, não como exceção de lógica dentro da engine."
+      "passes": true,
+      "notes": "Implementado promovendo `redesim` para a configuração CSV/campos do antigo `redesim_v2`, com alias declarativo em `TenantConfig.aliases` e canonicalização compartilhada no loader/serviços para migrar leituras legadas de auth, jobs e audit sem branching específico."
     },
     {
       "id": "US-045",

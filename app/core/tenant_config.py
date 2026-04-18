@@ -74,6 +74,7 @@ class OperatorConfig(BaseModel):
 class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str
+    aliases: list[str] = Field(default_factory=list)
     columns: dict[str, str] = Field(default_factory=dict)
     enabled_rules: list[str] = Field(default_factory=list)
     disabled_rules: list[str] = Field(default_factory=list)

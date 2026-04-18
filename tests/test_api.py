@@ -64,8 +64,8 @@ DUPLICATE_SCOPE_CSV_CONTENT = (
 )
 
 REDESIM_CSV_CONTENT = (
-    "Item,Descrição,Marca,Modelo,Complemento,NS\n"
-    "001,MONITOR,Dell,P2419H,,SN1\n"
+    "especie_id;base_id;;item_anterior;item;descricao;marca;modelo;ns;complemento;observacao;cc;cc_descricao;local;latitude;longitude;gps;usuario;foto_complementar_memento;\n"
+    "1;144;uuid-1;;001;MONITOR;Dell;P2419H;SN1;;;8327;A27;MATRIZ;;;;Leticia;;\n"
 )
 
 
@@ -314,6 +314,21 @@ def test_login_rejects_operator_for_other_tenant():
     assert response.json()["detail"] == "Operator is not allowed for this tenant"
 
 
+def test_login_accepts_redesim_v2_alias_and_returns_canonical_tenant():
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": "redesim_v2",
+            "username": "redesim.operator",
+            "password": "redesim-password",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] == "redesim"
+
+
 def test_login_rejects_invalid_identifier_format():
     response = client.post(
         "/login",
@@ -538,7 +553,13 @@ def test_upload_default_tenant():
 
 
 def test_upload_uses_tenant_from_api_key_when_hint_missing():
-    files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
+    files = {
+        "file": (
+            "redesim.csv",
+            BytesIO(REDESIM_CSV_CONTENT.encode("iso-8859-1")),
+            "text/csv",
+        )
+    }
     response = client.post("/validate", files=files, headers=auth_headers(REDESIM_API_KEY))
     assert response.status_code == 200
     payload = response.json()
@@ -553,6 +574,38 @@ def test_upload_uses_tenant_from_api_key_when_hint_missing():
         assert Path(job.file_path).parent.name == "redesim"
         assert Path(job.result_path).parent.name == "redesim"
         assert Path(job.report_path).parent.name == "redesim"
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_upload_accepts_redesim_v2_alias_and_returns_canonical_tenant():
+    files = {
+        "file": (
+            "redesim_v2.csv",
+            BytesIO(REDESIM_CSV_CONTENT.encode("iso-8859-1")),
+            "text/csv",
+        )
+    }
+    response = client.post(
+        "/validate?tenant_id=redesim_v2",
+        files=files,
+        headers=auth_headers(REDESIM_API_KEY),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] == "redesim"
+
+    job = job_service.get_job(payload["job_id"])
+    assert job is not None
+    try:
+        assert job.tenant_id == "redesim"
+        assert job.file_path is not None
+        assert Path(job.file_path).parent.name == "redesim"
     finally:
         if job.file_path:
             Path(job.file_path).unlink(missing_ok=True)
@@ -893,7 +946,13 @@ def test_validation_result_can_include_duplicate_items_scope():
 
 
 def test_redesim_tenant_uses_configured_descricao_column_and_rules():
-    files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
+    files = {
+        "file": (
+            "redesim.csv",
+            BytesIO(REDESIM_CSV_CONTENT.encode("iso-8859-1")),
+            "text/csv",
+        )
+    }
     response = client.post(
         "/validate?tenant_id=redesim",
         files=files,

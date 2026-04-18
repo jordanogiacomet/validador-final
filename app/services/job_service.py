@@ -9,6 +9,7 @@ from app.core.operational_sqlite import (
     OperationalSQLiteStore,
     resolve_operational_sqlite_path,
 )
+from app.core.tenant_loader import canonicalize_tenant_id
 from app.services.audit_service import AuditService
 
 _logger = get_logger("job_service")
@@ -57,8 +58,9 @@ class JobService:
         params: dict[str, str | int | float | bool | None] | None = None,
         parent_job_id: str | None = None,
     ) -> JobRecord:
+        resolved_tenant_id = canonicalize_tenant_id(tenant_id)
         job = JobRecord(
-            tenant_id=tenant_id,
+            tenant_id=resolved_tenant_id,
             file_path=file_path,
             file_name=file_name,
             api_key_id=api_key_id,
@@ -97,7 +99,8 @@ class JobService:
     ) -> list[JobRecord]:
         jobs = list(self._jobs.values())
         if tenant_id is not None:
-            jobs = [j for j in jobs if j.tenant_id == tenant_id]
+            resolved_tenant_id = canonicalize_tenant_id(tenant_id)
+            jobs = [j for j in jobs if j.tenant_id == resolved_tenant_id]
         if active_only:
             jobs = [
                 j
@@ -334,9 +337,17 @@ class JobService:
                 raise ValueError("Job storage payload must be a list")
 
         self._jobs = {}
+        updated = False
         for item in payload:
             job = JobRecord.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(job.tenant_id)
+            if job.tenant_id != resolved_tenant_id:
+                job.tenant_id = resolved_tenant_id
+                updated = True
             self._jobs[job.job_id] = job
+
+        if updated:
+            self._persist_jobs()
 
     def _persist_jobs(self) -> None:
         if self._storage_path is None:

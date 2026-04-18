@@ -6,6 +6,7 @@ from app.core.operational_sqlite import (
     OperationalSQLiteStore,
     resolve_operational_sqlite_path,
 )
+from app.core.tenant_loader import canonicalize_tenant_id
 
 
 class AuditService:
@@ -46,7 +47,7 @@ class AuditService:
     ) -> AuditEvent:
         event = AuditEvent(
             event_type=event_type,
-            tenant_id=tenant_id,
+            tenant_id=canonicalize_tenant_id(tenant_id),
             job_id=job_id,
             api_key_id=api_key_id,
             details=details or {},
@@ -63,7 +64,10 @@ class AuditService:
     ) -> list[AuditEvent]:
         events = self._events
         if tenant_id is not None:
-            events = [event for event in events if event.tenant_id == tenant_id]
+            resolved_tenant_id = canonicalize_tenant_id(tenant_id)
+            events = [
+                event for event in events if event.tenant_id == resolved_tenant_id
+            ]
 
         ordered_events = list(reversed(events))
         if limit is not None:
@@ -89,7 +93,18 @@ class AuditService:
             if not isinstance(payload, list):
                 raise ValueError("Audit storage payload must be a list")
 
-        self._events = [AuditEvent.model_validate(item) for item in payload]
+        self._events = []
+        updated = False
+        for item in payload:
+            event = AuditEvent.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(event.tenant_id)
+            if event.tenant_id != resolved_tenant_id:
+                event.tenant_id = resolved_tenant_id
+                updated = True
+            self._events.append(event)
+
+        if updated:
+            self._persist_events()
 
     def _persist_events(self) -> None:
         if self._storage_path is None:

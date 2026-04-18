@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 16:19 -03
+Last Updated: 2026-04-18 16:35 -03
 
 ---
 
@@ -64,6 +64,7 @@ Last Updated: 2026-04-18 16:19 -03
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
+- Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 
 ---
 
@@ -887,7 +888,23 @@ Expected architectural direction:
   - `ruff check app tests`
   - `pytest`
 - **Learnings for future iterations:**
-  - Shared low-volume operational persistence should go through `app/core/operational_sqlite.py` and be enabled with `VALIDATOR_SQLITE_PATH`; keep per-service JSON store env vars only as migration fallback.
-  - Keep artifact-local files on the filesystem even when metadata moves to SQLite, because generated reports/results and per-job sidecars belong to the job directory structure rather than the shared operational store.
-  - `/health` must probe the job store format-agnostically so deployments can switch between JSON and SQLite without changing the route contract.
+- Shared low-volume operational persistence should go through `app/core/operational_sqlite.py` and be enabled with `VALIDATOR_SQLITE_PATH`; keep per-service JSON store env vars only as migration fallback.
+- Keep artifact-local files on the filesystem even when metadata moves to SQLite, because generated reports/results and per-job sidecars belong to the job directory structure rather than the shared operational store.
+- `/health` must probe the job store format-agnostically so deployments can switch between JSON and SQLite without changing the route contract.
+---
+
+## 2026-04-18 16:35 -03 - US-044
+- Promovido o tenant oficial `redesim` para o schema CSV/campos do antigo `redesim_v2`, removendo a duplicação de configuração e mantendo `redesim_v2` como alias declarativo de compatibilidade.
+- Adicionada canonicalização compartilhada de `tenant_id` no loader e nas camadas de auth/jobs/audit/validation para que entradas e persistências legadas migrem para `redesim` sem branching específico por tenant.
+- Atualizados os testes de carregamento, login, upload, artefatos, jobs e audit para cobrir o tenant oficial promovido e leituras legadas por alias.
+- Atualizada a documentação do tenant RedeSim para refletir CSV `;` + `iso-8859-1` e a coluna fonte `descricao`.
+- Files changed: `app/core/tenant_config.py`, `app/core/tenant_loader.py`, `app/services/auth_service.py`, `app/services/job_service.py`, `app/services/audit_service.py`, `app/services/validation_service.py`, `app/api/auth.py`, `app/api/routes.py`, `app/tenants/redesim/tenant.yaml`, `app/tenants/redesim_v2/tenant.yaml`, `tests/test_tenant.py`, `tests/test_auth_service.py`, `tests/test_job.py`, `tests/test_audit.py`, `tests/test_validation_service.py`, `tests/test_api.py`, `README.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest tests/test_tenant.py tests/test_auth_service.py tests/test_job.py tests/test_audit.py tests/test_validation_service.py tests/test_api.py` (184 tests)
+  - `pytest` (395 tests)
+- **Learnings for future iterations:**
+  - Promova renomes de tenant como migração declarativa de configuração: um alias no tenant canônico evita espalhar exceções por rota, engine e regras.
+  - Quando já existe persistência local de `tenant_id`, migre os registros para o identificador canônico na carga do serviço para preservar jobs/audit/auth legados sem criar filtros duplicados.
+  - `list_tenants()` deve expor apenas tenants canônicos; aliases servem para compatibilidade de entrada, não para duplicar opções operacionais.
 ---

@@ -19,7 +19,7 @@ from app.core.audit import AuditEvent, AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_config import DEFAULT_TENANT_ID
-from app.core.tenant_loader import load_tenant_config
+from app.core.tenant_loader import load_tenant_config, tenant_ids_match
 from app.core.validation_scope import (
     DEFAULT_VALIDATION_SCOPE,
     VALIDATION_SCOPE_PARAM,
@@ -363,7 +363,7 @@ def _get_authorized_job(request: Request, job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
     auth = get_authenticated_tenant(request)
-    if job.tenant_id != auth.tenant_id:
+    if not tenant_ids_match(job.tenant_id, auth.tenant_id):
         raise HTTPException(
             status_code=403,
             detail=f"API key does not grant access to tenant '{job.tenant_id}'",

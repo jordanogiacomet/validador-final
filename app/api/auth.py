@@ -10,7 +10,11 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
-from app.core.tenant_loader import resolve_tenant_api_key
+from app.core.tenant_loader import (
+    canonicalize_tenant_id,
+    resolve_tenant_api_key,
+    tenant_ids_match,
+)
 from app.services.auth_service import AuthService, IssuedAPIKeyStatus
 
 API_KEY_HEADER = "X-API-Key"
@@ -122,9 +126,14 @@ def get_authenticated_tenant(request: Request) -> AuthenticatedTenant:
 
 def resolve_request_tenant_id(request: Request, requested_tenant_id: str | None) -> str:
     auth = get_authenticated_tenant(request)
-    if requested_tenant_id is not None and requested_tenant_id != auth.tenant_id:
+    if requested_tenant_id is not None and not tenant_ids_match(
+        requested_tenant_id,
+        auth.tenant_id,
+    ):
         raise HTTPException(
             status_code=403,
             detail=f"API key does not grant access to tenant '{requested_tenant_id}'",
         )
+    if requested_tenant_id is not None:
+        return canonicalize_tenant_id(requested_tenant_id)
     return auth.tenant_id

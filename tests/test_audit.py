@@ -1,3 +1,5 @@
+import json
+
 from app.core.audit import AuditEventType
 from app.services.audit_service import AuditService
 from app.services.job_service import JobService
@@ -94,3 +96,28 @@ def test_job_service_records_created_and_completed_audit_events():
         "file_name": "lote.csv",
         "validation_scope": "all_items",
     }
+
+
+def test_audit_service_migrates_legacy_redesim_v2_events_on_reload(tmp_path):
+    storage_path = tmp_path / "audit.json"
+    service = AuditService(storage_path=storage_path)
+    event = service.record_event(
+        AuditEventType.JOB_CREATED,
+        tenant_id="redesim",
+        job_id="job-legacy",
+        api_key_id="key-legacy",
+    )
+
+    payload = json.loads(storage_path.read_text(encoding="utf-8"))
+    payload[0]["tenant_id"] = "redesim_v2"
+    storage_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    reloaded = AuditService(storage_path=storage_path)
+    events = reloaded.list_events(tenant_id="redesim")
+
+    assert len(events) == 1
+    assert events[0].event_id == event.event_id
+    assert events[0].tenant_id == "redesim"

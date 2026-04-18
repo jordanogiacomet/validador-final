@@ -39,12 +39,6 @@ DUPLICATE_SCOPE_CONTENT = (
     "001,,Armario,MarcaA,ModeloB,SN3,Sala3,CC3,Detalhe armario completo validado,\n"
 )
 
-REDESIM_DUPLICATE_CONTENT_WITH_HEADER_VARIATION = (
-    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
-    "001,,MONITOR,Dell,P2419H,SN1,Sala1,CC1,LED 19 POL,\n"
-    "001,,MESA,,,SN2,Sala2,CC2,,\n"
-)
-
 REDESIM_V2_DUPLICATE_CONTENT = (
     "especie_id;base_id;;item_anterior;item;descricao;marca;modelo;ns;complemento;observacao;cc;cc_descricao;local;latitude;longitude;gps;usuario;foto_complementar_memento;\n"
     "1;144;uuid-1;;001;MONITOR;Dell;P2419H;SN1;;AÇÃO;8327;A27;MATRIZ;;;;Letícia;;\n"
@@ -291,7 +285,7 @@ def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplica
     monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
 
     csv_path = tmp_path / "redesim.csv"
-    csv_path.write_text(REDESIM_DUPLICATE_CONTENT_WITH_HEADER_VARIATION, encoding="utf-8")
+    csv_path.write_text(REDESIM_V2_DUPLICATE_CONTENT, encoding="iso-8859-1")
 
     service = RecordingJobService()
     job = service.create_job(
@@ -323,7 +317,7 @@ def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplica
     assert duplicate_group[1]["descricao"] == "MESA"
 
 
-def test_run_validation_job_supports_redesim_v2_semicolon_csv(
+def test_run_validation_job_accepts_redesim_v2_alias_and_writes_redesim_artifacts(
     tmp_path,
     monkeypatch,
 ):
@@ -339,12 +333,16 @@ def test_run_validation_job_supports_redesim_v2_semicolon_csv(
         file_path=str(csv_path),
         file_name="redesim_v2.csv",
     )
+    assert job.tenant_id == "redesim"
 
     run_validation_job(job.job_id, service)
 
     updated_job = service.get_job(job.job_id)
     assert updated_job is not None
     assert updated_job.status == JobStatus.COMPLETED
+    assert updated_job.tenant_id == "redesim"
+    assert updated_job.result_path is not None
+    assert Path(updated_job.result_path).parent.name == "redesim"
 
     assert len(service.partial_snapshots) >= 2
     last_snapshot = service.partial_snapshots[-1]
@@ -364,7 +362,7 @@ def test_run_validation_job_supports_redesim_v2_semicolon_csv(
     ("tenant_id", "file_name", "content", "encoding"),
     [
         ("default", "lote.csv", CSV_CONTENT, "utf-8"),
-        ("redesim_v2", "redesim_v2.csv", REDESIM_V2_DUPLICATE_CONTENT, "iso-8859-1"),
+        ("redesim", "redesim.csv", REDESIM_V2_DUPLICATE_CONTENT, "iso-8859-1"),
     ],
 )
 def test_run_validation_job_writes_artifacts_to_tenant_scoped_results_directory(
@@ -479,13 +477,13 @@ def test_review_flags_reject_rows_outside_the_current_result(tmp_path, monkeypat
         )
 
 
-def test_job_csv_read_and_update_preserve_redesim_v2_csv_format(tmp_path):
+def test_job_csv_read_and_update_preserve_redesim_csv_format(tmp_path):
     csv_path = tmp_path / "redesim.csv"
     csv_path.write_text(REDESIM_V2_DUPLICATE_CONTENT, encoding="iso-8859-1")
 
     service = JobService()
     job = service.create_job(
-        tenant_id="redesim_v2",
+        tenant_id="redesim",
         file_path=str(csv_path),
         file_name="redesim.csv",
     )
