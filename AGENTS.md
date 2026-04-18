@@ -160,6 +160,7 @@ Keep operational result filtering/search behavior in `frontend/src/lib/presentat
 Keep result review-marker filtering in `frontend/src/lib/presentation.ts` helpers over `review_flags`; workspace components should only own local toggle/filter state and rendering.
 When filtering result categories in the frontend, derive available categories from `CATEGORY_*` issue codes in the existing grouped problem payload unless the backend contract explicitly grows a category field.
 Reset local result filters/search when `currentJobId` changes so operators do not carry stale views between jobs.
+Keep frontend authentication plumbing centralized in `frontend/src/lib/api.ts`: `/login` is the only unauthenticated flow, and the rest of the workspace should consume the issued `X-API-Key` through shared helpers instead of ad hoc fetch calls.
 Improvement Workflow
 
 When the user asks for an improvement:

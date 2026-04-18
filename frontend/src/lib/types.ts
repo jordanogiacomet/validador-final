@@ -14,6 +14,20 @@ export interface TenantListItem {
   is_default: boolean;
 }
 
+export interface LoginRequestPayload {
+  tenantId: string;
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  tenant_id: string;
+  operator_id: string;
+  api_key_id: string;
+  x_api_key: string;
+  header_name: string;
+}
+
 export interface UploadResponse {
   job_id: string;
   status: JobStatus;

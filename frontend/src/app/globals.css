@@ -74,6 +74,28 @@ p {
   padding: 28px 0 42px;
 }
 
+.auth-shell {
+  min-height: calc(100vh - 70px);
+  display: grid;
+  place-items: center;
+}
+
+.auth-panel {
+  width: min(460px, 100%);
+}
+
+.auth-title {
+  font-size: 1.7rem;
+}
+
+.auth-copy {
+  margin-top: 10px;
+}
+
+.auth-submit-error {
+  margin-top: -4px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);

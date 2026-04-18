@@ -568,8 +568,8 @@
         "Checks de frontend passam"
       ],
       "priority": 33,
-      "passes": false,
-      "notes": "O tenant deve ser informado textualmente na tela para deixar explícito em qual contexto multi-tenant o operador está entrando."
+      "passes": true,
+      "notes": "Implementado no frontend com tela de login operacional exigindo tenant digitado, usuário e senha antes de liberar o workspace autenticado. O fluxo consome o `/login` existente, mantém o tenant explícito na UI e cobre renderização, validação e mensagens de erro em testes de frontend."
     },
     {
       "id": "US-034",

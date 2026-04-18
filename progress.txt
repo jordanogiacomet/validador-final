@@ -50,6 +50,7 @@ Last Updated: 2026-04-18 12:00 -03
 - Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
 - New tenant-owned rule config should use typed Pydantic sub-models in `app/core/tenant_config.py`; validate regex-like entries during tenant load so jobs do not fail mid-validation.
+- Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
 
 ---
 
@@ -256,7 +257,19 @@ Expected architectural direction:
   - Module-level `JobService()` in routes.py provides shared in-memory state across requests (single process)
   - Rules are not auto-registered at module import — need explicit `ensure_rules_registered()` call before engine use
   - Use `raise HTTPException(...) from None` inside except clauses to satisfy ruff B904
-  - TestClient executes BackgroundTasks synchronously, which simplifies testing async flows
+- TestClient executes BackgroundTasks synchronously, which simplifies testing async flows
+---
+
+## 2026-04-18 12:52 -03 - US-033
+- Implemented a frontend login gate in the Next.js app with explicit `tenant`, `username`, and `password` fields before entering the operational workspace.
+- Centralized in-memory frontend auth in `frontend/src/lib/api.ts`, adding `/login` consumption and shared `X-API-Key` injection for authenticated workspace fetches.
+- Added focused frontend coverage for login rendering, required-field validation, backend error states, and authenticated header injection.
+- Manual browser verification is still needed in a real browser because no browser automation tool is configured in this environment.
+- Files changed: `AGENTS.md`, `frontend/package.json`, `frontend/package-lock.json`, `frontend/src/app/globals.css`, `frontend/src/app/page.tsx`, `frontend/src/components/login-screen.tsx`, `frontend/src/components/login-screen.test.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/lib/types.ts`, `frontend/src/test/setup.ts`, `frontend/vitest.config.ts`
+- **Learnings for future iterations:**
+  - Frontend login flows should keep the typed tenant input explicit in the UI even when the API already scopes later calls to a single tenant.
+  - Keep frontend auth header injection in one place (`frontend/src/lib/api.ts`) so later session persistence/logout work does not require touching each workspace fetch path.
+  - Vitest component coverage in `frontend/` now uses `jsdom` + `@testing-library/react`; shared cleanup belongs in `frontend/src/test/setup.ts`.
 ---
 
 ## 2026-04-17 - US-012

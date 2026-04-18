@@ -1,6 +1,8 @@
 import type {
   DuplicateResolutionResponse,
   JobListItemResponse,
+  LoginRequestPayload,
+  LoginResponse,
   JobResultPayload,
   JobStatusResponse,
   ReviewFlagActionStatus,
@@ -14,6 +16,9 @@ import type {
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const DEPLOYED_BACKEND_PORT = "30091";
+const API_KEY_HEADER = "X-API-Key";
+
+let currentSession: LoginResponse | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -43,6 +48,39 @@ export function buildApiUrl(path: string): string {
   return `${getApiBaseUrl()}${normalizedPath}`;
 }
 
+export function getApiSession(): LoginResponse | null {
+  return currentSession;
+}
+
+export function setApiSession(session: LoginResponse | null): void {
+  currentSession = session;
+}
+
+export function clearApiSession(): void {
+  currentSession = null;
+}
+
+function buildRequestHeaders(headers?: HeadersInit, includeAuth = true): Headers {
+  const nextHeaders = new Headers(headers);
+  const apiKey = includeAuth ? currentSession?.x_api_key?.trim() : "";
+  if (apiKey) {
+    nextHeaders.set(API_KEY_HEADER, apiKey);
+  }
+  return nextHeaders;
+}
+
+async function apiFetch(
+  path: string,
+  init: RequestInit = {},
+  options: { includeAuth?: boolean } = {},
+): Promise<Response> {
+  const includeAuth = options.includeAuth ?? true;
+  return fetch(buildApiUrl(path), {
+    ...init,
+    headers: buildRequestHeaders(init.headers, includeAuth),
+  });
+}
+
 async function readResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json")
@@ -61,8 +99,27 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 export async function listTenants(): Promise<TenantListItem[]> {
-  const response = await fetch(buildApiUrl("/tenants"));
+  const response = await apiFetch("/tenants");
   return readResponse<TenantListItem[]>(response);
+}
+
+export async function loginOperator(payload: LoginRequestPayload): Promise<LoginResponse> {
+  const response = await apiFetch(
+    "/login",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        tenant_id: payload.tenantId.trim(),
+        username: payload.username.trim(),
+        password: payload.password,
+      }),
+    },
+    { includeAuth: false },
+  );
+  return readResponse<LoginResponse>(response);
 }
 
 export async function validateFile(params: {
@@ -77,7 +134,7 @@ export async function validateFile(params: {
     tenant_id: params.tenantId,
     validation_scope: params.validationScope,
   });
-  const response = await fetch(buildApiUrl(`/validate?${query.toString()}`), {
+  const response = await apiFetch(`/validate?${query.toString()}`, {
     method: "POST",
     body: formData,
   });
@@ -85,24 +142,24 @@ export async function validateFile(params: {
 }
 
 export async function listActiveJobs(): Promise<JobListItemResponse[]> {
-  const response = await fetch(buildApiUrl("/jobs?active_only=true"));
+  const response = await apiFetch("/jobs?active_only=true");
   return readResponse<JobListItemResponse[]>(response);
 }
 
 export async function getJob(jobId: string): Promise<JobStatusResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}`));
+  const response = await apiFetch(`/jobs/${jobId}`);
   return readResponse<JobStatusResponse>(response);
 }
 
 export async function cancelJob(jobId: string): Promise<JobStatusResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/cancel`), {
+  const response = await apiFetch(`/jobs/${jobId}/cancel`, {
     method: "POST",
   });
   return readResponse<JobStatusResponse>(response);
 }
 
 export async function getJobResult(jobId: string): Promise<JobResultPayload> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/result`));
+  const response = await apiFetch(`/jobs/${jobId}/result`);
   return readResponse<JobResultPayload>(response);
 }
 
@@ -110,7 +167,7 @@ export async function getJobRow(
   jobId: string,
   rowIndex: number,
 ): Promise<RowReadResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/rows/${rowIndex}`));
+  const response = await apiFetch(`/jobs/${jobId}/rows/${rowIndex}`);
   return readResponse<RowReadResponse>(response);
 }
 
@@ -119,7 +176,7 @@ export async function updateJobRow(
   rowIndex: number,
   updates: Record<string, string>,
 ): Promise<RowUpdateResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/rows/${rowIndex}`), {
+  const response = await apiFetch(`/jobs/${jobId}/rows/${rowIndex}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -134,7 +191,7 @@ export async function setJobRowReviewFlag(
   rowIndex: number,
   status: ReviewFlagActionStatus,
 ): Promise<RowReviewFlagResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/rows/${rowIndex}/flag`), {
+  const response = await apiFetch(`/jobs/${jobId}/rows/${rowIndex}/flag`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -149,7 +206,7 @@ export async function resolveDuplicateRows(params: {
   rowIndices: number[];
   keepRowIndex: number;
 }): Promise<DuplicateResolutionResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${params.jobId}/duplicates/resolve`), {
+  const response = await apiFetch(`/jobs/${params.jobId}/duplicates/resolve`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -163,7 +220,7 @@ export async function resolveDuplicateRows(params: {
 }
 
 export async function reprocessJob(jobId: string): Promise<UploadResponse> {
-  const response = await fetch(buildApiUrl(`/jobs/${jobId}/reprocess`), {
+  const response = await apiFetch(`/jobs/${jobId}/reprocess`, {
     method: "POST",
   });
   return readResponse<UploadResponse>(response);
