@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
 from app.core.context import ValidationContext
 from app.core.issue import ValidationIssue
+from app.core.metrics import record_llm_request
 from app.core.tenant_config import LLMConfig
 from app.rules.base import BaseRule
 
@@ -142,6 +144,7 @@ class LLMAuditRule(BaseRule):
         prompt = format_prompt(template, context.normalized_row)
 
         try:
+            started_at = time.perf_counter()
             response_text = self._get_client().complete(
                 model=llm_config.model,
                 prompt=prompt,
@@ -149,6 +152,12 @@ class LLMAuditRule(BaseRule):
                 max_tokens=llm_config.max_tokens,
             )
         except Exception as exc:
+            record_llm_request(
+                context.tenant.tenant_id,
+                llm_config.model,
+                (time.perf_counter() - started_at) * 1000.0,
+                outcome="error",
+            )
             logger.warning("LLM audit failed for row %d: %s", context.row_index, exc)
             return [
                 ValidationIssue(
@@ -159,5 +168,11 @@ class LLMAuditRule(BaseRule):
                 )
             ]
 
+        record_llm_request(
+            context.tenant.tenant_id,
+            llm_config.model,
+            (time.perf_counter() - started_at) * 1000.0,
+            outcome="success",
+        )
         findings = parse_llm_response(response_text)
         return normalize_findings(findings)

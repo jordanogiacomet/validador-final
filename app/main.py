@@ -1,11 +1,16 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware import request_id_middleware
 from app.api.routes import router
 from app.core.logging import configure_logging
+from app.core.metrics import (
+    get_metrics_content_type,
+    metrics_enabled,
+    render_metrics,
+)
 
 configure_logging()
 
@@ -42,3 +47,14 @@ app.include_router(router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    if not metrics_enabled():
+        raise HTTPException(status_code=404, detail="Metrics endpoint disabled")
+
+    return Response(
+        content=render_metrics(),
+        headers={"Content-Type": get_metrics_content_type()},
+    )

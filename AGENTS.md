@@ -130,6 +130,11 @@ Keep API handlers thin
 API endpoints should delegate orchestration to services
 API code should not contain validation business rules
 API code should not know tenant-specific rule details beyond selecting the tenant or config
+Observability Guidance
+Keep Prometheus wiring centralized in `app/core/metrics.py`
+Metrics must stay opt-in via `VALIDATOR_METRICS_ENABLED`
+Never use `job_id`, `request_id`, or other per-request values as Prometheus labels
+Expose `/metrics` from the API layer only; services and rules should call helper functions instead of importing `prometheus_client` directly
 Reporting Guidance
 Reports should be practical for operational correction workflows
 Report formatting should be separated from validation logic

@@ -335,8 +335,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 19,
-      "passes": false,
-      "notes": "Evitar labels de alta cardinalidade. Manter o endpoint público apenas em ambiente interno e permitir desativação total via config."
+      "passes": true,
+      "notes": "Implementado com `app/core/metrics.py` usando registry dedicado do Prometheus, endpoint `/metrics` opt-in via `VALIDATOR_METRICS_ENABLED`, métricas de jobs/regras/issues/LLM e smoke tests cobrindo enable/disable e falha de LLM. Labels de alta cardinalidade como `job_id` e `request_id` foram evitados."
     },
     {
       "id": "US-020",

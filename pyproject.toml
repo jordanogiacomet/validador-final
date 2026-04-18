@@ -12,6 +12,7 @@ dependencies = [
 "fastapi[standard]",
 "pydantic>=2",
 "pydantic-settings>=2",
+"prometheus_client",
 "python-multipart",
 "pandas",
 "reportlab",
@@ -28,6 +29,9 @@ dev = [
 
 [tool.fastapi]
 entrypoint = "app.main:app"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 100

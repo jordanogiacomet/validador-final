@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.core.job import JobRecord, JobStatus
 from app.core.logging import get_logger, log_event
+from app.core.metrics import record_job_duration, record_job_status_transition
 
 _logger = get_logger("job_service")
 
@@ -34,6 +35,7 @@ class JobService:
         )
         self._jobs[job.job_id] = job
         self._persist_jobs()
+        record_job_status_transition(job.tenant_id, job.status.value)
         log_event(
             _logger,
             "job.created",
@@ -68,6 +70,7 @@ class JobService:
         job = self._get_or_raise(job_id)
         job.mark_running()
         self._persist_jobs()
+        record_job_status_transition(job.tenant_id, job.status.value)
         log_event(
             _logger,
             "job.started",
@@ -96,6 +99,8 @@ class JobService:
             total_issues=total_issues,
         )
         self._persist_jobs()
+        record_job_status_transition(job.tenant_id, job.status.value)
+        record_job_duration(job.tenant_id, job.status.value, _job_duration_ms(job))
         log_event(
             _logger,
             "job.completed",
@@ -112,6 +117,8 @@ class JobService:
         job = self._get_or_raise(job_id)
         job.mark_failed(error_message)
         self._persist_jobs()
+        record_job_status_transition(job.tenant_id, job.status.value)
+        record_job_duration(job.tenant_id, job.status.value, _job_duration_ms(job))
         log_event(
             _logger,
             "job.failed",
@@ -128,6 +135,8 @@ class JobService:
         if job.status == JobStatus.QUEUED:
             job.mark_canceled("O lote foi cancelado antes do início do processamento.")
             self._persist_jobs()
+            record_job_status_transition(job.tenant_id, job.status.value)
+            record_job_duration(job.tenant_id, job.status.value, _job_duration_ms(job))
             return job
         if job.status == JobStatus.RUNNING:
             job.request_cancellation()
@@ -145,6 +154,8 @@ class JobService:
             raise ValueError("Only queued or running jobs can be canceled")
         job.mark_canceled(detail)
         self._persist_jobs()
+        record_job_status_transition(job.tenant_id, job.status.value)
+        record_job_duration(job.tenant_id, job.status.value, _job_duration_ms(job))
         log_event(
             _logger,
             "job.canceled",

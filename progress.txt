@@ -32,6 +32,7 @@ Last Updated: 2026-04-17 15:49 -02
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
 - Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
 - Cross-request correlation comes from `app/api/middleware.py` (request_id contextvar + `X-Request-ID` header echoed back on responses); do not introduce a parallel request-id mechanism.
+- Prometheus instrumentation should stay centralized in `app/core/metrics.py`, remain gated by `VALIDATOR_METRICS_ENABLED`, and never use `job_id`/`request_id` as metric labels.
 
 ---
 
@@ -436,4 +437,19 @@ Expected architectural direction:
   - The structured logger uses its own `validator` namespace with `propagate=False`, so pytest's `caplog` will not capture records by default; attach a recording handler directly to the `validator` logger (and flip `_configured=True`) to intercept events in tests
   - FastAPI `StreamHandler(stream=sys.stdout)` is captured by pytest's `capsys` as long as the handler is constructed after the fixture has swapped `sys.stdout`, so call `configure_logging(force=True)` inside the test body
   - Keeping the logger as a thin function (`log_event`) avoids leaking a logging framework into rules, engines, or report code — the pattern is the expected extension point for future metrics/audit stories
+---
+
+## 2026-04-18 10:14 -03 - US-019
+- Added centralized Prometheus instrumentation in `app/core/metrics.py` with a dedicated registry, opt-in gating via `VALIDATOR_METRICS_ENABLED`, job lifecycle counters/histograms, rule execution and issue counters, and LLM request latency/failure metrics
+- Exposed `/metrics` in `app/main.py` while keeping full disablement via 404 when metrics are not enabled
+- Instrumented `ValidationEngine`, `JobService`, and `LLMAuditRule` through metrics helpers instead of direct Prometheus calls, preserving thin API and reusable core/service boundaries
+- Added focused smoke coverage in `tests/test_metrics.py` for disabled-by-default behavior, Prometheus payload exposure when enabled, and LLM failure metrics
+- Files changed: `app/core/metrics.py`, `app/core/engine.py`, `app/main.py`, `app/rules/llm_audit.py`, `app/services/job_service.py`, `tests/test_metrics.py`, `pyproject.toml`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (284 tests)
+- **Learnings for future iterations:**
+  - Use a dedicated Prometheus `CollectorRegistry` in `app/core/metrics.py` so tests can reset instrumentation cleanly without colliding with the process-global default registry
+  - Keep metric labels low-cardinality and tenant-agnostic: `tenant_id`, `rule`, `severity`, `status`, and bounded `outcome` values are acceptable; `job_id` and `request_id` are not
+  - LLM latency/failure metrics belong inside `LLMAuditRule`, while rule-level execution and issue counts belong in the generic engine so non-LLM rules inherit observability automatically
 ---

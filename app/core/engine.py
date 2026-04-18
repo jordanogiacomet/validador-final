@@ -1,7 +1,10 @@
+import time
+
 from app.core.canonical_fields import normalize_row
 from app.core.context import ValidationContext
 from app.core.duplicate_items import get_duplicate_item_row_indices
 from app.core.issue import ValidationIssue
+from app.core.metrics import record_rule_execution
 from app.core.registry import RULE_REGISTRY
 from app.core.tenant_config import TenantConfig
 from app.core.validation_scope import DEFAULT_VALIDATION_SCOPE, ValidationScope
@@ -47,7 +50,15 @@ class ValidationEngine:
 
         for rule in self.get_enabled_rules():
             if rule.applies(context):
-                issues.extend(rule.validate(context))
+                started_at = time.perf_counter()
+                rule_issues = rule.validate(context)
+                record_rule_execution(
+                    self.tenant.tenant_id,
+                    rule.name,
+                    (time.perf_counter() - started_at) * 1000.0,
+                    rule_issues,
+                )
+                issues.extend(rule_issues)
 
         if shared_context is not None:
             shared_context.clear()
