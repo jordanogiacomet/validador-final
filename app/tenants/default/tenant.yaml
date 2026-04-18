@@ -37,6 +37,7 @@ suspicious_patterns:
 llm:
   enabled: false
   healthcheck_enabled: false
+  fallback_model:
   cache_ttl_seconds: 0
 
 api_keys:

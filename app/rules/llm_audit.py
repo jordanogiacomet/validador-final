@@ -47,6 +47,12 @@ class LoadedPromptTemplate:
     template: str
 
 
+@dataclass(frozen=True)
+class LLMAttemptFailure:
+    model: str
+    error: Exception
+
+
 class LLMClient(Protocol):
     def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str: ...
 
@@ -136,11 +142,28 @@ def build_llm_issue_meta(
     *,
     model: str,
     prompt_version: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "model": model,
         "prompt_version": prompt_version,
     }
+
+
+def build_llm_failure_meta(
+    *,
+    model: str,
+    prompt_version: str,
+    failures: list[LLMAttemptFailure],
+) -> dict[str, Any]:
+    meta = build_llm_issue_meta(
+        model=model,
+        prompt_version=prompt_version,
+    )
+    attempted_models = [failure.model for failure in failures]
+    meta["attempted_models"] = attempted_models
+    meta["primary_failure"] = describe_llm_error(failures[0].error)
+    meta["final_failure"] = describe_llm_error(failures[-1].error)
+    return meta
 
 
 def record_llm_audit_metadata(
@@ -183,6 +206,59 @@ def parse_llm_response(response_text: str) -> list[dict[str, str]]:
                 "field": str(f["field"]) if f.get("field") else None,
             })
     return valid
+
+
+def extract_llm_error_status_code(exc: Exception) -> int | None:
+    for attr_name in ("status_code", "status"):
+        status_code = _coerce_status_code(getattr(exc, attr_name, None))
+        if status_code is not None:
+            return status_code
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        return _coerce_status_code(getattr(response, "status_code", None))
+
+    return None
+
+
+def _coerce_status_code(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_retriable_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+
+    error_name = type(exc).__name__.lower()
+    if "timeout" in error_name:
+        return True
+    if "ratelimit" in error_name or ("rate" in error_name and "limit" in error_name):
+        return True
+
+    status_code = extract_llm_error_status_code(exc)
+    return status_code == 429 or (
+        status_code is not None and 500 <= status_code <= 599
+    )
+
+
+def describe_llm_error(exc: Exception) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return f"{type(exc).__name__}: {detail}"
+    return type(exc).__name__
+
+
+def configured_llm_models(llm_config: LLMConfig) -> list[str]:
+    models = [llm_config.model]
+    fallback_model = (llm_config.fallback_model or "").strip()
+    if fallback_model and fallback_model != llm_config.model:
+        models.append(fallback_model)
+    return models
 
 
 def normalize_findings(
@@ -257,103 +333,136 @@ class LLMAuditRule(BaseRule):
                 )
             ]
 
-        record_llm_audit_metadata(
-            context.shared_context,
-            model=llm_config.model,
-            prompt_version=loaded_prompt.version,
-        )
         prompt = format_prompt(loaded_prompt.template, context.normalized_row)
         cache_ttl_seconds = llm_config.cache_ttl_seconds
-        cache_key = build_llm_cache_key(
-            tenant_id=context.tenant.tenant_id,
-            prompt_version=loaded_prompt.version,
-            model=llm_config.model,
-            payload=normalize_llm_cache_payload(context.normalized_row),
-        )
+        cache_payload = normalize_llm_cache_payload(context.normalized_row)
         force_refresh = resolve_force_refresh(
             context.shared_context.get(LLM_FORCE_REFRESH_PARAM)
         )
+        failures: list[LLMAttemptFailure] = []
+        models = configured_llm_models(llm_config)
 
-        if cache_ttl_seconds > 0:
-            if force_refresh:
-                record_llm_cache_lookup(
-                    context.tenant.tenant_id,
-                    llm_config.model,
-                    outcome="bypass",
-                )
-            else:
-                try:
-                    cached_response = self._get_cache().get(
-                        cache_key,
-                        ttl_seconds=cache_ttl_seconds,
-                    )
-                except Exception as exc:
-                    logger.warning("LLM audit cache read failed: %s", exc)
-                    cached_response = None
+        for index, model in enumerate(models):
+            record_llm_audit_metadata(
+                context.shared_context,
+                model=model,
+                prompt_version=loaded_prompt.version,
+            )
+            cache_key = build_llm_cache_key(
+                tenant_id=context.tenant.tenant_id,
+                prompt_version=loaded_prompt.version,
+                model=model,
+                payload=cache_payload,
+            )
 
-                if cached_response is not None:
+            if cache_ttl_seconds > 0:
+                if force_refresh:
                     record_llm_cache_lookup(
                         context.tenant.tenant_id,
-                        llm_config.model,
-                        outcome="hit",
+                        model,
+                        outcome="bypass",
                     )
-                    findings = parse_llm_response(cached_response)
-                    return normalize_findings(
-                        findings,
-                        model=llm_config.model,
-                        prompt_version=loaded_prompt.version,
+                else:
+                    try:
+                        cached_response = self._get_cache().get(
+                            cache_key,
+                            ttl_seconds=cache_ttl_seconds,
+                        )
+                    except Exception as exc:
+                        logger.warning("LLM audit cache read failed: %s", exc)
+                        cached_response = None
+
+                    if cached_response is not None:
+                        record_llm_cache_lookup(
+                            context.tenant.tenant_id,
+                            model,
+                            outcome="hit",
+                        )
+                        findings = parse_llm_response(cached_response)
+                        return normalize_findings(
+                            findings,
+                            model=model,
+                            prompt_version=loaded_prompt.version,
+                        )
+
+                    record_llm_cache_lookup(
+                        context.tenant.tenant_id,
+                        model,
+                        outcome="miss",
                     )
 
-                record_llm_cache_lookup(
-                    context.tenant.tenant_id,
-                    llm_config.model,
-                    outcome="miss",
-                )
-
-        try:
             started_at = time.perf_counter()
-            response_text = self._get_client().complete(
-                model=llm_config.model,
-                prompt=prompt,
-                temperature=llm_config.temperature,
-                max_tokens=llm_config.max_tokens,
-            )
-        except Exception as exc:
+            try:
+                response_text = self._get_client().complete(
+                    model=model,
+                    prompt=prompt,
+                    temperature=llm_config.temperature,
+                    max_tokens=llm_config.max_tokens,
+                )
+            except Exception as exc:
+                record_llm_request(
+                    context.tenant.tenant_id,
+                    model,
+                    (time.perf_counter() - started_at) * 1000.0,
+                    outcome="error",
+                )
+                logger.warning(
+                    "LLM audit failed for row %d using model %s: %s",
+                    context.row_index,
+                    model,
+                    exc,
+                )
+                failures.append(LLMAttemptFailure(model=model, error=exc))
+
+                can_try_fallback = (
+                    index == 0
+                    and len(models) > 1
+                    and is_retriable_llm_error(exc)
+                )
+                if can_try_fallback:
+                    continue
+
+                attempted_models = " -> ".join(failure.model for failure in failures)
+                primary_failure = describe_llm_error(failures[0].error)
+                final_failure = describe_llm_error(failures[-1].error)
+                message = (
+                    "Auditoria LLM falhou; "
+                    f"modelos tentados: {attempted_models}; "
+                    f"falha primária: {primary_failure}"
+                )
+                if len(failures) > 1:
+                    message = f"{message}; falha final: {final_failure}"
+                return [
+                    ValidationIssue(
+                        code="LLM_AUDIT_FAILURE",
+                        severity="warning",
+                        message=message,
+                        field=None,
+                        meta=build_llm_failure_meta(
+                            model=model,
+                            prompt_version=loaded_prompt.version,
+                            failures=failures,
+                        ),
+                    )
+                ]
+
+            if cache_ttl_seconds > 0:
+                try:
+                    self._get_cache().set(cache_key, response_text)
+                except Exception as exc:
+                    logger.warning("LLM audit cache write failed: %s", exc)
+
             record_llm_request(
                 context.tenant.tenant_id,
-                llm_config.model,
+                model,
                 (time.perf_counter() - started_at) * 1000.0,
-                outcome="error",
+                outcome="success",
             )
-            logger.warning("LLM audit failed for row %d: %s", context.row_index, exc)
-            return [
-                ValidationIssue(
-                    code="LLM_AUDIT_FAILURE",
-                    severity="warning",
-                    message=f"Auditoria LLM falhou: {type(exc).__name__}",
-                    field=None,
-                    meta=build_llm_issue_meta(
-                        model=llm_config.model,
-                        prompt_version=loaded_prompt.version,
-                    ),
-                )
-            ]
+            findings = parse_llm_response(response_text)
+            return normalize_findings(
+                findings,
+                model=model,
+                prompt_version=loaded_prompt.version,
+            )
 
-        if cache_ttl_seconds > 0:
-            try:
-                self._get_cache().set(cache_key, response_text)
-            except Exception as exc:
-                logger.warning("LLM audit cache write failed: %s", exc)
-
-        record_llm_request(
-            context.tenant.tenant_id,
-            llm_config.model,
-            (time.perf_counter() - started_at) * 1000.0,
-            outcome="success",
-        )
-        findings = parse_llm_response(response_text)
-        return normalize_findings(
-            findings,
-            model=llm_config.model,
-            prompt_version=loaded_prompt.version,
-        )
+        return []

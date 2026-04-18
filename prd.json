@@ -499,8 +499,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 29,
-      "passes": false,
-      "notes": "Manter a política de retry explícita e estreita. Considerar integração com o cache da US-028 para evitar repetir payloads já respondidos."
+      "passes": true,
+      "notes": "Implementado com `llm.fallback_model` opcional no tenant, retry estreito para timeouts, HTTP 429 e HTTP 5xx, metadados estruturados com modelos tentados e falhas primária/final, e cache mantido por modelo."
     },
     {
       "id": "US-030",

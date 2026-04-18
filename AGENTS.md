@@ -152,6 +152,7 @@ Prefer structured issue data over report-specific logic inside rules
 Avoid coupling report generation tightly to rule internals
 LLM prompts may carry YAML frontmatter with `version`; keep legacy prompt files working with a default version and propagate `prompt_version` plus `model` through structured issue/report metadata instead of ad-hoc report-only fields
 LLM response cache TTL belongs in `tenant.llm.cache_ttl_seconds`; keep cache key/persistence helpers centralized in `app/core/llm_cache.py`, use `VALIDATOR_LLM_CACHE_PATH` for storage location, and treat `force_refresh` as a job/API param that bypasses cache reads while refreshing successful writes
+LLM fallback model selection belongs in `tenant.llm.fallback_model`; retries should stay narrow to transient failures such as timeouts, HTTP 429, and HTTP 5xx, and failure issues should preserve the attempted model sequence
 Improvement Workflow
 
 When the user asks for an improvement:

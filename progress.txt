@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 11:44 -03
+Last Updated: 2026-04-18 11:52 -03
 
 ---
 
@@ -28,6 +28,7 @@ Last Updated: 2026-04-18 11:44 -03
 - Tenant-specific prompt files live under `app/tenants/{tenant_id}/prompts/`; reference via `prompt_file` in tenant YAML.
 - Parse optional YAML frontmatter for tenant prompt files at load time and default legacy prompts to a stable version token so LLM audit/report metadata stays reproducible without breaking older prompts.
 - LLM response caching is tenant-configured with `llm.cache_ttl_seconds`; cache keys and persistence live in `app/core/llm_cache.py`, storage path comes from `VALIDATOR_LLM_CACHE_PATH`, and `force_refresh` job params bypass cache reads while refreshing successful writes.
+- LLM fallback model selection is tenant-configured with `llm.fallback_model`; retry only transient failures (timeouts, HTTP 429, HTTP 5xx), and preserve attempted model sequence plus primary/final failure details in warning issue metadata.
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
@@ -589,4 +590,21 @@ Expected architectural direction:
   - Cache storage should stay outside the LLM rule in `app/core/llm_cache.py`; the rule only builds keys, reads/writes successful responses, and preserves existing failure warnings
   - Keep cache metrics centralized in `app/core/metrics.py` with bounded labels and no per-job identifiers, matching the existing observability contract
   - Set `VALIDATOR_LLM_CACHE_PATH` in tests that exercise real tenant LLM flows so cache files do not leak into the default `results/` tree
+---
+
+## 2026-04-18 11:52 -03 - US-029
+- Added tenant-configured LLM fallback support through `llm.fallback_model` while preserving the existing primary-model behavior when no fallback is configured
+- Updated `LLMAuditRule` to retry the fallback model only for transient failures: timeout-like errors, HTTP 429, and HTTP 5xx
+- Failure warnings now include the attempted model sequence plus primary and final failure details in structured issue metadata
+- Preserved LLM cache semantics per model: cache hits short-circuit a model attempt, successful fallback responses are stored under the fallback model key, and `force_refresh` still bypasses reads while refreshing successful writes
+- Files changed: `app/core/tenant_config.py`, `app/rules/llm_audit.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `app/tenants/redesim/tenant.yaml`, `app/tenants/redesim_v2/tenant.yaml`, `tests/test_llm_audit.py`, `tests/test_tenant.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app/rules/llm_audit.py app/core/tenant_config.py tests/test_llm_audit.py tests/test_tenant.py`
+  - `pytest tests/test_llm_audit.py tests/test_tenant.py`
+  - `ruff check app tests`
+  - `pytest` (341 tests)
+- **Learnings for future iterations:**
+  - Keep LLM fallback policy explicit and narrow so configuration does not turn every provider/client error into a duplicate request
+  - Cache keys already include model, so fallback cache behavior composes naturally when the attempted model is passed through the existing key builder
+  - Failure issue metadata is the right place to preserve attempted model order and primary/final failure reasons; reports and downstream tools can read structured details without parsing message text
 ---

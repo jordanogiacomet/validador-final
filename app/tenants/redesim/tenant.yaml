@@ -208,6 +208,7 @@ categories:
 
 llm:
   enabled: false
+  fallback_model:
 
 api_keys:
   - key_id: redesim-local

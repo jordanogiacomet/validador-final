@@ -9,6 +9,7 @@ from app.rules.llm_audit import (
     LLM_AUDIT_METADATA_KEY,
     LLMAuditRule,
     format_prompt,
+    is_retriable_llm_error,
     normalize_findings,
     parse_llm_response,
     parse_prompt_template,
@@ -27,6 +28,7 @@ def _tenant(
     llm_enabled: bool = True,
     prompt_file: str = "prompts/audit.txt",
     cache_ttl_seconds: int = 0,
+    fallback_model: str | None = None,
 ) -> TenantConfig:
     return TenantConfig(
         tenant_id="empresa_exemplo",
@@ -39,6 +41,7 @@ def _tenant(
             max_tokens=1024,
             prompt_file=prompt_file,
             cache_ttl_seconds=cache_ttl_seconds,
+            fallback_model=fallback_model,
         ),
     )
 
@@ -88,6 +91,34 @@ class FakeLLMClient:
         if self.error:
             raise self.error
         return self.response
+
+
+class RoutingLLMClient:
+    def __init__(self, responses_by_model: dict[str, str | Exception]):
+        self.responses_by_model = responses_by_model
+        self.calls: list[dict] = []
+
+    def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
+        self.calls.append({
+            "model": model,
+            "prompt": prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        })
+        response = self.responses_by_model[model]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class StatusCodeError(Exception):
+    def __init__(self, status_code: int):
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+class RateLimitError(Exception):
+    pass
 
 
 # --- applies tests ---
@@ -166,6 +197,15 @@ def test_parse_prompt_template_defaults_legacy_without_frontmatter():
 
     assert loaded.version == DEFAULT_PROMPT_VERSION
     assert loaded.template == "Desc: {descricao}"
+
+
+def test_retriable_error_policy_covers_timeout_5xx_and_rate_limit():
+    assert is_retriable_llm_error(TimeoutError("timed out")) is True
+    assert is_retriable_llm_error(StatusCodeError(503)) is True
+    assert is_retriable_llm_error(StatusCodeError(429)) is True
+    assert is_retriable_llm_error(RateLimitError("too many requests")) is True
+    assert is_retriable_llm_error(StatusCodeError(400)) is False
+    assert is_retriable_llm_error(RuntimeError("invalid payload")) is False
 
 
 # --- normalize_findings tests ---
@@ -258,10 +298,13 @@ def test_validate_llm_failure_returns_warning():
     assert issues[0].code == "LLM_AUDIT_FAILURE"
     assert issues[0].severity == "warning"
     assert "TimeoutError" in issues[0].message
-    assert issues[0].meta == {
-        "model": "claude-sonnet-4-20250514",
-        "prompt_version": "empresa_exemplo-v1",
-    }
+    assert "connection timed out" in issues[0].message
+    assert issues[0].meta["model"] == "claude-sonnet-4-20250514"
+    assert issues[0].meta["prompt_version"] == "empresa_exemplo-v1"
+    assert issues[0].meta["attempted_models"] == ["claude-sonnet-4-20250514"]
+    assert issues[0].meta["primary_failure"] == (
+        "TimeoutError: connection timed out"
+    )
 
 
 def test_validate_generic_exception_returns_warning():
@@ -272,6 +315,7 @@ def test_validate_generic_exception_returns_warning():
     assert len(issues) == 1
     assert issues[0].code == "LLM_AUDIT_FAILURE"
     assert issues[0].severity == "warning"
+    assert issues[0].meta["attempted_models"] == ["claude-sonnet-4-20250514"]
 
 
 def test_validate_prompt_not_found():
@@ -296,6 +340,149 @@ def test_validate_passes_correct_params_to_client():
     call = client.calls[0]
     assert call["temperature"] == 0.0
     assert call["max_tokens"] == 1024
+
+
+def test_validate_primary_success_does_not_call_fallback():
+    client = RoutingLLMClient(
+        {
+            "claude-sonnet-4-20250514": (
+                '[{"issue": "Primário ok", "severity": "warning", '
+                '"field": "descricao"}]'
+            ),
+            "claude-haiku-4-20250514": (
+                '[{"issue": "Fallback não deveria chamar", "field": "descricao"}]'
+            ),
+        }
+    )
+    rule = LLMAuditRule(client=client)
+    ctx = _ctx(
+        tenant=_tenant(
+            fallback_model="claude-haiku-4-20250514",
+        )
+    )
+
+    issues = rule.validate(ctx)
+
+    assert [call["model"] for call in client.calls] == ["claude-sonnet-4-20250514"]
+    assert "Primário ok" in issues[0].message
+    assert issues[0].meta == {
+        "model": "claude-sonnet-4-20250514",
+        "prompt_version": "empresa_exemplo-v1",
+    }
+
+
+def test_validate_uses_fallback_after_retriable_primary_failure():
+    client = RoutingLLMClient(
+        {
+            "claude-sonnet-4-20250514": TimeoutError("primary timed out"),
+            "claude-haiku-4-20250514": (
+                '[{"issue": "Fallback ok", "severity": "warning", '
+                '"field": "descricao"}]'
+            ),
+        }
+    )
+    rule = LLMAuditRule(client=client)
+    ctx = _ctx(
+        tenant=_tenant(
+            fallback_model="claude-haiku-4-20250514",
+        )
+    )
+
+    issues = rule.validate(ctx)
+
+    assert [call["model"] for call in client.calls] == [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-20250514",
+    ]
+    assert "Fallback ok" in issues[0].message
+    assert issues[0].meta == {
+        "model": "claude-haiku-4-20250514",
+        "prompt_version": "empresa_exemplo-v1",
+    }
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["models"] == [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-20250514",
+    ]
+
+
+def test_validate_uses_fallback_after_5xx_primary_failure():
+    client = RoutingLLMClient(
+        {
+            "claude-sonnet-4-20250514": StatusCodeError(503),
+            "claude-haiku-4-20250514": (
+                '[{"issue": "Fallback ok", "severity": "warning", '
+                '"field": "descricao"}]'
+            ),
+        }
+    )
+    rule = LLMAuditRule(client=client)
+    ctx = _ctx(
+        tenant=_tenant(
+            fallback_model="claude-haiku-4-20250514",
+        )
+    )
+
+    issues = rule.validate(ctx)
+
+    assert [call["model"] for call in client.calls] == [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-20250514",
+    ]
+    assert "Fallback ok" in issues[0].message
+
+
+def test_validate_total_fallback_failure_includes_attempt_sequence():
+    client = RoutingLLMClient(
+        {
+            "claude-sonnet-4-20250514": TimeoutError("primary timed out"),
+            "claude-haiku-4-20250514": TimeoutError("fallback timed out"),
+        }
+    )
+    rule = LLMAuditRule(client=client)
+    ctx = _ctx(
+        tenant=_tenant(
+            fallback_model="claude-haiku-4-20250514",
+        )
+    )
+
+    issues = rule.validate(ctx)
+
+    assert len(issues) == 1
+    assert issues[0].code == "LLM_AUDIT_FAILURE"
+    assert "claude-sonnet-4-20250514 -> claude-haiku-4-20250514" in issues[0].message
+    assert "primary timed out" in issues[0].message
+    assert "fallback timed out" in issues[0].message
+    assert issues[0].meta["model"] == "claude-haiku-4-20250514"
+    assert issues[0].meta["attempted_models"] == [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-20250514",
+    ]
+    assert issues[0].meta["primary_failure"] == "TimeoutError: primary timed out"
+    assert issues[0].meta["final_failure"] == "TimeoutError: fallback timed out"
+
+
+def test_validate_non_retriable_failure_does_not_call_fallback():
+    client = RoutingLLMClient(
+        {
+            "claude-sonnet-4-20250514": RuntimeError("invalid request"),
+            "claude-haiku-4-20250514": (
+                '[{"issue": "Fallback não deveria chamar", "field": "descricao"}]'
+            ),
+        }
+    )
+    rule = LLMAuditRule(client=client)
+    ctx = _ctx(
+        tenant=_tenant(
+            fallback_model="claude-haiku-4-20250514",
+        )
+    )
+
+    issues = rule.validate(ctx)
+
+    assert [call["model"] for call in client.calls] == ["claude-sonnet-4-20250514"]
+    assert len(issues) == 1
+    assert issues[0].code == "LLM_AUDIT_FAILURE"
+    assert "invalid request" in issues[0].message
 
 
 def test_validate_caches_successful_response_and_reuses_it(tmp_path):

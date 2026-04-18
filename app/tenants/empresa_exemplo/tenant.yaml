@@ -58,6 +58,7 @@ llm:
   enabled: true
   healthcheck_enabled: false
   model: claude-sonnet-4-20250514
+  fallback_model:
   temperature: 0.0
   max_tokens: 1024
   prompt_file: prompts/audit.txt
