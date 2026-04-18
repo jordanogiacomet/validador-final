@@ -45,6 +45,7 @@ Last Updated: 2026-04-18 12:00 -03
 - Tenant-scoped API auth should derive tenant context from `X-API-Key`; any `tenant_id` request parameter is only a hint and must be rejected on mismatch.
 - Persist auth-related operational metadata with the configured `api_key_id`, never the raw API key secret.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
+- Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via optional `VALIDATOR_API_KEY_STORE_PATH`, and middleware resolves issued keys before legacy tenant `api_keys`.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 - Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
@@ -671,4 +672,21 @@ Expected architectural direction:
   - Mutable operator state should stay in sidecar files and be merged into read payloads so reprocessing/report generation can keep immutable artifacts stable
   - Review flags should be validated against rows present in the current result payload to avoid stale or out-of-scope row markers
   - Frontend review filtering composes cleanly when `review_flags` is treated as another presentation-layer filter, not a backend query
+---
+
+## 2026-04-18 12:34 -03 - US-021
+- Implemented tenant-scoped login-issued API keys with a public `POST /login` endpoint that accepts tenant, username, and password and returns an `X-API-Key` value scoped to the authenticated tenant/operator
+- Added `OperatorConfig` to tenant configuration and seeded default, empresa_exemplo, redesim, and redesim_v2 tenants with PBKDF2 password hashes instead of plaintext operator passwords
+- Added `AuthService` with optional JSON-backed key persistence via `VALIDATOR_API_KEY_STORE_PATH`; issued API keys are generated with high-entropy random values and persisted only as SHA-256 hashes with tenant/operator metadata
+- Updated auth middleware to resolve issued keys first, preserve the legacy tenant `api_keys` fallback, keep `/login`, `/health`, `/metrics`, docs, and preflight public, and continue rejecting mismatched tenant hints with 403
+- Added focused tests for password verification, secure issued-key persistence/reload, successful login, invalid credentials, unknown tenant, wrong-tenant operator, tenant hint conflict, and job list scoping by issued key
+- Files changed: `app/core/tenant_config.py`, `app/services/auth_service.py`, `app/api/auth.py`, `app/api/routes.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `app/tenants/redesim/tenant.yaml`, `app/tenants/redesim_v2/tenant.yaml`, `tests/test_auth_service.py`, `tests/test_api.py`, `tests/test_tenant.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest tests/test_auth_service.py tests/test_api.py tests/test_tenant.py` (83 tests)
+  - `pytest` (357 tests)
+- **Learnings for future iterations:**
+  - Treat tenant operator credentials as tenant config metadata, but keep runtime issued-key state in `AuthService` so middleware and routes share one resolver
+  - Store only issued API key hashes; the raw key should appear only in the login response and request header
+  - Keeping the legacy `api_keys` fallback avoids breaking existing API tests and deployments while the login-issued key flow is adopted by the frontend
 ---

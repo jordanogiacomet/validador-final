@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import app.services.validation_service as validation_service
-from app.api.routes import audit_service, job_service
+from app.api.routes import audit_service, auth_service, job_service
 from app.core.audit import AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.main import app
@@ -22,10 +22,30 @@ REDESIM_API_KEY = "redesim-local-test-key"
 def setup_function():
     job_service._jobs.clear()
     audit_service.clear()
+    auth_service.clear()
 
 
 def auth_headers(api_key: str = DEFAULT_API_KEY) -> dict[str, str]:
     return {"X-API-Key": api_key}
+
+
+def login_headers(
+    *,
+    tenant_id: str = "default",
+    username: str = "default.operator",
+    password: str = "default-password",
+) -> tuple[dict[str, str], dict]:
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": tenant_id,
+            "username": username,
+            "password": password,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    return auth_headers(payload["x_api_key"]), payload
 
 
 CSV_CONTENT = (
@@ -139,6 +159,89 @@ def test_invalid_api_key_is_rejected():
     response = client.get("/jobs", headers=auth_headers("invalid-api-key"))
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid API key"
+
+
+def test_login_emits_tenant_scoped_api_key():
+    headers, payload = login_headers()
+
+    assert payload["tenant_id"] == "default"
+    assert payload["operator_id"] == "default-local-operator"
+    assert payload["api_key_id"].startswith("issued-")
+    assert payload["x_api_key"].startswith("vapi_")
+    assert payload["header_name"] == "X-API-Key"
+
+    stored_key = auth_service.list_records()[0]
+    assert stored_key.tenant_id == "default"
+    assert stored_key.operator_id == "default-local-operator"
+    assert stored_key.key_hash != payload["x_api_key"]
+
+    response = client.get("/tenants", headers=headers)
+    assert response.status_code == 200
+    assert response.json()[0]["tenant_id"] == "default"
+
+
+def test_login_rejects_invalid_credentials():
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "default.operator",
+            "password": "wrong-password",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+
+def test_login_rejects_unknown_tenant():
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": "missing",
+            "username": "default.operator",
+            "password": "default-password",
+        },
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Tenant not found"
+
+
+def test_login_rejects_operator_for_other_tenant():
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": "redesim",
+            "username": "default.operator",
+            "password": "default-password",
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator is not allowed for this tenant"
+
+
+def test_issued_api_key_rejects_conflicting_tenant_hint():
+    headers, _payload = login_headers(
+        tenant_id="redesim",
+        username="redesim.operator",
+        password="redesim-password",
+    )
+
+    response = client.get("/audit?tenant_id=default", headers=headers)
+
+    assert response.status_code == 403
+    assert "default" in response.json()["detail"]
+
+
+def test_jobs_are_scoped_to_issued_api_key_tenant():
+    default_job = job_service.create_job(tenant_id="default", file_name="default.csv")
+    job_service.create_job(tenant_id="redesim", file_name="redesim.csv")
+    headers, _payload = login_headers()
+
+    response = client.get("/jobs", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [job["job_id"] for job in payload] == [default_job.job_id]
 
 
 def test_upload_and_validate_creates_job():

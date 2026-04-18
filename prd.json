@@ -357,20 +357,22 @@
     },
     {
       "id": "US-021",
-      "title": "Autenticar chamadas da API com API key escopada por tenant",
-      "description": "Como integrador, preciso autenticar chamadas da API com uma API key atrelada a um tenant para que operadores de um tenant não acessem dados de outro.",
+      "title": "Autenticar chamadas da API com X-API-Key emitida por login escopado por tenant",
+      "description": "Como integrador, preciso autenticar chamadas da API com uma X-API-Key emitida após login associado a um tenant para que operadores de um tenant não acessem dados de outro.",
       "acceptanceCriteria": [
-        "API keys persistidas fora do código (config do tenant ou segredo externo)",
-        "Middleware FastAPI valida header X-API-Key e deriva tenant_id da key",
+        "Criar modelo de autenticação onde o operador informa credenciais e o tenant por escrito no login",
+        "Login bem-sucedido emite uma X-API-Key escopada ao tenant autenticado",
+        "Middleware FastAPI valida header X-API-Key e deriva tenant_id da key emitida",
         "Conflito entre tenant da key e tenant_id do request retorna 403",
         "Endpoints de saúde permanecem públicos",
         "Jobs só são retornados quando o tenant_id da key bate com o do job",
+        "API keys não ficam hardcoded no código e são persistidas de forma segura",
         "Testes cobrem ausência de key, key inválida, conflito de tenant e acesso válido",
         "Ruff lint e pytest passam"
       ],
       "priority": 21,
       "passes": true,
-      "notes": "Implementado com `api_keys` na configuração dos tenants, middleware FastAPI validando `X-API-Key`, escopo de jobs/artifacts pelo tenant autenticado e testes cobrindo ausência de key, key inválida, conflito de tenant e acesso autorizado. O parâmetro `tenant_id` do request permanece apenas como hint e retorna 403 em caso de conflito."
+      "notes": "Implementado com operadores configurados por tenant via hashes PBKDF2, endpoint público POST /login que emite X-API-Key escopada por tenant/operador, AuthService com persistência opcional JSON-backed armazenando apenas hash da key emitida, middleware validando keys emitidas e preservando fallback legado de api_keys, rejeição 403 para hints de tenant incompatíveis e listagem de jobs filtrada pelo tenant autenticado. Ruff lint e pytest passaram."
     },
     {
       "id": "US-022",
@@ -551,16 +553,87 @@
       ],
       "priority": 32,
       "passes": true,
-      "notes": "Implementado com endpoint PATCH /jobs/{job_id}/rows/{row_index}/flag, sidecar tenant-scoped results/{tenant_id}/{job_id}/review_flags.json, overlay no payload de resultado e UI com marcador/filtro Para revisão. Checks backend e frontend passaram."
+      "notes": "Manter o arquivo de marcações separado dos artefatos imutáveis do job para simplificar reprocessamento."
+    },
+    {
+      "id": "US-033",
+      "title": "Criar tela de login com tenant digitado",
+      "description": "Como operador, preciso acessar uma tela de login onde informo minhas credenciais e o tenant por escrito para entrar no sistema no contexto correto da empresa.",
+      "acceptanceCriteria": [
+        "Criar tela de login no frontend com campos de credencial e tenant digitado",
+        "Campo tenant é obrigatório e enviado explicitamente no fluxo de autenticação",
+        "Exibir mensagens claras para credenciais inválidas, tenant inexistente e tenant incompatível com o usuário",
+        "Manter a UI simples e operacional para uso interno",
+        "Testes de frontend cobrem renderização, validação e estados de erro",
+        "Checks de frontend passam"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": "O tenant deve ser informado textualmente na tela para deixar explícito em qual contexto multi-tenant o operador está entrando."
+    },
+    {
+      "id": "US-034",
+      "title": "Emitir X-API-Key após login autenticado com tenant",
+      "description": "Como operador, preciso receber uma X-API-Key logo após autenticar com minhas credenciais e tenant para que o frontend possa consumir a API em meu nome.",
+      "acceptanceCriteria": [
+        "Criar endpoint de login que recebe credenciais e tenant",
+        "Validar se o usuário pode autenticar no tenant informado",
+        "Gerar X-API-Key única escopada por tenant e por operador autenticado",
+        "Retornar a chave ao frontend apenas após autenticação bem-sucedida",
+        "Persistir apenas representação segura da key quando aplicável",
+        "Registrar metadados mínimos da chave emitida, incluindo tenant_id e operador",
+        "Testes cobrem sucesso, credenciais inválidas, tenant inválido e operador sem acesso ao tenant",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": "A emissão deve ser tratada como fluxo autenticado de sessão curta ou token operacional, evitando chave estática compartilhada entre operadores."
+    },
+    {
+      "id": "US-035",
+      "title": "Consumir automaticamente a X-API-Key emitida no frontend",
+      "description": "Como operador, preciso que o frontend use automaticamente a X-API-Key recebida no login para que eu consiga operar a plataforma sem configurar headers manualmente.",
+      "acceptanceCriteria": [
+        "Armazenar a X-API-Key emitida de forma compatível com o modelo de segurança adotado",
+        "Anexar automaticamente o header X-API-Key nas chamadas autenticadas da aplicação",
+        "Logout remove a chave do contexto ativo do frontend",
+        "Quando a chave expirar ou for invalidada, o frontend redireciona novamente para login",
+        "Testes de frontend cobrem uso do header, logout e tratamento de key inválida/expirada",
+        "Checks de frontend passam"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": "Esta story fecha o fluxo operacional para que o usuário final não precise copiar e colar a key manualmente."
+    },
+    {
+      "id": "US-036",
+      "title": "Gerenciar ciclo de vida da X-API-Key emitida por tenant",
+      "description": "Como operador ou administrador, preciso que a X-API-Key emitida tenha regras de expiração, revogação e auditoria para reduzir risco operacional.",
+      "acceptanceCriteria": [
+        "Definir TTL ou política de expiração para X-API-Key emitida por login",
+        "Permitir revogação da chave sem apagar o histórico operacional do job",
+        "Registrar eventos de emissão, expiração e revogação no audit log por tenant",
+        "Acesso com chave revogada ou expirada retorna 401 ou 403 de forma consistente",
+        "Testes cobrem emissão ativa, chave expirada e chave revogada",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "Sem ciclo de vida da key, o fluxo de login vira apenas um emissor de chave permanente, o que enfraquece a segurança e a governança."
     }
   ],
   "nonFunctionalRequirements": {
     "language": "pt-BR",
     "apiStyle": "FastAPI",
     "processingMode": "async_jobs",
-    "reportFormats": ["json", "csv", "pdf"],
+    "reportFormats": [
+      "json",
+      "csv",
+      "pdf"
+    ],
     "configurationStyle": "file-based tenant config",
     "llmMode": "optional and tenant-configurable",
+    "authenticationMode": "login_with_tenant_plus_issued_x_api_key",
     "designConstraints": [
       "No tenant-specific business logic scattered through the core",
       "No duplication of validation engine per company",
@@ -586,6 +659,10 @@
     "At least one tenant-specific configuration works end-to-end",
     "Async job flow works",
     "Reports are generated",
-    "Tests and typecheck pass"
+    "Tests and typecheck pass",
+    "Login screen with typed tenant works",
+    "X-API-Key issuance flow after login works",
+    "Frontend automatically consumes the issued X-API-Key",
+    "X-API-Key expiration or revocation works"
   ]
 }

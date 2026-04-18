@@ -43,3 +43,8 @@ llm:
 api_keys:
   - key_id: default-local
     value: default-local-test-key
+
+operators:
+  - operator_id: default-local-operator
+    username: default.operator
+    password_hash: pbkdf2_sha256$120000$default-local-operator$a4856b6371a4e299050012d2f1bb2ab6f31da83a80558f5de69f3c98b7df1e43

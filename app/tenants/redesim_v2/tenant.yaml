@@ -217,3 +217,8 @@ llm:
 api_keys:
   - key_id: redesim-v2-local
     value: redesim-v2-local-test-key
+
+operators:
+  - operator_id: redesim-v2-local-operator
+    username: redesim.v2.operator
+    password_hash: pbkdf2_sha256$120000$redesim-v2-local-operator$d5d7b2f337db2c4544b1f4e7cdfda05b7dadb4e6c43147c7663b6bc8fe2a1240

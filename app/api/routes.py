@@ -7,7 +7,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, U
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
-from app.api.auth import get_authenticated_tenant, resolve_request_tenant_id
+from app.api.auth import (
+    API_KEY_HEADER,
+    auth_service,
+    get_authenticated_tenant,
+    resolve_request_tenant_id,
+)
 from app.api.frontend import build_frontend_html
 from app.core.audit import AuditEvent, AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
@@ -20,6 +25,7 @@ from app.core.validation_scope import (
     parse_validation_scope,
 )
 from app.services.audit_service import AuditService
+from app.services.auth_service import AuthServiceError
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
@@ -67,6 +73,20 @@ class TenantListItemResponse(BaseModel):
     tenant_id: str
     display_name: str
     is_default: bool = False
+
+
+class LoginRequest(BaseModel):
+    tenant_id: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class LoginResponse(BaseModel):
+    tenant_id: str
+    operator_id: str
+    api_key_id: str
+    x_api_key: str
+    header_name: str = API_KEY_HEADER
 
 
 class JobStatusResponse(BaseModel):
@@ -260,6 +280,25 @@ def _get_authorized_job(request: Request, job_id: str):
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def frontend() -> HTMLResponse:
     return HTMLResponse(build_frontend_html())
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(payload: LoginRequest) -> LoginResponse:
+    try:
+        issued_key = auth_service.issue_api_key(
+            tenant_id=payload.tenant_id,
+            username=payload.username,
+            password=payload.password,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return LoginResponse(
+        tenant_id=issued_key.record.tenant_id,
+        operator_id=issued_key.record.operator_id,
+        api_key_id=issued_key.record.key_id,
+        x_api_key=issued_key.raw_api_key,
+    )
 
 
 @router.get("/tenants", response_model=list[TenantListItemResponse])

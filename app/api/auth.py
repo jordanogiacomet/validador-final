@@ -1,24 +1,36 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from app.core.tenant_loader import resolve_tenant_api_key
+from app.services.auth_service import AuthService
 
 API_KEY_HEADER = "X-API-Key"
 _AUTH_STATE_KEY = "tenant_auth"
-_PUBLIC_EXACT_PATHS = {"/", "/health", "/metrics", "/openapi.json"}
+_PUBLIC_EXACT_PATHS = {"/", "/health", "/login", "/metrics", "/openapi.json"}
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
+
+
+def _build_auth_service() -> AuthService:
+    storage_path = os.getenv("VALIDATOR_API_KEY_STORE_PATH")
+    return AuthService(storage_path=Path(storage_path) if storage_path else None)
+
+
+auth_service = _build_auth_service()
 
 
 @dataclass(frozen=True)
 class AuthenticatedTenant:
     tenant_id: str
     api_key_id: str
+    operator_id: str | None = None
 
 
 def _normalize_path(path: str) -> str:
@@ -52,20 +64,30 @@ async def api_key_auth_middleware(
         return _auth_error(401, f"Missing {API_KEY_HEADER} header")
 
     try:
-        match = resolve_tenant_api_key(api_key)
+        issued_key = auth_service.resolve_api_key(api_key)
+        match = resolve_tenant_api_key(api_key) if issued_key is None else None
     except ValueError as exc:
         return _auth_error(500, str(exc))
 
-    if match is None:
+    if issued_key is None and match is None:
         return _auth_error(401, "Invalid API key")
+
+    if issued_key is not None:
+        authenticated_tenant = AuthenticatedTenant(
+            tenant_id=issued_key.tenant_id,
+            api_key_id=issued_key.api_key_id,
+            operator_id=issued_key.operator_id,
+        )
+    else:
+        authenticated_tenant = AuthenticatedTenant(
+            tenant_id=match.tenant.tenant_id,
+            api_key_id=match.api_key.key_id,
+        )
 
     setattr(
         request.state,
         _AUTH_STATE_KEY,
-        AuthenticatedTenant(
-            tenant_id=match.tenant.tenant_id,
-            api_key_id=match.api_key.key_id,
-        ),
+        authenticated_tenant,
     )
     return await call_next(request)
 

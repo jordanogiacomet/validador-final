@@ -54,6 +54,13 @@ class APIKeyConfig(BaseModel):
     value: str = Field(min_length=1)
 
 
+class OperatorConfig(BaseModel):
+    operator_id: str
+    username: str = Field(min_length=1)
+    password_hash: str = Field(min_length=1)
+    disabled: bool = False
+
+
 class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str
@@ -69,6 +76,7 @@ class TenantConfig(BaseModel):
     csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     api_keys: list[APIKeyConfig] = Field(default_factory=list)
+    operators: list[OperatorConfig] = Field(default_factory=list)
 
 
 DEFAULT_TENANT_ID = "default"

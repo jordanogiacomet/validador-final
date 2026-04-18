@@ -6,6 +6,7 @@ from app.core.tenant_config import (
     CSVConfig,
     LLMConfig,
     NormalizationConfig,
+    OperatorConfig,
     SuspiciousPatternsConfig,
     TenantConfig,
 )
@@ -37,6 +38,7 @@ class TestTenantConfig:
         assert config.llm.fallback_model is None
         assert config.llm.cache_ttl_seconds == 0
         assert config.api_keys == []
+        assert config.operators == []
 
     def test_config_with_categories(self) -> None:
         config = TenantConfig(
@@ -111,6 +113,22 @@ class TestTenantConfig:
         assert config.api_keys[0].key_id == "tenant-local"
         assert config.api_keys[0].value == "secret-value"
 
+    def test_config_with_operators(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            operators=[
+                OperatorConfig(
+                    operator_id="operator-1",
+                    username="operator",
+                    password_hash="pbkdf2_sha256$1$salt$digest",
+                )
+            ],
+        )
+        assert config.operators[0].operator_id == "operator-1"
+        assert config.operators[0].username == "operator"
+        assert config.operators[0].disabled is False
+
     def test_config_with_suspicious_patterns(self) -> None:
         config = TenantConfig(
             tenant_id="t",
@@ -132,6 +150,7 @@ class TestTenantLoader:
         assert config.llm.enabled is False
         assert config.suspicious_patterns.literal_patterns == []
         assert config.api_keys[0].key_id == "default-local"
+        assert config.operators[0].operator_id == "default-local-operator"
 
     def test_load_default_by_id(self) -> None:
         config = load_tenant_config("default")
