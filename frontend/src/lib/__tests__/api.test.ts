@@ -6,6 +6,7 @@ import {
   downloadApiFile,
   getApiSession,
   getApiSessionExpiresAtMs,
+  listAuditEvents,
   listTenants,
   loginOperator,
   renewApiSession,
@@ -74,6 +75,28 @@ describe("api auth session helpers", () => {
 
     const [, requestInit] = fetchMock.mock.calls[0] ?? [];
     const headers = new Headers(requestInit?.headers);
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
+  it("loads audit events through the authenticated API helper", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }),
+    );
+
+    setApiSession(SESSION);
+
+    await listAuditEvents({ tenantId: "default", limit: 25 });
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/audit?");
+    expect(requestUrl).toContain("tenant_id=default");
+    expect(requestUrl).toContain("limit=25");
     expect(headers.get("X-API-Key")).toBe("vapi_example");
   });
 

@@ -1,4 +1,5 @@
 import type {
+  AuditEventResponse,
   APIKeyRenewalResponse,
   DuplicateResolutionResponse,
   JobListItemResponse,
@@ -230,6 +231,23 @@ async function readResponse<T>(response: Response): Promise<T> {
 export async function listTenants(): Promise<TenantListItem[]> {
   const response = await apiFetch("/tenants");
   return readResponse<TenantListItem[]>(response);
+}
+
+export async function listAuditEvents(params: {
+  tenantId?: string | null;
+  limit?: number;
+} = {}): Promise<AuditEventResponse[]> {
+  const query = new URLSearchParams();
+  if (params.tenantId?.trim()) {
+    query.set("tenant_id", params.tenantId.trim());
+  }
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+
+  const queryString = query.toString();
+  const response = await apiFetch(`/audit${queryString ? `?${queryString}` : ""}`);
+  return readResponse<AuditEventResponse[]>(response);
 }
 
 export async function renewApiSession(): Promise<LoginResponse> {

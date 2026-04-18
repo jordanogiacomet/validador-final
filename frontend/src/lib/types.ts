@@ -39,6 +39,26 @@ export interface APIKeyRenewalResponse {
   header_name: string;
 }
 
+export type AuditEventType =
+  | "job_created"
+  | "job_completed"
+  | "job_reprocessed"
+  | "duplicates_resolved"
+  | "api_key_issued"
+  | "api_key_expired"
+  | "api_key_revoked"
+  | "api_key_renewed";
+
+export interface AuditEventResponse {
+  event_id: string;
+  event_type: AuditEventType | string;
+  tenant_id: string;
+  job_id: string | null;
+  api_key_id: string | null;
+  created_at: string;
+  details: Record<string, unknown>;
+}
+
 export interface UploadResponse {
   job_id: string;
   status: JobStatus;

@@ -1,4 +1,5 @@
 import type {
+  AuditEventResponse,
   DuplicateGroup,
   JobListItemResponse,
   JobStatusResponse,
@@ -6,13 +7,27 @@ import type {
   ProblemOccurrence,
   ReviewFlagPayload,
   StatusChip,
+  StatusChipKind,
   SummaryPayload,
   ValidationScope,
 } from "@/lib/types";
 
 export type DuplicateDisplayFilter = "all" | "normal" | "conflict";
+export type AuditRecentWindow = "all" | "24h" | "7d" | "30d";
 export type ResultFilterDimension = "severity" | "rule" | "category";
 export type ResultSeverityFilter = ProblemOccurrence["severity"];
+
+export interface AuditFilterState {
+  eventType: string;
+  recentWindow: AuditRecentWindow;
+  jobId: string;
+}
+
+export interface AuditEventTypeOption {
+  value: string;
+  label: string;
+  count: number;
+}
 
 export interface ResultFilterState {
   severity: ResultSeverityFilter | null;
@@ -60,9 +75,87 @@ const EMPTY_RESULT_FILTERS: ResultFilterState = {
   category: null,
 };
 
+const EMPTY_AUDIT_FILTERS: AuditFilterState = {
+  eventType: "all",
+  recentWindow: "all",
+  jobId: "",
+};
+
 const RESULT_SEVERITY_LABELS: Record<ResultSeverityFilter, string> = {
   error: "Erros",
   warning: "Avisos",
+};
+
+const AUDIT_EVENT_ORDER = [
+  "job_created",
+  "job_completed",
+  "job_reprocessed",
+  "duplicates_resolved",
+  "api_key_issued",
+  "api_key_renewed",
+  "api_key_revoked",
+  "api_key_expired",
+] as const;
+
+const AUDIT_EVENT_LABELS: Record<string, string> = {
+  job_created: "Lote criado",
+  job_completed: "Lote concluído",
+  job_reprocessed: "Reprocessamento criado",
+  duplicates_resolved: "Duplicidade consolidada",
+  api_key_issued: "Chave emitida",
+  api_key_expired: "Chave expirada",
+  api_key_revoked: "Chave revogada",
+  api_key_renewed: "Sessão renovada",
+};
+
+const AUDIT_EVENT_TONES: Record<string, StatusChipKind> = {
+  job_created: "info",
+  job_completed: "success",
+  job_reprocessed: "info",
+  duplicates_resolved: "success",
+  api_key_issued: "info",
+  api_key_expired: "warning",
+  api_key_revoked: "warning",
+  api_key_renewed: "success",
+};
+
+const AUDIT_RECENT_WINDOW_LABELS: Record<AuditRecentWindow, string> = {
+  all: "Todo o histórico",
+  "24h": "Últimas 24 horas",
+  "7d": "Últimos 7 dias",
+  "30d": "Últimos 30 dias",
+};
+
+const AUDIT_RECENT_WINDOW_MS: Record<Exclude<AuditRecentWindow, "all">, number> = {
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+};
+
+const AUDIT_DETAIL_LABELS: Record<string, string> = {
+  file_name: "Arquivo",
+  validation_scope: "Escopo",
+  parent_job_id: "Lote de origem",
+  new_job_id: "Novo lote",
+  total_rows: "Linhas em escopo",
+  source_total_rows: "Linhas no CSV",
+  rows_with_issues: "Linhas com revisão",
+  total_issues: "Problemas",
+  row_indices: "Linhas",
+  kept_row_index: "Linha-base",
+  deleted_row_indices: "Linhas removidas",
+  remaining_rows: "Linhas restantes",
+  merged_columns: "Campos aproveitados",
+  operator_id: "Operador",
+  username: "Usuário",
+  issued_ttl_seconds: "TTL (s)",
+  expires_at: "Expira em",
+  expired_at: "Expirou em",
+  revoked_at: "Revogada em",
+  revoked_by_api_key_id: "Revogada por",
+  actor: "Origem",
+  successor_api_key_id: "Nova chave",
+  renewed_at: "Renovada em",
 };
 
 export const PROCESS_STEPS = [
@@ -274,6 +367,363 @@ export function toggleResultFilter(
     ...filters,
     [dimension]: currentValue === value ? null : value,
   };
+}
+
+function isAuditRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readAuditDetailString(details: Record<string, unknown>, key: string): string {
+  const value = details[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readAuditDetailNumber(details: Record<string, unknown>, key: string): number | null {
+  const value = details[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readAuditDetailNumberArray(details: Record<string, unknown>, key: string): number[] {
+  const value = details[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+}
+
+function readAuditDetailStringArray(details: Record<string, unknown>, key: string): string[] {
+  const value = details[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry));
+}
+
+function formatAuditDetailValue(key: string, value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  if (key === "validation_scope" && typeof value === "string") {
+    return getValidationScopeLabel(normalizeValidationScope(value));
+  }
+
+  if (
+    (key === "row_indices" || key === "deleted_row_indices") &&
+    Array.isArray(value)
+  ) {
+    return value
+      .filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry))
+      .map((entry) => lineNumber(entry))
+      .join(", ");
+  }
+
+  if (key === "kept_row_index" && typeof value === "number" && Number.isFinite(value)) {
+    return String(lineNumber(value));
+  }
+
+  if (key === "merged_columns" && Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string" && Boolean(entry))
+      .map((entry) => formatFieldName(entry))
+      .join(", ");
+  }
+
+  if (
+    (key.endsWith("_at") || key === "expires_at") &&
+    typeof value === "string"
+  ) {
+    return formatDateTime(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => formatAuditDetailValue("", entry))
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Sim" : "Não";
+  }
+
+  if (typeof value === "number") {
+    return String(value);
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (isAuditRecord(value)) {
+    return Object.entries(value)
+      .map(([nestedKey, nestedValue]) => {
+        const formattedValue = formatAuditDetailValue(nestedKey, nestedValue);
+        if (!formattedValue) {
+          return "";
+        }
+        return `${AUDIT_DETAIL_LABELS[nestedKey] || nestedKey}: ${formattedValue}`;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+
+  return String(value);
+}
+
+function buildGenericAuditSummary(details: Record<string, unknown>): string {
+  const parts = Object.entries(details)
+    .map(([key, value]) => {
+      const formattedValue = formatAuditDetailValue(key, value);
+      if (!formattedValue) {
+        return "";
+      }
+      return `${AUDIT_DETAIL_LABELS[key] || key.replaceAll("_", " ")}: ${formattedValue}.`;
+    })
+    .filter(Boolean);
+
+  return parts.slice(0, 3).join(" ");
+}
+
+function joinAuditSummaryParts(parts: Array<string | null | undefined>): string {
+  return parts.filter(Boolean).join(" ").trim();
+}
+
+function getAuditEventOrderIndex(eventType: string): number {
+  const index = AUDIT_EVENT_ORDER.indexOf(eventType as (typeof AUDIT_EVENT_ORDER)[number]);
+  return index === -1 ? AUDIT_EVENT_ORDER.length : index;
+}
+
+function resolveAuditJobReferences(event: AuditEventResponse): string[] {
+  return [
+    event.job_id,
+    readAuditDetailString(event.details, "parent_job_id"),
+    readAuditDetailString(event.details, "new_job_id"),
+  ].filter((value): value is string => Boolean(value));
+}
+
+export function resetAuditFilterState(): AuditFilterState {
+  return { ...EMPTY_AUDIT_FILTERS };
+}
+
+export function hasActiveAuditFilters(filters: AuditFilterState): boolean {
+  return (
+    filters.eventType !== "all" ||
+    filters.recentWindow !== "all" ||
+    Boolean(normalizeSearchText(filters.jobId))
+  );
+}
+
+export function getAuditRecentWindowLabel(recentWindow: AuditRecentWindow): string {
+  return AUDIT_RECENT_WINDOW_LABELS[recentWindow];
+}
+
+export function getAuditEventTypeLabel(eventType: string): string {
+  return AUDIT_EVENT_LABELS[eventType] || eventType.replaceAll("_", " ");
+}
+
+export function getAuditEventTone(eventType: string): StatusChipKind {
+  return AUDIT_EVENT_TONES[eventType] || "info";
+}
+
+export function buildAuditEventTypeOptions(
+  events: AuditEventResponse[],
+): AuditEventTypeOption[] {
+  const counts = new Map<string, number>();
+  for (const event of events) {
+    counts.set(event.event_type, (counts.get(event.event_type) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .sort(([leftType], [rightType]) => {
+      const orderDifference =
+        getAuditEventOrderIndex(leftType) - getAuditEventOrderIndex(rightType);
+      if (orderDifference !== 0) {
+        return orderDifference;
+      }
+      return getAuditEventTypeLabel(leftType).localeCompare(getAuditEventTypeLabel(rightType));
+    })
+    .map(([value, count]) => ({
+      value,
+      label: getAuditEventTypeLabel(value),
+      count,
+    }));
+}
+
+export function filterAuditEvents(
+  events: AuditEventResponse[],
+  filters: AuditFilterState,
+  now = Date.now(),
+): AuditEventResponse[] {
+  const normalizedJobQuery = normalizeSearchText(filters.jobId);
+
+  return events.filter((event) => {
+    if (filters.eventType !== "all" && event.event_type !== filters.eventType) {
+      return false;
+    }
+
+    if (filters.recentWindow !== "all") {
+      const createdAtMs = Date.parse(event.created_at);
+      if (
+        Number.isFinite(createdAtMs) &&
+        now - createdAtMs > AUDIT_RECENT_WINDOW_MS[filters.recentWindow]
+      ) {
+        return false;
+      }
+    }
+
+    if (!normalizedJobQuery) {
+      return true;
+    }
+
+    return resolveAuditJobReferences(event).some((jobId) =>
+      normalizeSearchText(jobId).includes(normalizedJobQuery),
+    );
+  });
+}
+
+export function summarizeAuditEvent(event: AuditEventResponse): string {
+  const details = event.details || {};
+
+  if (event.event_type === "job_created") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "file_name")
+          ? `Arquivo ${readAuditDetailString(details, "file_name")}.`
+          : "",
+        readAuditDetailString(details, "validation_scope")
+          ? `Escopo ${getValidationScopeLabel(
+              normalizeValidationScope(readAuditDetailString(details, "validation_scope")),
+            )}.`
+          : "",
+        readAuditDetailString(details, "parent_job_id")
+          ? `Originado do lote ${readAuditDetailString(details, "parent_job_id")}.`
+          : "",
+      ]) || "Lote recebido para processamento."
+    );
+  }
+
+  if (event.event_type === "job_completed") {
+    const totalRows = readAuditDetailNumber(details, "total_rows");
+    const rowsWithIssues = readAuditDetailNumber(details, "rows_with_issues");
+    const totalIssues = readAuditDetailNumber(details, "total_issues");
+
+    return (
+      joinAuditSummaryParts([
+        totalRows !== null
+          ? `${rowsWithIssues ?? 0} de ${totalRows} linha(s) em escopo ficaram com apontamentos.`
+          : "",
+        totalIssues !== null ? `${totalIssues} problema(s) consolidados.` : "",
+        readAuditDetailString(details, "validation_scope")
+          ? `Escopo ${getValidationScopeLabel(
+              normalizeValidationScope(readAuditDetailString(details, "validation_scope")),
+            )}.`
+          : "",
+      ]) || "Lote concluído com artefatos finais disponíveis."
+    );
+  }
+
+  if (event.event_type === "job_reprocessed") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "new_job_id")
+          ? `Novo lote ${readAuditDetailString(details, "new_job_id")} gerado.`
+          : "",
+        readAuditDetailString(details, "parent_job_id")
+          ? `Origem ${readAuditDetailString(details, "parent_job_id")}.`
+          : "",
+      ]) || "Reprocessamento registrado."
+    );
+  }
+
+  if (event.event_type === "duplicates_resolved") {
+    const rowIndices = readAuditDetailNumberArray(details, "row_indices");
+    const mergedColumns = readAuditDetailStringArray(details, "merged_columns");
+    const keptRowIndex = readAuditDetailNumber(details, "kept_row_index");
+    const remainingRows = readAuditDetailNumber(details, "remaining_rows");
+
+    return (
+      joinAuditSummaryParts([
+        rowIndices.length
+          ? `${rowIndices.length} linha(s) tratadas (${rowIndices.map((rowIndex) => lineNumber(rowIndex)).join(", ")}).`
+          : "",
+        keptRowIndex !== null ? `Linha-base ${lineNumber(keptRowIndex)}.` : "",
+        mergedColumns.length
+          ? `Campos aproveitados: ${mergedColumns.map((field) => formatFieldName(field)).join(", ")}.`
+          : "",
+        remainingRows !== null
+          ? `${remainingRows} linha(s) restantes no CSV corrigido.`
+          : "",
+      ]) || "Consolidação de duplicidade registrada."
+    );
+  }
+
+  if (event.event_type === "api_key_issued") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "operator_id")
+          ? `Operador ${readAuditDetailString(details, "operator_id")}.`
+          : readAuditDetailString(details, "username")
+            ? `Usuário ${readAuditDetailString(details, "username")}.`
+            : "",
+        readAuditDetailString(details, "expires_at")
+          ? `Expira em ${formatDateTime(readAuditDetailString(details, "expires_at"))}.`
+          : "",
+      ]) || "Nova chave operacional emitida."
+    );
+  }
+
+  if (event.event_type === "api_key_expired") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "expires_at")
+          ? `A chave venceu em ${formatDateTime(readAuditDetailString(details, "expires_at"))}.`
+          : "",
+        readAuditDetailString(details, "expired_at")
+          ? `Falha percebida em ${formatDateTime(readAuditDetailString(details, "expired_at"))}.`
+          : "",
+      ]) || "Chave operacional expirada."
+    );
+  }
+
+  if (event.event_type === "api_key_revoked") {
+    const actor = readAuditDetailString(details, "actor");
+    const actorSummary =
+      actor === "self"
+        ? "Revogada pelo próprio operador."
+        : actor === "tenant_operator"
+          ? "Revogada por outro operador do tenant."
+          : "";
+
+    return (
+      joinAuditSummaryParts([
+        actorSummary,
+        readAuditDetailString(details, "revoked_at")
+          ? `Revogação em ${formatDateTime(readAuditDetailString(details, "revoked_at"))}.`
+          : "",
+      ]) || "Chave operacional revogada."
+    );
+  }
+
+  if (event.event_type === "api_key_renewed") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "successor_api_key_id")
+          ? `Nova chave ${readAuditDetailString(details, "successor_api_key_id")} emitida.`
+          : "",
+        readAuditDetailString(details, "operator_id")
+          ? `Operador ${readAuditDetailString(details, "operator_id")}.`
+          : "",
+        readAuditDetailString(details, "expires_at")
+          ? `Expira em ${formatDateTime(readAuditDetailString(details, "expires_at"))}.`
+          : "",
+      ]) || "Sessão renovada com nova chave operacional."
+    );
+  }
+
+  return buildGenericAuditSummary(details) || "Sem detalhes adicionais.";
 }
 
 export function getValidatedTotalRows(summary: Partial<SummaryPayload>): number {

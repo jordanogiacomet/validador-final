@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 15:05 -03
+Last Updated: 2026-04-18 15:20 -03
 
 ---
 
@@ -54,6 +54,7 @@ Last Updated: 2026-04-18 15:05 -03
 - Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
 - Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
 - Client-generated operational CSV exports should be built from the same `frontend/src/lib/presentation.ts` helpers that power the on-screen filters, then downloaded through a shared browser helper in `frontend/src/lib/api.ts`.
+- Tenant-scoped operational panels in the frontend should fetch through authenticated helpers in `frontend/src/lib/api.ts` and keep local filter/reset behavior in `frontend/src/lib/presentation.ts`, resetting context-sensitive filters when the tenant or `currentJobId` changes.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
@@ -816,4 +817,22 @@ Expected architectural direction:
   - Keep operator-visible filtered exports derived from the same presentation helpers that drive the current screen state; duplicating filter logic in components makes the CSV drift from what the operator sees.
   - Shared browser download plumbing belongs in `frontend/src/lib/api.ts` even for client-generated files, so authenticated and generated exports keep one download behavior.
   - When exporting mixed duplicate/problem operational rows, keep the CSV schema stable and row ordering predictable so downstream correction workflows can compare filtered extracts reliably.
+---
+
+## 2026-04-18 15:20 -03 - US-040
+- Added an authenticated audit panel to the operational frontend, consuming `/audit` through `frontend/src/lib/api.ts` and showing tenant, job, api_key, timestamp, and summarized event details in the workspace.
+- Added local filters for event type, recent interval, and job reference, with explicit refresh, contextual reset when tenant/job focus changes, and operator-friendly empty states.
+- Added shared audit presentation helpers plus focused frontend coverage for loading, filtering, reset behavior, empty states, and the authenticated `/audit` fetch helper.
+- Files changed: `frontend/src/components/audit-panel.tsx`, `frontend/src/components/audit-panel.test.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/lib/types.ts`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/app/globals.css`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (59 tests)
+  - `cd frontend && npm run lint`
+  - `ruff check app tests`
+  - `pytest` (375 tests)
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended for the audit panel.
+- **Learnings for future iterations:**
+  - Keep new tenant-scoped operational panels frontend-only over existing authenticated endpoints when the backend contract already exists; add the API consumption in `frontend/src/lib/api.ts` instead of ad hoc `fetch` calls inside components.
+  - Put panel-specific filter and reset rules in `frontend/src/lib/presentation.ts` so tenant/job context changes stay consistent across operational views.
+  - Audit event summaries should map known event types explicitly but degrade gracefully to generic detail rendering for future event payloads.
 ---

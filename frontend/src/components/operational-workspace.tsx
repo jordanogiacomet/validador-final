@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { ActiveJobsPanel } from "@/components/active-jobs-panel";
+import { AuditPanel } from "@/components/audit-panel";
 import { DuplicateResolutionModal } from "@/components/duplicate-resolution-modal";
 import { EditRowModal } from "@/components/edit-row-modal";
 import { ProcessCard } from "@/components/process-card";
@@ -892,6 +893,11 @@ export function OperationalWorkspace() {
           />
 
           <StateBanner banner={banner} />
+
+          <AuditPanel
+            tenantId={currentJob?.tenant_id || selectedTenantId}
+            currentJobId={currentJobId}
+          />
 
           <ResultWorkspace
             job={currentJob}

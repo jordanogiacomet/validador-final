@@ -374,6 +374,7 @@ p {
 
 .control-card,
 .process-card,
+.audit-card,
 .actions-card,
 .result-search-card,
 .duplicates-card,
@@ -1087,6 +1088,115 @@ thead th {
   border-color: rgba(154, 91, 0, 0.24);
   background: var(--warning-soft);
   color: var(--warning);
+}
+
+.audit-card {
+  display: grid;
+  gap: 18px;
+}
+
+.audit-head,
+.audit-filter-meta,
+.audit-event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.audit-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.audit-filter-grid,
+.audit-event-list {
+  display: grid;
+  gap: 14px;
+}
+
+.audit-filter-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+.audit-filter-meta {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.audit-filter-meta p,
+.audit-empty,
+.audit-empty-card p,
+.audit-event-summary,
+.audit-event-time,
+.audit-event-meta dt {
+  color: var(--muted);
+}
+
+.audit-empty,
+.audit-empty-card p,
+.audit-event-summary {
+  line-height: 1.6;
+}
+
+.audit-empty-card,
+.audit-event-card {
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+}
+
+.audit-empty-card strong {
+  display: block;
+}
+
+.audit-event-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+
+.audit-event-card {
+  display: grid;
+  gap: 14px;
+}
+
+.audit-event-head-copy {
+  display: grid;
+  gap: 12px;
+}
+
+.audit-event-time {
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.audit-event-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.audit-event-meta div {
+  display: grid;
+  gap: 4px;
+}
+
+.audit-event-meta dt {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.audit-event-meta dd {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .export-actions,

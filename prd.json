@@ -686,8 +686,8 @@
         "Checks de frontend passam"
       ],
       "priority": 40,
-      "passes": false,
-      "notes": "A base backend já existe via `AuditService` e `GET /audit`; a evolução esperada é principalmente de apresentação e navegação operacional."
+      "passes": true,
+      "notes": "Implementado no frontend com painel autenticado consumindo `GET /audit`, filtros locais por tipo/período/job, reset contextual ao trocar o tenant/job em foco e resumos operacionais sobre os eventos de auditoria. O backend existente permaneceu intacto."
     },
     {
       "id": "US-041",
