@@ -550,8 +550,8 @@
         "Ruff lint, pytest e checks de frontend passam"
       ],
       "priority": 32,
-      "passes": false,
-      "notes": "Manter o arquivo de marcações separado dos artefatos imutáveis do job para simplificar reprocessamento."
+      "passes": true,
+      "notes": "Implementado com endpoint PATCH /jobs/{job_id}/rows/{row_index}/flag, sidecar tenant-scoped results/{tenant_id}/{job_id}/review_flags.json, overlay no payload de resultado e UI com marcador/filtro Para revisão. Checks backend e frontend passaram."
     }
   ],
   "nonFunctionalRequirements": {

@@ -4,6 +4,7 @@ import type {
   JobStatusResponse,
   PreviewReportPayload,
   ProblemOccurrence,
+  ReviewFlagPayload,
   StatusChip,
   SummaryPayload,
   ValidationScope,
@@ -43,6 +44,14 @@ export interface DuplicateFilterCounts {
   all: number;
   normal: number;
   conflict: number;
+}
+
+function getReviewFlagRowIndices(reviewFlags: ReviewFlagPayload[] | undefined): Set<number> {
+  return new Set(
+    (reviewFlags ?? [])
+      .filter((flag) => flag.status === "review")
+      .map((flag) => flag.row_index),
+  );
 }
 
 const EMPTY_RESULT_FILTERS: ResultFilterState = {
@@ -234,6 +243,19 @@ export function resetResultFilterState(): ResultFilterState {
   return { ...EMPTY_RESULT_FILTERS };
 }
 
+export function isRowMarkedForReview(
+  reviewFlags: ReviewFlagPayload[] | undefined,
+  rowIndex: number,
+): boolean {
+  return getReviewFlagRowIndices(reviewFlags).has(rowIndex);
+}
+
+export function getReviewFlaggedRowCount(
+  reviewFlags: ReviewFlagPayload[] | undefined,
+): number {
+  return getReviewFlagRowIndices(reviewFlags).size;
+}
+
 export function hasActiveResultFilters(filters: ResultFilterState): boolean {
   return Boolean(filters.severity || filters.rule || filters.category);
 }
@@ -323,6 +345,19 @@ export function duplicateMatchesResultSearch(
   );
 }
 
+export function duplicateMatchesReviewFilter(
+  duplicate: DuplicateGroup,
+  reviewFlags: ReviewFlagPayload[] | undefined,
+  reviewOnly: boolean,
+): boolean {
+  if (!reviewOnly) {
+    return true;
+  }
+
+  const reviewFlagRows = getReviewFlagRowIndices(reviewFlags);
+  return duplicate.row_indices.some((rowIndex) => reviewFlagRows.has(rowIndex));
+}
+
 export function problemOccurrenceMatchesResultSearch(
   occurrence: ProblemOccurrence,
   query: string | null | undefined,
@@ -344,31 +379,49 @@ export function problemOccurrenceMatchesResultSearch(
   );
 }
 
+export function problemOccurrenceMatchesReviewFilter(
+  occurrence: ProblemOccurrence,
+  reviewFlags: ReviewFlagPayload[] | undefined,
+  reviewOnly: boolean,
+): boolean {
+  if (!reviewOnly) {
+    return true;
+  }
+
+  return isRowMarkedForReview(reviewFlags, occurrence.row_index);
+}
+
 export function filterDuplicatesForResultSearch(
   duplicates: DuplicateGroup[],
   filter: DuplicateDisplayFilter,
   query: string | null | undefined,
+  reviewFlags: ReviewFlagPayload[] | undefined = undefined,
+  reviewOnly = false,
 ): DuplicateGroup[] {
   const displayFilteredDuplicates = filterDuplicates(duplicates, filter);
-  if (!hasResultSearchQuery(query)) {
-    return displayFilteredDuplicates;
-  }
-
-  return displayFilteredDuplicates.filter((duplicate) => duplicateMatchesResultSearch(duplicate, query));
+  return displayFilteredDuplicates.filter(
+    (duplicate) =>
+      duplicateMatchesReviewFilter(duplicate, reviewFlags, reviewOnly) &&
+      duplicateMatchesResultSearch(duplicate, query),
+  );
 }
 
 export function getDuplicateFilterCounts(
   duplicates: DuplicateGroup[],
   query: string | null | undefined = "",
+  reviewFlags: ReviewFlagPayload[] | undefined = undefined,
+  reviewOnly = false,
 ): DuplicateFilterCounts {
-  const searchFilteredDuplicates = hasResultSearchQuery(query)
-    ? duplicates.filter((duplicate) => duplicateMatchesResultSearch(duplicate, query))
-    : duplicates;
+  const filteredDuplicates = duplicates.filter(
+    (duplicate) =>
+      duplicateMatchesReviewFilter(duplicate, reviewFlags, reviewOnly) &&
+      duplicateMatchesResultSearch(duplicate, query),
+  );
 
   return {
-    all: searchFilteredDuplicates.length,
-    normal: searchFilteredDuplicates.filter((duplicate) => !hasDuplicateDescriptionConflict(duplicate)).length,
-    conflict: searchFilteredDuplicates.filter((duplicate) => hasDuplicateDescriptionConflict(duplicate)).length,
+    all: filteredDuplicates.length,
+    normal: filteredDuplicates.filter((duplicate) => !hasDuplicateDescriptionConflict(duplicate)).length,
+    conflict: filteredDuplicates.filter((duplicate) => hasDuplicateDescriptionConflict(duplicate)).length,
   };
 }
 
@@ -508,14 +561,41 @@ export function filterProblemGroupsForResultFilters(
   );
 }
 
+export function filterProblemGroupsForReviewFlags(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+  reviewFlags: ReviewFlagPayload[] | undefined,
+  reviewOnly: boolean,
+): Record<string, ProblemOccurrence[]> {
+  if (!reviewOnly) {
+    return groupedProblems;
+  }
+
+  return Object.fromEntries(
+    Object.entries(groupedProblems)
+      .map(([code, occurrences]) => [
+        code,
+        occurrences.filter((occurrence) =>
+          problemOccurrenceMatchesReviewFilter(occurrence, reviewFlags, reviewOnly),
+        ),
+      ])
+      .filter(([, occurrences]) => occurrences.length > 0),
+  );
+}
+
 export function filterProblemGroupsForResultView(
   groupedProblems: Record<string, ProblemOccurrence[]>,
   query: string | null | undefined,
   filters: ResultFilterState = EMPTY_RESULT_FILTERS,
+  reviewFlags: ReviewFlagPayload[] | undefined = undefined,
+  reviewOnly = false,
 ): Record<string, ProblemOccurrence[]> {
-  return filterProblemGroupsForResultFilters(
-    filterProblemGroupsForResultSearch(groupedProblems, query),
-    filters,
+  return filterProblemGroupsForReviewFlags(
+    filterProblemGroupsForResultFilters(
+      filterProblemGroupsForResultSearch(groupedProblems, query),
+      filters,
+    ),
+    reviewFlags,
+    reviewOnly,
   );
 }
 

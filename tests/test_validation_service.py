@@ -17,9 +17,11 @@ from app.services.validation_service import (
     get_job_operational_export,
     get_job_report_download,
     get_job_result_payload,
+    get_job_review_flags_path,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
+    set_job_row_review_flag,
     update_job_csv_row,
 )
 
@@ -398,6 +400,83 @@ def test_run_validation_job_writes_artifacts_to_tenant_scoped_results_directory(
     assert Path(updated_job.report_path) == (
         results_dir / tenant_id / f"{job.job_id}_report.pdf"
     )
+
+
+def test_review_flags_persist_in_job_results_sidecar_and_survive_reload(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+    job_store_path = tmp_path / "jobs.json"
+
+    service = JobService(storage_path=job_store_path)
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+    )
+    run_validation_job(job.job_id, service)
+
+    update = set_job_row_review_flag(
+        job.job_id,
+        service,
+        row_index=1,
+        status="review",
+    )
+
+    flags_path = get_job_review_flags_path(job.job_id, service)
+    assert flags_path == results_dir / "default" / job.job_id / "review_flags.json"
+    assert flags_path.exists()
+    assert json.loads(flags_path.read_text(encoding="utf-8"))["flags"] == {
+        "1": "review"
+    }
+    assert update.review_flags == [{"row_index": 1, "status": "review"}]
+
+    payload = get_job_result_payload(job.job_id, service)
+    assert payload["review_flags"] == [{"row_index": 1, "status": "review"}]
+
+    reloaded_service = JobService(storage_path=job_store_path)
+    reloaded_payload = get_job_result_payload(job.job_id, reloaded_service)
+    assert reloaded_payload["review_flags"] == [
+        {"row_index": 1, "status": "review"}
+    ]
+
+    clear_update = set_job_row_review_flag(
+        job.job_id,
+        reloaded_service,
+        row_index=1,
+        status="clear",
+    )
+    assert clear_update.review_flags == []
+    assert get_job_result_payload(job.job_id, reloaded_service)["review_flags"] == []
+
+
+def test_review_flags_reject_rows_outside_the_current_result(tmp_path, monkeypatch):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+    )
+    run_validation_job(job.job_id, service)
+
+    with pytest.raises(ValueError, match="Row index not found"):
+        set_job_row_review_flag(
+            job.job_id,
+            service,
+            row_index=99,
+            status="review",
+        )
 
 
 def test_job_csv_read_and_update_preserve_redesim_v2_csv_format(tmp_path):

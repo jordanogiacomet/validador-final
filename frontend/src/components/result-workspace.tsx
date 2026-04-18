@@ -16,11 +16,13 @@ import {
   getActiveResultFilterCount,
   getBulkConsolidatableSameNameDuplicates,
   getDuplicateFilterCounts,
+  getReviewFlaggedRowCount,
   getSourceTotalRows,
   getValidatedTotalRows,
   hasActiveResultFilters,
   hasResultSearchQuery,
   hasDuplicateDescriptionConflict,
+  isRowMarkedForReview,
   isDuplicateItemsScope,
   isZeroItemsScope,
   lineNumber,
@@ -37,6 +39,7 @@ import type {
   JobStatusResponse,
   PreviewReportPayload,
   ProblemOccurrence,
+  ReviewFlagActionStatus,
   SummaryPayload,
   ValidationScope,
 } from "@/lib/types";
@@ -51,8 +54,10 @@ interface ResultWorkspaceProps {
   visibleProblemOccurrencesByCode: Record<string, number>;
   isReprocessing: boolean;
   isResolvingBulkSameNameDuplicates: boolean;
+  isSavingReviewFlag: boolean;
   onShowMore: (code: string) => void;
   onEditOccurrence: (occurrence: ProblemOccurrence) => void;
+  onToggleReviewFlag: (rowIndex: number, status: ReviewFlagActionStatus) => void;
   onResolveDuplicate: (duplicate: DuplicateGroup) => void;
   onResolveBulkSameNameDuplicates: () => void;
   onReprocess: () => void;
@@ -229,13 +234,16 @@ export function ResultWorkspace({
   visibleProblemOccurrencesByCode,
   isReprocessing,
   isResolvingBulkSameNameDuplicates,
+  isSavingReviewFlag,
   onShowMore,
   onEditOccurrence,
+  onToggleReviewFlag,
   onResolveDuplicate,
   onResolveBulkSameNameDuplicates,
   onReprocess,
 }: ResultWorkspaceProps) {
   const [duplicateFilter, setDuplicateFilter] = useState<DuplicateDisplayFilter>("all");
+  const [showReviewOnly, setShowReviewOnly] = useState(false);
   const [resultFilters, setResultFilters] = useState<ResultFilterState>(() =>
     resetResultFilterState(),
   );
@@ -247,6 +255,7 @@ export function ResultWorkspace({
   useEffect(() => {
     const resetSearch = resetResultSearchState(currentJobId);
     setDuplicateFilter("all");
+    setShowReviewOnly(false);
     setResultFilters(resetResultFilterState());
     setSearchInput(resetSearch.input);
     setDebouncedSearchQuery(resetSearch.debouncedQuery);
@@ -267,29 +276,40 @@ export function ResultWorkspace({
   const summary = activeData.summary;
   const duplicates = activeData.duplicates ?? [];
   const groupedProblems = activeData.grouped_problems ?? {};
+  const reviewFlags = activeData.review_flags ?? [];
   const allGroups = sortProblemGroups(groupedProblems);
   const filteredGroupedProblems = filterProblemGroupsForResultView(
     groupedProblems,
     debouncedSearchQuery,
     resultFilters,
+    reviewFlags,
+    showReviewOnly,
   );
   const groups = sortProblemGroups(filteredGroupedProblems);
   const processedRows = Number(summary.processed_rows ?? job?.processed_rows ?? getValidatedTotalRows(summary));
   const showCleanState = Number(summary.rows_with_issues ?? 0) === 0;
   const hasSearch = hasResultSearchQuery(debouncedSearchQuery);
-  const hasActiveFilters = hasActiveResultFilters(resultFilters);
-  const activeFilterCount = getActiveResultFilterCount(resultFilters);
+  const hasActiveFilters = hasActiveResultFilters(resultFilters) || showReviewOnly;
+  const activeFilterCount = getActiveResultFilterCount(resultFilters) + (showReviewOnly ? 1 : 0);
+  const reviewFlagCount = getReviewFlaggedRowCount(reviewFlags);
   const resultFilterGroups = buildResultFilterGroups(
     groupedProblems,
     debouncedSearchQuery,
     resultFilters,
   );
-  const duplicateFilterCounts = getDuplicateFilterCounts(duplicates, debouncedSearchQuery);
+  const duplicateFilterCounts = getDuplicateFilterCounts(
+    duplicates,
+    debouncedSearchQuery,
+    reviewFlags,
+    showReviewOnly,
+  );
   const bulkConsolidatableSameNameDuplicates = getBulkConsolidatableSameNameDuplicates(duplicates);
   const filteredDuplicates = filterDuplicatesForResultSearch(
     duplicates,
     duplicateFilter,
     debouncedSearchQuery,
+    reviewFlags,
+    showReviewOnly,
   );
   const searchProblemOccurrenceCount = groups.reduce(
     (total, group) => total + group.occurrences.length,
@@ -299,6 +319,7 @@ export function ResultWorkspace({
     (total, group) => total + group.occurrences.length,
     0,
   );
+  const canReviewRows = !isPartial && Boolean(currentJobId);
   const showResultFilterEmptyState =
     (hasSearch || hasActiveFilters) && filteredDuplicates.length === 0 && groups.length === 0;
 
@@ -344,7 +365,7 @@ export function ResultWorkspace({
             : `${duplicates.length} grupo(s) de duplicidade e ${totalProblemOccurrenceCount} ocorrência(s) no resultado.`}
         </p>
 
-        {resultFilterGroups.length ? (
+        {resultFilterGroups.length || reviewFlagCount || showReviewOnly ? (
           <div className="result-filter-panel" aria-label="Filtros do resultado">
             <div className="result-filter-head">
               <div className="panel-kicker panel-kicker-inline">Filtros</div>
@@ -352,7 +373,10 @@ export function ResultWorkspace({
                 <button
                   className="action-button"
                   type="button"
-                  onClick={() => setResultFilters(resetResultFilterState())}
+                  onClick={() => {
+                    setResultFilters(resetResultFilterState());
+                    setShowReviewOnly(false);
+                  }}
                 >
                   Limpar filtros ({activeFilterCount})
                 </button>
@@ -360,6 +384,22 @@ export function ResultWorkspace({
             </div>
 
             <div className="result-filter-groups">
+              {reviewFlagCount || showReviewOnly ? (
+                <div className="result-filter-group">
+                  <small>Marcação</small>
+                  <div className="result-filter-chips">
+                    <button
+                      className={`result-filter-chip review ${showReviewOnly ? "active" : ""}`.trim()}
+                      type="button"
+                      aria-pressed={showReviewOnly}
+                      onClick={() => setShowReviewOnly((currentValue) => !currentValue)}
+                    >
+                      <span>Para revisão</span>
+                      <strong>{reviewFlagCount}</strong>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {resultFilterGroups.map((group) => (
                 <div className="result-filter-group" key={group.dimension}>
                   <small>{group.label}</small>
@@ -668,12 +708,17 @@ export function ResultWorkspace({
                         <th>Nome do bem</th>
                         <th>Campo</th>
                         <th>Orientação</th>
+                        {canReviewRows ? <th>Revisão</th> : null}
                         <th>Ação</th>
                       </tr>
                     </thead>
                     <tbody>
                       {visibleOccurrences.map((occurrence) => {
                         const editableField = resolveEditableField(occurrence);
+                        const isMarkedForReview = isRowMarkedForReview(
+                          reviewFlags,
+                          occurrence.row_index,
+                        );
                         return (
                           <tr key={`${code}-${occurrence.row_index}-${occurrence.message}`}>
                             <td>{lineNumber(occurrence.row_index)}</td>
@@ -685,6 +730,24 @@ export function ResultWorkspace({
                               </span>
                             </td>
                             <td>{occurrence.message}</td>
+                            {canReviewRows ? (
+                              <td>
+                                <button
+                                  className={`review-marker ${isMarkedForReview ? "active" : ""}`.trim()}
+                                  type="button"
+                                  aria-pressed={isMarkedForReview}
+                                  disabled={isSavingReviewFlag}
+                                  onClick={() =>
+                                    onToggleReviewFlag(
+                                      occurrence.row_index,
+                                      isMarkedForReview ? "clear" : "review",
+                                    )
+                                  }
+                                >
+                                  {isMarkedForReview ? "Para revisão" : "Marcar"}
+                                </button>
+                              </td>
+                            ) : null}
                             <td>
                               <button
                                 className="edit-action"

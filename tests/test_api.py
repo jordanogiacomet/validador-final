@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import app.services.validation_service as validation_service
 from app.api.routes import audit_service, job_service
 from app.core.audit import AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
@@ -827,6 +828,112 @@ def test_get_job_row_returns_current_value_and_mapping():
     assert payload["resolved_columns"]["descricao"] == "Descrição"
 
     Path(csv_path).unlink(missing_ok=True)
+
+
+def test_update_job_row_review_flag_persists_and_updates_result_payload(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    job = job_service.create_job(tenant_id="default", file_name="inventario.csv")
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "summary": {"total_rows": 1},
+                "row_results": [
+                    {
+                        "row_index": 1,
+                        "item": "002",
+                        "descricao": "Cadeira",
+                        "issues": [],
+                        "has_errors": False,
+                        "has_warnings": False,
+                    }
+                ],
+                "duplicates": [],
+                "grouped_problems": {
+                    "ZERO_ITEM_COMPLEMENTO_EMPTY": [
+                        {
+                            "row_index": 1,
+                            "item": "002",
+                            "descricao": "Cadeira",
+                            "severity": "warning",
+                            "field": "complemento",
+                            "message": "Complemento vazio",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    job.mark_running()
+    job.mark_completed(result_path=str(result_path), total_rows=1)
+
+    response = client.patch(
+        f"/jobs/{job.job_id}/rows/1/flag",
+        json={"status": "review"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": job.job_id,
+        "row_index": 1,
+        "status": "review",
+        "review_flags": [{"row_index": 1, "status": "review"}],
+    }
+
+    flags_path = results_dir / "default" / job.job_id / "review_flags.json"
+    assert flags_path.exists()
+    assert json.loads(flags_path.read_text(encoding="utf-8"))["flags"] == {
+        "1": "review"
+    }
+
+    result_response = client.get(f"/jobs/{job.job_id}/result", headers=auth_headers())
+    assert result_response.status_code == 200
+    assert result_response.json()["review_flags"] == [
+        {"row_index": 1, "status": "review"}
+    ]
+
+    clear_response = client.patch(
+        f"/jobs/{job.job_id}/rows/1/flag",
+        json={"status": "clear"},
+        headers=auth_headers(),
+    )
+    assert clear_response.status_code == 200
+    assert clear_response.json()["review_flags"] == []
+
+
+def test_update_job_row_review_flag_rejects_missing_result_row():
+    job = job_service.create_job(tenant_id="default")
+    job.mark_running()
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(
+            {
+                "summary": {"total_rows": 1},
+                "row_results": [{"row_index": 0}],
+                "duplicates": [],
+                "grouped_problems": {},
+            },
+            f,
+        )
+        result_path = f.name
+
+    job.mark_completed(result_path=result_path, total_rows=1)
+
+    response = client.patch(
+        f"/jobs/{job.job_id}/rows/9/flag",
+        json={"status": "review"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "Row index not found" in response.json()["detail"]
+
+    Path(result_path).unlink(missing_ok=True)
 
 
 def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fields():

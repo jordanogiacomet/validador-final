@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
@@ -32,6 +32,7 @@ from app.services.validation_service import (
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
+    set_job_row_review_flag,
     update_job_csv_row,
 )
 
@@ -128,6 +129,22 @@ class RowReadResponse(BaseModel):
     row_index: int
     row: dict[str, str]
     resolved_columns: dict[str, str]
+
+
+class RowReviewFlagRequest(BaseModel):
+    status: Literal["review", "clear"]
+
+
+class ReviewFlagPayload(BaseModel):
+    row_index: int
+    status: str
+
+
+class RowReviewFlagResponse(BaseModel):
+    job_id: str
+    row_index: int
+    status: str
+    review_flags: list[ReviewFlagPayload]
 
 
 class DuplicateResolutionRequest(BaseModel):
@@ -465,6 +482,39 @@ async def get_job_row(request: Request, job_id: str, row_index: int) -> RowReadR
         row_index=row_index,
         row=row,
         resolved_columns=resolved_columns,
+    )
+
+
+@router.patch(
+    "/jobs/{job_id}/rows/{row_index}/flag",
+    response_model=RowReviewFlagResponse,
+)
+async def update_job_row_review_flag(
+    request: Request,
+    job_id: str,
+    row_index: int,
+    payload: RowReviewFlagRequest,
+) -> RowReviewFlagResponse:
+    _get_authorized_job(request, job_id)
+    try:
+        update = set_job_row_review_flag(
+            job_id,
+            job_service,
+            row_index=row_index,
+            status=payload.status,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return RowReviewFlagResponse(
+        job_id=job_id,
+        row_index=update.row_index,
+        status=update.status,
+        review_flags=update.review_flags,
     )
 
 

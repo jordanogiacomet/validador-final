@@ -219,7 +219,8 @@ p {
 .action-link,
 .cta,
 .action-button,
-.edit-action {
+.edit-action,
+.review-marker {
   transition:
     transform 180ms ease,
     box-shadow 180ms ease,
@@ -230,7 +231,8 @@ p {
 
 .file-trigger,
 .action-button,
-.edit-action {
+.edit-action,
+.review-marker {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -245,7 +247,8 @@ p {
 
 .file-trigger:hover,
 .action-button:hover,
-.edit-action:hover {
+.edit-action:hover,
+.review-marker:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 24px rgba(24, 33, 43, 0.08);
 }
@@ -777,6 +780,12 @@ thead th {
   color: var(--warning);
 }
 
+.result-filter-chip.review.active {
+  border-color: rgba(154, 91, 0, 0.24);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
 .export-actions,
 .duplicates-grid,
 .nav-chips,
@@ -1057,9 +1066,21 @@ tbody tr:nth-child(even) td {
   font-weight: 700;
 }
 
-.edit-action {
+.edit-action,
+.review-marker {
   min-height: 38px;
   padding-inline: 14px;
+}
+
+.review-marker {
+  min-width: 112px;
+  border-color: rgba(154, 91, 0, 0.16);
+}
+
+.review-marker.active {
+  border-color: rgba(154, 91, 0, 0.28);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .problem-pagination {

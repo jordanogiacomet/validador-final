@@ -47,6 +47,7 @@ UPLOADS_DIR = Path("uploads")
 RESULTS_DIR = Path("results")
 DEFAULT_BATCH_SIZE = 200
 TARGET_PREVIEW_BATCHES = 10
+REVIEW_FLAGS_FILE_NAME = "review_flags.json"
 
 _logger = get_logger("validation_service")
 
@@ -137,6 +138,10 @@ def build_job_report_path(tenant_id: str, job_id: str) -> Path:
     return get_tenant_results_dir(tenant_id) / f"{job_id}_report.pdf"
 
 
+def build_job_review_flags_path(tenant_id: str, job_id: str) -> Path:
+    return get_tenant_results_dir(tenant_id) / job_id / REVIEW_FLAGS_FILE_NAME
+
+
 def _build_legacy_upload_path(
     job_id: str,
     file_name: str | None,
@@ -203,6 +208,10 @@ def _resolve_job_report_path(job: JobRecord) -> Path:
     )
 
 
+def _resolve_job_review_flags_path(job: JobRecord) -> Path:
+    return build_job_review_flags_path(job.tenant_id, job.job_id)
+
+
 def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
     return {
         "sep": tenant_config.csv.delimiter,
@@ -267,6 +276,13 @@ class DuplicateCsvResolution:
     deleted_row_indices: list[int]
     remaining_rows: int
     merged_columns: list[str]
+
+
+@dataclass(frozen=True)
+class ReviewFlagUpdate:
+    row_index: int
+    status: str
+    review_flags: list[dict[str, object]]
 
 
 def _get_job_csv_file(
@@ -367,12 +383,170 @@ def _get_job_result_data(
     return job, json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def _coerce_row_index(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        row_index = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    if row_index < 0:
+        return None
+    return row_index
+
+
+def _collect_result_row_indices(payload: dict) -> set[int]:
+    row_indices: set[int] = set()
+
+    for row_result in payload.get("row_results") or []:
+        if not isinstance(row_result, dict):
+            continue
+        row_index = _coerce_row_index(row_result.get("row_index"))
+        if row_index is not None:
+            row_indices.add(row_index)
+
+    grouped_problems = payload.get("grouped_problems") or {}
+    if isinstance(grouped_problems, dict):
+        for occurrences in grouped_problems.values():
+            if not isinstance(occurrences, list):
+                continue
+            for occurrence in occurrences:
+                if not isinstance(occurrence, dict):
+                    continue
+                row_index = _coerce_row_index(occurrence.get("row_index"))
+                if row_index is not None:
+                    row_indices.add(row_index)
+
+    for duplicate in payload.get("duplicates") or []:
+        if not isinstance(duplicate, dict):
+            continue
+        for raw_row_index in duplicate.get("row_indices") or []:
+            row_index = _coerce_row_index(raw_row_index)
+            if row_index is not None:
+                row_indices.add(row_index)
+
+    return row_indices
+
+
+def _load_review_flag_indices(job: JobRecord) -> set[int]:
+    flags_path = _resolve_job_review_flags_path(job)
+    if not flags_path.exists():
+        return set()
+
+    payload = json.loads(flags_path.read_text(encoding="utf-8"))
+    raw_flags = payload.get("flags", {})
+    flag_indices: set[int] = set()
+
+    if isinstance(raw_flags, dict):
+        iterable_flags = raw_flags.items()
+    elif isinstance(raw_flags, list):
+        iterable_flags = (
+            (entry.get("row_index"), entry.get("status"))
+            for entry in raw_flags
+            if isinstance(entry, dict)
+        )
+    else:
+        iterable_flags = ()
+
+    for raw_row_index, raw_status in iterable_flags:
+        row_index = _coerce_row_index(raw_row_index)
+        if row_index is not None and raw_status == "review":
+            flag_indices.add(row_index)
+
+    return flag_indices
+
+
+def _build_review_flags_payload(
+    row_indices: set[int],
+    *,
+    allowed_row_indices: set[int] | None = None,
+) -> list[dict[str, object]]:
+    if allowed_row_indices is not None:
+        row_indices = row_indices.intersection(allowed_row_indices)
+
+    return [
+        {"row_index": row_index, "status": "review"}
+        for row_index in sorted(row_indices)
+    ]
+
+
+def _write_review_flag_indices(job: JobRecord, row_indices: set[int]) -> None:
+    flags_path = _resolve_job_review_flags_path(job)
+    flags_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "job_id": job.job_id,
+        "tenant_id": job.tenant_id,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "flags": {str(row_index): "review" for row_index in sorted(row_indices)},
+    }
+    flags_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _add_review_flags_to_result_payload(job: JobRecord, payload: dict) -> dict:
+    result_payload = dict(payload)
+    result_row_indices = _collect_result_row_indices(result_payload)
+    result_payload["review_flags"] = _build_review_flags_payload(
+        _load_review_flag_indices(job),
+        allowed_row_indices=result_row_indices,
+    )
+    return result_payload
+
+
 def get_job_result_payload(
     job_id: str,
     job_service: JobService,
 ) -> dict:
-    _, payload = _get_job_result_data(job_id, job_service)
-    return payload
+    job, payload = _get_job_result_data(job_id, job_service)
+    return _add_review_flags_to_result_payload(job, payload)
+
+
+def set_job_row_review_flag(
+    job_id: str,
+    job_service: JobService,
+    *,
+    row_index: int,
+    status: str,
+) -> ReviewFlagUpdate:
+    if row_index < 0:
+        raise ValueError(f"Invalid row index: {row_index}")
+    if status not in {"review", "clear"}:
+        raise ValueError("Review flag status must be 'review' or 'clear'")
+
+    job, payload = _get_job_result_data(job_id, job_service)
+    result_row_indices = _collect_result_row_indices(payload)
+    if row_index not in result_row_indices:
+        raise ValueError(f"Row index not found in job result: {row_index}")
+
+    review_flag_indices = _load_review_flag_indices(job)
+    if status == "review":
+        review_flag_indices.add(row_index)
+    else:
+        review_flag_indices.discard(row_index)
+
+    _write_review_flag_indices(job, review_flag_indices)
+    return ReviewFlagUpdate(
+        row_index=row_index,
+        status=status,
+        review_flags=_build_review_flags_payload(
+            review_flag_indices,
+            allowed_row_indices=result_row_indices,
+        ),
+    )
+
+
+def get_job_review_flags_path(
+    job_id: str,
+    job_service: JobService,
+) -> Path:
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    return _resolve_job_review_flags_path(job)
 
 
 def get_job_report_download(

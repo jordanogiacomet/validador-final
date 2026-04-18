@@ -18,6 +18,7 @@ import {
   listTenants,
   reprocessJob,
   resolveDuplicateRows,
+  setJobRowReviewFlag,
   updateJobRow,
   validateFile,
 } from "@/lib/api";
@@ -46,6 +47,7 @@ import type {
   JobStatus,
   JobStatusResponse,
   ProblemOccurrence,
+  ReviewFlagActionStatus,
   RowReadResponse,
   TenantListItem,
   ValidationScope,
@@ -202,6 +204,7 @@ export function OperationalWorkspace() {
   const [selectedKeepRowIndex, setSelectedKeepRowIndex] = useState<number | null>(null);
   const [isSavingDuplicateResolution, setIsSavingDuplicateResolution] = useState(false);
   const [isBulkResolvingSameNameDuplicates, setIsBulkResolvingSameNameDuplicates] = useState(false);
+  const [isSavingReviewFlag, setIsSavingReviewFlag] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const latestEditRequestRef = useRef(0);
@@ -595,6 +598,48 @@ export function OperationalWorkspace() {
     }
   }
 
+  async function handleToggleReviewFlag(rowIndex: number, status: ReviewFlagActionStatus) {
+    if (!currentJobId) {
+      setManualBanner({
+        kind: "error",
+        label: "Marcação indisponível",
+        detail: "Nenhum job ativo foi identificado para salvar a marcação.",
+      });
+      return;
+    }
+
+    setIsSavingReviewFlag(true);
+    try {
+      const payload = await setJobRowReviewFlag(currentJobId, rowIndex, status);
+      setReportData((currentValue) =>
+        currentValue
+          ? {
+              ...currentValue,
+              review_flags: payload.review_flags,
+            }
+          : currentValue,
+      );
+      setManualBanner({
+        kind: status === "review" ? "warning" : "success",
+        label: status === "review" ? "Linha marcada" : "Marcação removida",
+        detail:
+          status === "review"
+            ? `Linha ${lineNumber(rowIndex)} marcada para revisão posterior.`
+            : `Linha ${lineNumber(rowIndex)} removida da revisão posterior.`,
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Não foi possível salvar a marcação.";
+      setManualBanner({
+        kind: "error",
+        label: "Falha ao marcar linha",
+        detail: message,
+      });
+    } finally {
+      setIsSavingReviewFlag(false);
+    }
+  }
+
   async function handleResolveDuplicate(duplicate: DuplicateGroup) {
     if (!currentJobId) {
       setManualBanner({
@@ -858,8 +903,10 @@ export function OperationalWorkspace() {
             visibleProblemOccurrencesByCode={visibleProblemOccurrencesByCode}
             isReprocessing={isReprocessing}
             isResolvingBulkSameNameDuplicates={isBulkResolvingSameNameDuplicates}
+            isSavingReviewFlag={isSavingReviewFlag}
             onShowMore={showMoreProblemOccurrences}
             onEditOccurrence={handleEditOccurrence}
+            onToggleReviewFlag={handleToggleReviewFlag}
             onResolveDuplicate={handleResolveDuplicate}
             onResolveBulkSameNameDuplicates={handleResolveBulkSameNameDuplicates}
             onReprocess={handleReprocess}

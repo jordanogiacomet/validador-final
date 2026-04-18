@@ -4,6 +4,10 @@ export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancele
 
 export type StatusChipKind = "info" | "warning" | "success" | "error";
 
+export type ReviewFlagStatus = "review";
+
+export type ReviewFlagActionStatus = ReviewFlagStatus | "clear";
+
 export interface TenantListItem {
   tenant_id: string;
   display_name: string;
@@ -61,11 +65,24 @@ export interface DuplicateGroup {
   count: number;
 }
 
+export interface ReviewFlagPayload {
+  row_index: number;
+  status: ReviewFlagStatus;
+}
+
+export interface RowReviewFlagResponse {
+  job_id: string;
+  row_index: number;
+  status: ReviewFlagActionStatus;
+  review_flags: ReviewFlagPayload[];
+}
+
 export interface JobResultPayload {
   summary: SummaryPayload;
   row_results: RowResult[];
   duplicates: DuplicateGroup[];
   grouped_problems: Record<string, ProblemOccurrence[]>;
+  review_flags?: ReviewFlagPayload[];
 }
 
 export interface JobStatusResponse {
@@ -137,6 +154,7 @@ export interface PreviewReportPayload {
   duplicates: DuplicateGroup[];
   grouped_problems: Record<string, ProblemOccurrence[]>;
   row_results: RowResult[];
+  review_flags?: ReviewFlagPayload[];
 }
 
 export interface StatusChip {

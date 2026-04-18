@@ -3,7 +3,9 @@ import type {
   JobListItemResponse,
   JobResultPayload,
   JobStatusResponse,
+  ReviewFlagActionStatus,
   RowReadResponse,
+  RowReviewFlagResponse,
   RowUpdateResponse,
   TenantListItem,
   UploadResponse,
@@ -125,6 +127,21 @@ export async function updateJobRow(
     body: JSON.stringify({ updates }),
   });
   return readResponse<RowUpdateResponse>(response);
+}
+
+export async function setJobRowReviewFlag(
+  jobId: string,
+  rowIndex: number,
+  status: ReviewFlagActionStatus,
+): Promise<RowReviewFlagResponse> {
+  const response = await fetch(buildApiUrl(`/jobs/${jobId}/rows/${rowIndex}/flag`), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status }),
+  });
+  return readResponse<RowReviewFlagResponse>(response);
 }
 
 export async function resolveDuplicateRows(params: {

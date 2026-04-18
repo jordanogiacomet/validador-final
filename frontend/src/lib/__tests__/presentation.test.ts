@@ -6,14 +6,17 @@ import {
   describeIssue,
   filterDuplicates,
   filterDuplicatesForResultSearch,
+  filterProblemGroupsForReviewFlags,
   filterProblemGroupsForResultView,
   filterProblemGroupsForResultSearch,
   formatStatusChip,
   getBulkConsolidatableSameNameDuplicates,
   getDuplicateFilterCounts,
+  getReviewFlaggedRowCount,
   getValidationScopeLabel,
   hasActiveResultFilters,
   hasDuplicateDescriptionConflict,
+  isRowMarkedForReview,
   normalizeValidationScope,
   normalizeSearchText,
   resetResultFilterState,
@@ -156,6 +159,82 @@ describe("presentation helpers", () => {
     ]);
     expect(filterDuplicatesForResultSearch(duplicates, "normal", "cadeira")).toEqual([]);
     expect(getDuplicateFilterCounts(duplicates, "cadeira")).toEqual({
+      all: 1,
+      normal: 0,
+      conflict: 1,
+    });
+  });
+
+  it("tracks rows marked for later review", () => {
+    const reviewFlags = [
+      { row_index: 1, status: "review" as const },
+      { row_index: 4, status: "review" as const },
+      { row_index: 1, status: "review" as const },
+    ];
+
+    expect(isRowMarkedForReview(reviewFlags, 1)).toBe(true);
+    expect(isRowMarkedForReview(reviewFlags, 2)).toBe(false);
+    expect(getReviewFlaggedRowCount(reviewFlags)).toBe(2);
+  });
+
+  it("filters problem occurrences to rows marked for later review", () => {
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      ZERO_ITEM_COMPLEMENTO_EMPTY: [
+        {
+          row_index: 0,
+          item: "1100",
+          descricao: "Mesa",
+          severity: "warning",
+          message: "Complemento vazio",
+          field: "complemento",
+        },
+        {
+          row_index: 2,
+          item: "2200",
+          descricao: "Cadeira",
+          severity: "warning",
+          message: "Complemento vazio",
+          field: "complemento",
+        },
+      ],
+    };
+
+    expect(
+      filterProblemGroupsForReviewFlags(
+        groupedProblems,
+        [{ row_index: 2, status: "review" }],
+        true,
+      ),
+    ).toEqual({
+      ZERO_ITEM_COMPLEMENTO_EMPTY: [groupedProblems.ZERO_ITEM_COMPLEMENTO_EMPTY[1]],
+    });
+  });
+
+  it("combines search, duplicate filters, and review markers", () => {
+    const duplicates: DuplicateGroup[] = [
+      {
+        item: "1100",
+        descricao: "Mesa",
+        row_indices: [0, 1],
+        count: 2,
+      },
+      {
+        item: "2200",
+        descricao: "Cadeira / Poltrona",
+        has_description_conflict: true,
+        row_indices: [4, 9],
+        count: 2,
+      },
+    ];
+    const reviewFlags = [{ row_index: 9, status: "review" as const }];
+
+    expect(
+      filterDuplicatesForResultSearch(duplicates, "conflict", "poltrona", reviewFlags, true),
+    ).toEqual([duplicates[1]]);
+    expect(filterDuplicatesForResultSearch(duplicates, "normal", "", reviewFlags, true)).toEqual(
+      [],
+    );
+    expect(getDuplicateFilterCounts(duplicates, "", reviewFlags, true)).toEqual({
       all: 1,
       normal: 0,
       conflict: 1,

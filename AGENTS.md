@@ -150,11 +150,13 @@ Reports should be practical for operational correction workflows
 Report formatting should be separated from validation logic
 Prefer structured issue data over report-specific logic inside rules
 Avoid coupling report generation tightly to rule internals
+Mutable operator annotations over completed results should live as tenant-scoped sidecar files and be overlaid when the result payload is read, not written into immutable result JSON/PDF artifacts
 LLM prompts may carry YAML frontmatter with `version`; keep legacy prompt files working with a default version and propagate `prompt_version` plus `model` through structured issue/report metadata instead of ad-hoc report-only fields
 LLM response cache TTL belongs in `tenant.llm.cache_ttl_seconds`; keep cache key/persistence helpers centralized in `app/core/llm_cache.py`, use `VALIDATOR_LLM_CACHE_PATH` for storage location, and treat `force_refresh` as a job/API param that bypasses cache reads while refreshing successful writes
 LLM fallback model selection belongs in `tenant.llm.fallback_model`; retries should stay narrow to transient failures such as timeouts, HTTP 429, and HTTP 5xx, and failure issues should preserve the attempted model sequence
 Frontend Guidance
 Keep operational result filtering/search behavior in `frontend/src/lib/presentation.ts` helpers over the existing result payload, then let workspace components handle only state and rendering.
+Keep result review-marker filtering in `frontend/src/lib/presentation.ts` helpers over `review_flags`; workspace components should only own local toggle/filter state and rendering.
 When filtering result categories in the frontend, derive available categories from `CATEGORY_*` issue codes in the existing grouped problem payload unless the backend contract explicitly grows a category field.
 Reset local result filters/search when `currentJobId` changes so operators do not carry stale views between jobs.
 Improvement Workflow

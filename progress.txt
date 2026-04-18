@@ -33,6 +33,8 @@ Last Updated: 2026-04-18 12:00 -03
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
 - Frontend category result filters derive available categories from `CATEGORY_*` grouped problem codes unless the backend explicitly adds category metadata to the result payload.
+- Mutable review markers for completed results should be stored as tenant-scoped sidecar files under `results/{tenant_id}/{job_id}/review_flags.json` and overlaid into the result payload at read time, leaving generated JSON/PDF artifacts immutable.
+- Frontend review-marker filtering should stay in `frontend/src/lib/presentation.ts` over `review_flags`, and local review filters should reset together with search/result filters when `currentJobId` changes.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
 - Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
@@ -648,4 +650,25 @@ Expected architectural direction:
   - Keep result filters as facet-style helpers: each chip count should apply the other active filter dimensions so operators can see what a click would expose
   - The current result payload does not expose a row category field, so category filtering should stay conservative and use only category-backed issue codes for now
   - Reset search, duplicate filters, and result filters together on job changes; splitting those resets makes stale filtered views easy to reintroduce
+---
+
+## 2026-04-18 12:25 -03 - US-032
+- Implemented persistent row review markers for completed job results with `PATCH /jobs/{job_id}/rows/{row_index}/flag`, accepting `review` and `clear`
+- Stored mutable review state in a tenant-scoped sidecar at `results/{tenant_id}/{job_id}/review_flags.json` and overlaid `review_flags` into `GET /jobs/{job_id}/result`
+- Added frontend marker controls per problem row and a `Para revisão` filter that composes with search, duplicate filters, and result facets
+- Added focused backend tests for flag/unflag persistence and reload survival, plus API coverage for mark/clear and invalid row handling
+- Added focused frontend presentation tests for review marker counts, problem filtering, and duplicate filtering with review flags
+- Updated root `AGENTS.md` with the reusable sidecar/overlay convention for mutable result annotations
+- Files changed: `app/services/validation_service.py`, `app/api/routes.py`, `tests/test_validation_service.py`, `tests/test_api.py`, `frontend/src/lib/types.ts`, `frontend/src/lib/api.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/result-workspace.tsx`, `frontend/src/app/globals.css`, `frontend/src/lib/__tests__/presentation.test.ts`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (345 tests)
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (30 tests)
+  - `cd frontend && npm run lint`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended before deployment.
+- **Learnings for future iterations:**
+  - Mutable operator state should stay in sidecar files and be merged into read payloads so reprocessing/report generation can keep immutable artifacts stable
+  - Review flags should be validated against rows present in the current result payload to avoid stale or out-of-scope row markers
+  - Frontend review filtering composes cleanly when `review_flags` is treated as another presentation-layer filter, not a backend query
 ---
