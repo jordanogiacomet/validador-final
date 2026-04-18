@@ -417,8 +417,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 24,
-      "passes": false,
-      "notes": "Começar com match exato case e accent-insensitive. Fuzzy matching fica para uma próxima story se necessário."
+      "passes": true,
+      "notes": "Implementado com `NormalizationConfig` tipado no tenant, normalizador em `app/core/normalization/` e aplicação no pipeline antes das regras, preservando os valores originais em `ValidationContext.raw_row`. O match segue exato com normalização case/accent-insensitive; fuzzy matching continua fora de escopo."
     },
     {
       "id": "US-025",

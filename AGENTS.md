@@ -86,6 +86,7 @@ categories
 critical checks
 LLM settings
 prompt selection
+normalization dictionaries for canonical text fields
 
 Keep a working default tenant at all times.
 
@@ -122,6 +123,7 @@ Prefer registry-based rule loading over hardcoded execution chains.
 
 Engine Design Guidance
 Normalize source input into canonical field names before rule execution
+Apply tenant-configured Marca/Modelo alias normalization before rules and preserve the pre-normalized source values in ValidationContext.raw_row
 Derive shared flags and shared context before running row-level rules
 Load rules from tenant configuration
 Keep one generic validation engine

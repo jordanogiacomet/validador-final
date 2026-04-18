@@ -175,6 +175,53 @@ def test_validate_row_persists_shared_context_mutations():
     assert shared_context["seen_rows"] == 2
 
 
+def test_validate_all_normalizes_brand_model_before_rules_and_preserves_raw_row():
+    class RawAndNormalizedBrandRule(BaseRule):
+        name: str = "raw_and_normalized_brand"
+
+        def applies(self, context: ValidationContext) -> bool:
+            return True
+
+        def validate(self, context: ValidationContext) -> list[ValidationIssue]:
+            return [
+                ValidationIssue(
+                    code="BRAND_MODEL_CAPTURE",
+                    severity="info",
+                    message=(
+                        f"{context.normalized_row.get('marca')}|"
+                        f"{context.normalized_row.get('modelo')}|"
+                        f"{context.raw_row.get('Marca')}|"
+                        f"{context.raw_row.get('Modelo')}"
+                    ),
+                    field="marca",
+                )
+            ]
+
+    register_rule(RawAndNormalizedBrandRule())
+
+    tenant = _make_tenant(
+        enabled_rules=["raw_and_normalized_brand"],
+        normalization={
+            "brand_aliases": {"samsúng": "Samsung"},
+            "model_aliases": {"élitebook 840 g5": "EliteBook 840 G5"},
+        },
+    )
+    engine = ValidationEngine(tenant)
+
+    raw_rows = [
+        {
+            "Item": "001",
+            "Placa Anterior": "",
+            "Marca": "SAMSUNG",
+            "Modelo": "ELITEBOOK 840 G5",
+        }
+    ]
+
+    results = engine.validate_all(raw_rows)
+
+    assert results[0][0].message == "Samsung|EliteBook 840 G5|SAMSUNG|ELITEBOOK 840 G5"
+
+
 def test_validate_all_processes_only_rows_in_scope():
     register_rule(AlwaysFailRule())
 

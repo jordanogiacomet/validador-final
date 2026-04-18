@@ -39,6 +39,7 @@ Last Updated: 2026-04-18 10:54 -03
 - Persist auth-related operational metadata with the configured `api_key_id`, never the raw API key secret.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
+- Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
 
 ---
 
@@ -511,4 +512,19 @@ Expected architectural direction:
   - Keep operational audit persistence parallel to `JobService`: optional JSON-backed storage is enough for single-node retention without coupling audit reads to job internals
   - Capture `api_key_id` at job creation time if background completion events need to preserve who initiated the run after request context is gone
   - Audit endpoints should reuse the authenticated tenant context and only accept `tenant_id` as a scoped hint, matching the rest of the API
+---
+
+## 2026-04-18 11:02 -03 - US-024
+- Implemented tenant-configured Marca/Modelo normalization with typed `NormalizationConfig` in `app/core/tenant_config.py`
+- Added `app/core/normalization/` with a reusable `BrandModelNormalizer` that resolves exact aliases case- and accent-insensitively
+- Applied normalization in the generic row-normalization pipeline before rules and preserved pre-normalized source values in `ValidationContext.raw_row`
+- Updated seed tenant YAMLs to expose the new config contract and added focused tests for config loading, alias matching, fallback behavior, missing dictionaries, and engine integration
+- Files changed: `AGENTS.md`, `app/core/canonical_fields.py`, `app/core/context.py`, `app/core/engine.py`, `app/core/normalization/__init__.py`, `app/core/normalization/brand_model.py`, `app/core/tenant_config.py`, `app/services/validation_service.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `tests/test_engine.py`, `tests/test_normalization.py`, `tests/test_tenant.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check --fix app tests`
+  - `pytest` (311 tests)
+- **Learnings for future iterations:**
+  - Keep tenant alias dictionaries in typed config (`tenant.normalization`) so future normalization features can reuse the same contract without adding tenant conditionals to the core
+  - Preserve raw source values in `ValidationContext.raw_row` whenever canonical normalization changes a field; this keeps future rules and audit/report features able to compare canonical vs uploaded values
+  - Exact alias normalization should stay conservative for now: casefold + accent removal + whitespace normalization is enough for deterministic matching, while fuzzy matching remains a separate concern
 ---

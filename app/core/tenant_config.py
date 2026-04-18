@@ -20,6 +20,11 @@ class LLMConfig(BaseModel):
     prompt_file: str = ""
 
 
+class NormalizationConfig(BaseModel):
+    brand_aliases: dict[str, str] = Field(default_factory=dict)
+    model_aliases: dict[str, str] = Field(default_factory=dict)
+
+
 class CSVConfig(BaseModel):
     delimiter: str = ","
     encoding: str = "utf-8"
@@ -38,6 +43,7 @@ class TenantConfig(BaseModel):
     disabled_rules: list[str] = Field(default_factory=list)
     thresholds: dict[str, int | float | str | bool] = Field(default_factory=dict)
     categories: list[CategoryConfig] = Field(default_factory=list)
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
     csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     api_keys: list[APIKeyConfig] = Field(default_factory=list)

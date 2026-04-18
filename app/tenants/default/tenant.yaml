@@ -25,6 +25,10 @@ thresholds:
 
 categories: []
 
+normalization:
+  brand_aliases: {}
+  model_aliases: {}
+
 llm:
   enabled: false
   healthcheck_enabled: false

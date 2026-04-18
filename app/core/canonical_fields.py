@@ -3,6 +3,8 @@ from collections.abc import Collection
 
 from pydantic import BaseModel, Field
 
+from app.core.normalization import BrandModelNormalizer
+
 CANONICAL_FIELDS = (
     "Item",
     "Placa Anterior",
@@ -120,6 +122,7 @@ CANONICAL_FIELD_MAP: dict[str, str] = {
 def normalize_row(
     raw_row: dict[str, object],
     column_mapping: dict[str, str] | None = None,
+    brand_model_normalizer: BrandModelNormalizer | None = None,
 ) -> dict[str, str | int | float | None]:
     """Normalize a raw row using tenant column mapping and derive flags."""
     normalized: dict[str, str | int | float | None] = {}
@@ -140,6 +143,9 @@ def normalize_row(
             normalized[attr_name] = None
         else:
             normalized[attr_name] = value  # type: ignore[assignment]
+
+    if brand_model_normalizer is not None:
+        normalized = brand_model_normalizer.normalize_row(normalized)
 
     placa = normalized.get("placa_anterior")
     coletado, zero = derive_flags(placa)  # type: ignore[arg-type]

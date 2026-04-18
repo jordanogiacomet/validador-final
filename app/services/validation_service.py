@@ -1057,6 +1057,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                 validation_results[idx] = engine.validate_row(
                     row_index=idx,
                     normalized_row=normalized_rows[idx],
+                    raw_row=raw_rows[idx],
                     all_rows=scoped_rows,
                     shared_context=shared_context,
                 )

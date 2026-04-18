@@ -5,6 +5,7 @@ from app.core.tenant_config import (
     CategoryConfig,
     CSVConfig,
     LLMConfig,
+    NormalizationConfig,
     TenantConfig,
 )
 from app.core.tenant_loader import (
@@ -24,6 +25,8 @@ class TestTenantConfig:
         assert config.disabled_rules == []
         assert config.thresholds == {}
         assert config.categories == []
+        assert config.normalization.brand_aliases == {}
+        assert config.normalization.model_aliases == {}
         assert config.csv.delimiter == ","
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
@@ -69,6 +72,21 @@ class TestTenantConfig:
         assert config.csv.delimiter == ";"
         assert config.csv.encoding == "iso-8859-1"
 
+    def test_config_with_normalization_aliases(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            normalization=NormalizationConfig(
+                brand_aliases={"samsúng": "Samsung"},
+                model_aliases={"thinkpad t14 g1": "ThinkPad T14 Gen 1"},
+            ),
+        )
+        assert config.normalization.brand_aliases["samsúng"] == "Samsung"
+        assert (
+            config.normalization.model_aliases["thinkpad t14 g1"]
+            == "ThinkPad T14 Gen 1"
+        )
+
     def test_config_with_api_keys(self) -> None:
         config = TenantConfig(
             tenant_id="t",
@@ -95,6 +113,11 @@ class TestTenantLoader:
         config = load_tenant_config("empresa_exemplo")
         assert config.tenant_id == "empresa_exemplo"
         assert len(config.categories) == 2
+        assert config.normalization.brand_aliases["samsúng"] == "Samsung"
+        assert (
+            config.normalization.model_aliases["thinkpad t14 g1"]
+            == "ThinkPad T14 Gen 1"
+        )
         assert config.llm.enabled is True
         assert config.thresholds["short_complement_max_words"] == 5
 
