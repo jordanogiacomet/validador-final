@@ -385,7 +385,7 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": "Manter fallback para paths legados por um ciclo e documentar a migração em progress.txt. Reforça o caminho para histórico e retenção por tenant."
     },
     {

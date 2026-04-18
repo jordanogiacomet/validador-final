@@ -2,6 +2,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 import app.services.validation_service as validation_service
 from app.core.job import JobStatus
 from app.services.job_service import JobService
@@ -9,7 +11,10 @@ from app.services.validation_service import (
     OperationalExportKind,
     delete_job_csv_rows,
     delete_job_csv_rows_and_refresh,
+    get_job_csv_download,
     get_job_operational_export,
+    get_job_report_download,
+    get_job_result_payload,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
@@ -283,6 +288,48 @@ def test_run_validation_job_supports_redesim_v2_semicolon_csv(
     assert payload["row_results"][0]["descricao"] == "MONITOR"
     assert payload["row_results"][1]["descricao"] == "MESA"
     assert payload["duplicates"][0]["descricao"] == "MONITOR / MESA"
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "file_name", "content", "encoding"),
+    [
+        ("default", "lote.csv", CSV_CONTENT, "utf-8"),
+        ("redesim_v2", "redesim_v2.csv", REDESIM_V2_DUPLICATE_CONTENT, "iso-8859-1"),
+    ],
+)
+def test_run_validation_job_writes_artifacts_to_tenant_scoped_results_directory(
+    tmp_path,
+    monkeypatch,
+    tenant_id,
+    file_name,
+    content,
+    encoding,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / file_name
+    csv_path.write_text(content, encoding=encoding)
+
+    service = JobService()
+    job = service.create_job(
+        tenant_id=tenant_id,
+        file_path=str(csv_path),
+        file_name=file_name,
+    )
+
+    run_validation_job(job.job_id, service)
+
+    updated_job = service.get_job(job.job_id)
+    assert updated_job is not None
+    assert updated_job.result_path is not None
+    assert updated_job.report_path is not None
+    assert Path(updated_job.result_path) == (
+        results_dir / tenant_id / f"{job.job_id}_result.json"
+    )
+    assert Path(updated_job.report_path) == (
+        results_dir / tenant_id / f"{job.job_id}_report.pdf"
+    )
 
 
 def test_job_csv_read_and_update_preserve_redesim_v2_csv_format(tmp_path):
@@ -730,3 +777,72 @@ def test_get_job_operational_export_builds_problem_group_csv_from_result(tmp_pat
         "ZERO_ITEM_COMPLEMENTO_EMPTY,3,A002,Cadeira,warning,Complemento,"
         "Complemento vazio" in csv_output
     )
+
+
+def test_get_job_csv_download_falls_back_to_legacy_upload_root(tmp_path, monkeypatch):
+    uploads_dir = tmp_path / "uploads"
+    monkeypatch.setattr(validation_service, "UPLOADS_DIR", uploads_dir)
+
+    service = JobService()
+    job = service.create_job(tenant_id="default", file_name="inventario.csv")
+
+    legacy_path = uploads_dir / f"{job.job_id}_inventario.csv"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    job.file_path = str(uploads_dir / "default" / f"{job.job_id}_inventario.csv")
+
+    csv_path, download_name = get_job_csv_download(job.job_id, service)
+
+    assert csv_path == legacy_path
+    assert download_name == "inventario_corrigido.csv"
+
+
+def test_get_job_result_payload_falls_back_to_legacy_results_root(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    service = JobService()
+    job = service.create_job(tenant_id="default")
+    job.mark_running()
+    job.mark_completed(
+        result_path=str(results_dir / "default" / f"{job.job_id}_result.json"),
+        total_rows=1,
+    )
+
+    legacy_result_path = results_dir / f"{job.job_id}_result.json"
+    legacy_result_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_result_path.write_text(
+        json.dumps({"summary": {"total_rows": 1}}),
+        encoding="utf-8",
+    )
+
+    payload = get_job_result_payload(job.job_id, service)
+
+    assert payload["summary"]["total_rows"] == 1
+
+
+def test_get_job_report_download_falls_back_to_legacy_results_root(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    service = JobService()
+    job = service.create_job(tenant_id="default")
+    job.mark_running()
+    job.mark_completed(
+        report_path=str(results_dir / "default" / f"{job.job_id}_report.pdf")
+    )
+
+    legacy_report_path = results_dir / f"{job.job_id}_report.pdf"
+    legacy_report_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_report_path.write_bytes(b"%PDF-1.4 legacy report")
+
+    report_path = get_job_report_download(job.job_id, service)
+
+    assert report_path == legacy_report_path

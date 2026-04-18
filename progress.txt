@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 10:36 -03
+Last Updated: 2026-04-18 10:44 -03
 
 ---
 
@@ -37,6 +37,7 @@ Last Updated: 2026-04-18 10:36 -03
 - LLM health probes should stay conservative: use low-cost provider reachability checks with aggressive timeout defaults instead of triggering a full audit completion.
 - Tenant-scoped API auth should derive tenant context from `X-API-Key`; any `tenant_id` request parameter is only a hint and must be rejected on mismatch.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
+- Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 
 ---
 
@@ -318,6 +319,7 @@ Expected architectural direction:
   - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new image
   - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
   - Confirmed `GET http://127.0.0.1:30091/health` returned `{"status":"ok"}`
+
 - Checks passed:
   - `cd frontend && npm run typecheck`
   - `cd frontend && npm run test`
@@ -485,4 +487,15 @@ Expected architectural direction:
   - Middleware-authenticated tenant context should be the source of truth for API authorization; routes should only compare request hints or job ownership against that context, not reload tenant selection logic ad hoc
   - If API auth depends on a custom header such as `X-API-Key`, unauthenticated `OPTIONS` requests must remain allowed so browser CORS preflight does not break uploads or PATCH flows
   - Keeping tenant API keys in `tenant.yaml` as `{key_id, value}` pairs preserves a working default tenant today and leaves the loader as the only place that needs to change if secrets move to an external store later
+---
+
+## 2026-04-18 10:44 -03 - US-022
+- Implemented tenant-scoped artifact path helpers in `app/services/validation_service.py` for uploads, results, and reports
+- Updated API upload/download flows to persist new job paths under `uploads/{tenant_id}` and `results/{tenant_id}`, while keeping legacy root-path fallback reads for older jobs
+- Added focused backend and API tests covering tenant-scoped artifact creation for multiple tenants and legacy fallback reads for CSV/result/report artifacts
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/services/validation_service.py`, `tests/test_api.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- **Learnings for future iterations:**
+  - Keep artifact path derivation centralized so tenant isolation changes do not leak into routes or job callers
+  - When migrating on-disk layouts, preserve read fallback for one cycle so persisted legacy jobs remain operable during rollout
+  - Cover upload path assertions at the API layer because the initial CSV path is assigned before the validation worker runs
 ---

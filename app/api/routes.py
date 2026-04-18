@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from app.api.auth import get_authenticated_tenant, resolve_request_tenant_id
 from app.api.frontend import build_frontend_html
-from app.core.job import JobStatus
 from app.core.tenant_config import DEFAULT_TENANT_ID
 from app.core.tenant_loader import load_tenant_config
 from app.core.validation_scope import (
@@ -20,11 +19,13 @@ from app.core.validation_scope import (
 )
 from app.services.job_service import JobService
 from app.services.validation_service import (
-    UPLOADS_DIR,
     OperationalExportKind,
+    build_job_upload_path,
     create_reprocess_job,
     get_job_csv_download,
     get_job_operational_export,
+    get_job_report_download,
+    get_job_result_payload,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_validation_job,
@@ -226,19 +227,24 @@ async def upload_and_validate(
 ) -> UploadResponse:
     resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
 
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    stored_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
     job = job_service.create_job(
         tenant_id=resolved_tenant_id,
-        file_name=file.filename,
+        file_name=stored_file_name,
         params={VALIDATION_SCOPE_PARAM: validation_scope.value},
     )
-    file_path = UPLOADS_DIR / f"{job.job_id}_{file.filename}"
+    file_path = build_job_upload_path(
+        resolved_tenant_id,
+        job.job_id,
+        stored_file_name,
+    )
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
     content = await file.read()
     file_path.write_bytes(content)
 
     job.file_path = str(file_path)
-    job.file_name = file.filename
+    job.file_name = stored_file_name
     job_service.save_job(job.job_id)
 
     background_tasks.add_task(run_validation_job, job.job_id, job_service)
@@ -279,31 +285,35 @@ async def cancel_job(request: Request, job_id: str) -> JobStatusResponse:
 
 @router.get("/jobs/{job_id}/result")
 async def download_result(request: Request, job_id: str) -> dict:
-    job = _get_authorized_job(request, job_id)
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail=f"Job not completed: {job.status.value}")
+    _get_authorized_job(request, job_id)
 
-    if not job.result_path or not Path(job.result_path).exists():
-        raise HTTPException(status_code=404, detail="Result file not found")
-
-    import json
-
-    return json.loads(Path(job.result_path).read_text())
+    try:
+        return get_job_result_payload(job_id, job_service)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 @router.get("/jobs/{job_id}/report")
 async def download_report(request: Request, job_id: str):
-    job = _get_authorized_job(request, job_id)
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail=f"Job not completed: {job.status.value}")
-
-    if not job.report_path or not Path(job.report_path).exists():
-        raise HTTPException(status_code=404, detail="Report file not found")
+    _get_authorized_job(request, job_id)
 
     from fastapi.responses import FileResponse
 
+    try:
+        report_path = get_job_report_download(job_id, job_service)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
     return FileResponse(
-        path=job.report_path,
+        path=report_path,
         media_type="application/pdf",
         filename=f"report_{job_id}.pdf",
     )

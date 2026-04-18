@@ -100,6 +100,106 @@ DATE_TIME_VALUE_PATTERNS = (
 )
 
 
+def _sanitize_job_file_name(
+    file_name: str | None,
+    *,
+    default: str = "lote.csv",
+) -> str:
+    normalized_name = Path(file_name or default).name
+    return normalized_name or default
+
+
+def get_tenant_uploads_dir(tenant_id: str) -> Path:
+    return UPLOADS_DIR / tenant_id
+
+
+def get_tenant_results_dir(tenant_id: str) -> Path:
+    return RESULTS_DIR / tenant_id
+
+
+def build_job_upload_path(
+    tenant_id: str,
+    job_id: str,
+    file_name: str | None,
+) -> Path:
+    normalized_name = _sanitize_job_file_name(file_name)
+    return get_tenant_uploads_dir(tenant_id) / f"{job_id}_{normalized_name}"
+
+
+def build_job_result_path(tenant_id: str, job_id: str) -> Path:
+    return get_tenant_results_dir(tenant_id) / f"{job_id}_result.json"
+
+
+def build_job_report_path(tenant_id: str, job_id: str) -> Path:
+    return get_tenant_results_dir(tenant_id) / f"{job_id}_report.pdf"
+
+
+def _build_legacy_upload_path(
+    job_id: str,
+    file_name: str | None,
+) -> Path:
+    normalized_name = _sanitize_job_file_name(file_name)
+    return UPLOADS_DIR / f"{job_id}_{normalized_name}"
+
+
+def _build_legacy_result_path(job_id: str) -> Path:
+    return RESULTS_DIR / f"{job_id}_result.json"
+
+
+def _build_legacy_report_path(job_id: str) -> Path:
+    return RESULTS_DIR / f"{job_id}_report.pdf"
+
+
+def _resolve_existing_artifact_path(
+    *,
+    persisted_path: str | None,
+    preferred_path: Path,
+    legacy_path: Path | None = None,
+) -> Path:
+    candidates: list[Path] = []
+    if persisted_path:
+        candidates.append(Path(persisted_path))
+
+    if preferred_path not in candidates:
+        candidates.append(preferred_path)
+
+    if legacy_path is not None and legacy_path not in candidates:
+        candidates.append(legacy_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    if persisted_path:
+        return Path(persisted_path)
+
+    return preferred_path
+
+
+def _resolve_job_upload_path(job: JobRecord) -> Path:
+    return _resolve_existing_artifact_path(
+        persisted_path=job.file_path,
+        preferred_path=build_job_upload_path(job.tenant_id, job.job_id, job.file_name),
+        legacy_path=_build_legacy_upload_path(job.job_id, job.file_name),
+    )
+
+
+def _resolve_job_result_path(job: JobRecord) -> Path:
+    return _resolve_existing_artifact_path(
+        persisted_path=job.result_path,
+        preferred_path=build_job_result_path(job.tenant_id, job.job_id),
+        legacy_path=_build_legacy_result_path(job.job_id),
+    )
+
+
+def _resolve_job_report_path(job: JobRecord) -> Path:
+    return _resolve_existing_artifact_path(
+        persisted_path=job.report_path,
+        preferred_path=build_job_report_path(job.tenant_id, job.job_id),
+        legacy_path=_build_legacy_report_path(job.job_id),
+    )
+
+
 def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
     return {
         "sep": tenant_config.csv.delimiter,
@@ -174,10 +274,10 @@ def _get_job_csv_file(
     if job is None:
         raise KeyError(f"Job not found: {job_id}")
 
-    if not job.file_path:
+    if not job.file_path and not job.file_name:
         raise FileNotFoundError("Job does not contain a CSV file path")
 
-    file_path = Path(job.file_path)
+    file_path = _resolve_job_upload_path(job)
     if not file_path.exists():
         raise FileNotFoundError("CSV file not found for this job")
 
@@ -257,10 +357,35 @@ def _get_job_result_data(
     if job.status != JobStatus.COMPLETED:
         raise ValueError(f"Job not completed: {job.status.value}")
 
-    if not job.result_path or not Path(job.result_path).exists():
+    result_path = _resolve_job_result_path(job)
+    if not result_path.exists():
         raise FileNotFoundError("Result file not found")
 
-    return job, json.loads(Path(job.result_path).read_text(encoding="utf-8"))
+    return job, json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def get_job_result_payload(
+    job_id: str,
+    job_service: JobService,
+) -> dict:
+    _, payload = _get_job_result_data(job_id, job_service)
+    return payload
+
+
+def get_job_report_download(
+    job_id: str,
+    job_service: JobService,
+) -> Path:
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise KeyError(f"Job not found: {job_id}")
+    if job.status != JobStatus.COMPLETED:
+        raise ValueError(f"Job not completed: {job.status.value}")
+
+    report_path = _resolve_job_report_path(job)
+    if not report_path.exists():
+        raise FileNotFoundError("Report file not found")
+    return report_path
 
 
 def _sanitize_export_token(value: str) -> str:
@@ -681,8 +806,12 @@ def create_reprocess_job(
         file_name=source_file_name,
         params=source_job.params,
     )
-    destination_path = UPLOADS_DIR / f"{new_job.job_id}_{source_file_name}"
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    destination_path = build_job_upload_path(
+        new_job.tenant_id,
+        new_job.job_id,
+        source_file_name,
+    )
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_file_path, destination_path)
 
     new_job.file_path = str(destination_path)
@@ -981,12 +1110,11 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         )
         _raise_if_cancellation_requested(job_id, job_service)
 
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-        result_path = RESULTS_DIR / f"{job_id}_result.json"
+        result_path = build_job_result_path(job.tenant_id, job_id)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(report_data, ensure_ascii=False, default=str))
 
-        pdf_path = RESULTS_DIR / f"{job_id}_report.pdf"
+        pdf_path = build_job_report_path(job.tenant_id, job_id)
         generate_pdf_report(
             normalized_rows,
             validation_results,

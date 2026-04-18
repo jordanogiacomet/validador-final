@@ -121,7 +121,25 @@ def test_upload_uses_tenant_from_api_key_when_hint_missing():
     files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
     response = client.post("/validate", files=files, headers=auth_headers(REDESIM_API_KEY))
     assert response.status_code == 200
-    assert response.json()["tenant_id"] == "redesim"
+    payload = response.json()
+    assert payload["tenant_id"] == "redesim"
+
+    job = job_service.get_job(payload["job_id"])
+    assert job is not None
+    try:
+        assert job.file_path is not None
+        assert job.result_path is not None
+        assert job.report_path is not None
+        assert Path(job.file_path).parent.name == "redesim"
+        assert Path(job.result_path).parent.name == "redesim"
+        assert Path(job.report_path).parent.name == "redesim"
+    finally:
+        if job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
 
 
 def test_upload_can_request_all_items_scope():
@@ -644,9 +662,14 @@ def test_upload_saves_file():
     assert job is not None
     assert job.file_path is not None
     assert job.file_name == "inventory.csv"
+    assert Path(job.file_path).parent.name == "default"
     assert Path(job.file_path).name.endswith("inventory.csv")
 
     Path(job.file_path).unlink(missing_ok=True)
+    if job.result_path:
+        Path(job.result_path).unlink(missing_ok=True)
+    if job.report_path:
+        Path(job.report_path).unlink(missing_ok=True)
 
 
 def test_job_status_shows_counters_after_completion():
@@ -952,6 +975,7 @@ def test_reprocess_job_creates_new_job_from_corrected_csv():
     assert new_job is not None
     assert new_job.file_path is not None
     assert new_job.file_path != csv_path
+    assert Path(new_job.file_path).parent.name == "default"
     assert "Mesa executiva" in Path(new_job.file_path).read_text()
 
     Path(csv_path).unlink(missing_ok=True)

@@ -94,6 +94,7 @@ When changing tenant-facing behavior:
 preserve canonical field semantics
 avoid tenant-specific conditionals in core modules
 update the default tenant example if the configuration contract changes
+derive upload/result/report filesystem paths through shared tenant-scoped helpers and keep legacy read fallbacks during path-layout migrations
 Scope Control
 Change only the files needed for the task
 Do not refactor unrelated areas
