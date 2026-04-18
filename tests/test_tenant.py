@@ -39,6 +39,7 @@ class TestTenantConfig:
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
         assert config.llm.fallback_model is None
+        assert config.llm.parallel_requests == 1
         assert config.llm.cache_ttl_seconds == 0
         assert config.auth.issued_api_key_ttl_seconds == DEFAULT_ISSUED_API_KEY_TTL_SECONDS
         assert config.api_keys == []
@@ -74,12 +75,14 @@ class TestTenantConfig:
                 enabled=True,
                 model="claude-sonnet-4-20250514",
                 fallback_model="claude-haiku-4-20250514",
+                parallel_requests=3,
                 cache_ttl_seconds=300,
             ),
         )
         assert config.llm.enabled is True
         assert config.llm.model == "claude-sonnet-4-20250514"
         assert config.llm.fallback_model == "claude-haiku-4-20250514"
+        assert config.llm.parallel_requests == 3
         assert config.llm.cache_ttl_seconds == 300
 
     def test_config_with_csv_options(self) -> None:
@@ -181,6 +184,7 @@ class TestTenantLoader:
         assert config.normalization.model_brands["ThinkPad T14 Gen 1"] == "Lenovo"
         assert config.llm.enabled is True
         assert config.llm.fallback_model is None
+        assert config.llm.parallel_requests == 4
         assert config.llm.cache_ttl_seconds == 86400
         assert config.auth.issued_api_key_ttl_seconds == DEFAULT_ISSUED_API_KEY_TTL_SECONDS
         assert config.thresholds["short_complement_max_words"] == 5

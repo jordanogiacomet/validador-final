@@ -2,7 +2,7 @@ from app.core.context import ValidationContext
 from app.core.engine import ValidationEngine
 from app.core.issue import ValidationIssue
 from app.core.registry import RULE_REGISTRY, register_rule
-from app.core.tenant_config import TenantConfig
+from app.core.tenant_config import LLMConfig, TenantConfig
 from app.core.validation_scope import ValidationScope
 from app.rules.base import BaseRule
 
@@ -105,6 +105,65 @@ def test_unknown_rule_names_are_skipped():
     assert engine.get_enabled_rules() == []
 
 
+def test_build_execution_plan_parallelizes_only_llm_audit_when_configured():
+    class DummyLLMAuditRule(BaseRule):
+        name: str = "llm_audit"
+
+        def applies(self, context: ValidationContext) -> bool:
+            return True
+
+        def validate(self, context: ValidationContext) -> list[ValidationIssue]:
+            return []
+
+    register_rule(AlwaysFailRule())
+    register_rule(DummyLLMAuditRule())
+
+    tenant = _make_tenant(
+        enabled_rules=["always_fail", "llm_audit"],
+        llm=LLMConfig(
+            enabled=True,
+            model="claude-sonnet-4-20250514",
+            parallel_requests=4,
+        ),
+    )
+    engine = ValidationEngine(tenant)
+
+    plan = engine.build_execution_plan(scoped_row_count=6)
+
+    assert plan.serial_rule_names == ("always_fail",)
+    assert plan.parallel_rule_names == ("llm_audit",)
+    assert plan.parallel_workers == 4
+
+
+def test_build_execution_plan_keeps_llm_serial_when_parallelism_disabled():
+    class DummyLLMAuditRule(BaseRule):
+        name: str = "llm_audit"
+
+        def applies(self, context: ValidationContext) -> bool:
+            return True
+
+        def validate(self, context: ValidationContext) -> list[ValidationIssue]:
+            return []
+
+    register_rule(DummyLLMAuditRule())
+
+    tenant = _make_tenant(
+        enabled_rules=["llm_audit"],
+        llm=LLMConfig(
+            enabled=True,
+            model="claude-sonnet-4-20250514",
+            parallel_requests=1,
+        ),
+    )
+    engine = ValidationEngine(tenant)
+
+    plan = engine.build_execution_plan(scoped_row_count=6)
+
+    assert plan.serial_rule_names == ("llm_audit",)
+    assert plan.parallel_rule_names == ()
+    assert plan.parallel_workers == 1
+
+
 def test_validate_row_returns_issues():
     register_rule(AlwaysFailRule())
 
@@ -134,6 +193,22 @@ def test_validate_row_skips_non_applicable_rules():
     )
 
     assert issues == []
+
+
+def test_validate_row_can_limit_rules_by_name():
+    register_rule(AlwaysFailRule())
+    register_rule(RequiresDescricaoRule())
+
+    tenant = _make_tenant(enabled_rules=["always_fail", "requires_descricao"])
+    engine = ValidationEngine(tenant)
+
+    issues = engine.validate_row(
+        row_index=0,
+        normalized_row={"item": "001", "descricao": "Mesa"},
+        rule_names=("requires_descricao",),
+    )
+
+    assert [issue.code for issue in issues] == ["HAS_DESCRICAO"]
 
 
 def test_validate_row_no_rules():

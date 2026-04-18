@@ -185,6 +185,31 @@ def record_llm_audit_metadata(
         prompt_versions.append(prompt_version)
 
 
+def merge_llm_audit_metadata(
+    shared_context: dict,
+    metadata: dict[str, Any] | None,
+) -> None:
+    if not isinstance(metadata, dict):
+        return
+
+    target = shared_context.setdefault(
+        LLM_AUDIT_METADATA_KEY,
+        {"models": [], "prompt_versions": []},
+    )
+    models = target.setdefault("models", [])
+    prompt_versions = target.setdefault("prompt_versions", [])
+
+    for raw_model in metadata.get("models", []):
+        model = str(raw_model).strip()
+        if model and model not in models:
+            models.append(model)
+
+    for raw_prompt_version in metadata.get("prompt_versions", []):
+        prompt_version = str(raw_prompt_version).strip()
+        if prompt_version and prompt_version not in prompt_versions:
+            prompt_versions.append(prompt_version)
+
+
 def parse_llm_response(response_text: str) -> list[dict[str, str]]:
     json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
     if not json_match:

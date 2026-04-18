@@ -1,5 +1,7 @@
 import copy
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -50,6 +52,16 @@ EMPRESA_EXEMPLO_LLM_CONTENT = (
     "900,,Mesa,Acme,Model X,SN900,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
 )
 
+EMPRESA_EXEMPLO_LLM_BATCH_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "900,,Mesa,Acme,Model X,SN900,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+    "901,,Mesa,Acme,Model X,SN901,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+    "902,,Mesa,Acme,Model X,SN902,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+    "903,,Mesa,Acme,Model X,SN903,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+    "904,,Mesa,Acme,Model X,SN904,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+    "905,,Mesa,Acme,Model X,SN905,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+)
+
 
 class RecordingJobService(JobService):
     def __init__(self) -> None:
@@ -70,24 +82,114 @@ class CancelAfterProgressJobService(RecordingJobService):
 
 
 class FakeLLMClient:
-    def __init__(self, response: str = "[]") -> None:
+    def __init__(self, response: str = "[]", *, delay_seconds: float = 0.0) -> None:
         self.response = response
+        self.delay_seconds = delay_seconds
         self.calls: list[dict[str, object]] = []
+        self.max_in_flight = 0
+        self._in_flight = 0
+        self._lock = threading.Lock()
 
     def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
-        self.calls.append(
-            {
-                "model": model,
-                "prompt": prompt,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-        )
-        return self.response
+        with self._lock:
+            self._in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self._in_flight)
+
+        try:
+            if self.delay_seconds > 0:
+                time.sleep(self.delay_seconds)
+            with self._lock:
+                self.calls.append(
+                    {
+                        "model": model,
+                        "prompt": prompt,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                )
+            return self.response
+        finally:
+            with self._lock:
+                self._in_flight -= 1
 
 
 def setup_function():
     validation_service._JOB_CSV_CONTEXT_CACHE.clear()
+
+
+def _patch_empresa_exemplo_llm_config(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    parallel_requests: int,
+    cache_ttl_seconds: int = 0,
+) -> None:
+    original_load_tenant_config = validation_service.load_tenant_config
+
+    def patched_load_tenant_config(tenant_id: str):
+        config = original_load_tenant_config(tenant_id)
+        if config.tenant_id != "empresa_exemplo":
+            return config
+        return config.model_copy(
+            update={
+                "llm": config.llm.model_copy(
+                    update={
+                        "parallel_requests": parallel_requests,
+                        "cache_ttl_seconds": cache_ttl_seconds,
+                    }
+                )
+            }
+        )
+
+    monkeypatch.setattr(
+        validation_service,
+        "load_tenant_config",
+        patched_load_tenant_config,
+    )
+
+
+def _run_empresa_exemplo_llm_job(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    parallel_requests: int,
+    delay_seconds: float = 0.0,
+) -> tuple[dict, float, FakeLLMClient]:
+    run_dir = tmp_path / f"run-{parallel_requests}"
+    results_dir = run_dir / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv(LLM_CACHE_PATH_ENV, str(run_dir / "llm_cache.json"))
+    _patch_empresa_exemplo_llm_config(
+        monkeypatch,
+        parallel_requests=parallel_requests,
+        cache_ttl_seconds=0,
+    )
+
+    csv_path = run_dir / "empresa_exemplo.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.write_text(EMPRESA_EXEMPLO_LLM_BATCH_CONTENT, encoding="utf-8")
+
+    client = FakeLLMClient(response="[]", delay_seconds=delay_seconds)
+    set_default_client(client)
+    try:
+        service = RecordingJobService()
+        job = service.create_job(
+            tenant_id="empresa_exemplo",
+            file_path=str(csv_path),
+            file_name="empresa_exemplo.csv",
+        )
+        started_at = time.perf_counter()
+        run_validation_job(job.job_id, service)
+        elapsed = time.perf_counter() - started_at
+
+        updated_job = service.get_job(job.job_id)
+        assert updated_job is not None
+        assert updated_job.status == JobStatus.COMPLETED
+        assert updated_job.result_path is not None
+
+        payload = json.loads(Path(updated_job.result_path).read_text(encoding="utf-8"))
+        return payload, elapsed, client
+    finally:
+        set_default_client(None)
 
 
 def test_run_validation_job_publishes_incremental_preview_before_final_artifacts(
@@ -275,6 +377,53 @@ def test_run_validation_job_records_llm_prompt_version_in_result_and_pdf(
         assert b"claude-sonnet-4-20250514" in report_content
     finally:
         set_default_client(None)
+
+
+def test_run_validation_job_parallel_llm_matches_serial_output(
+    tmp_path,
+    monkeypatch,
+):
+    serial_payload, _, serial_client = _run_empresa_exemplo_llm_job(
+        tmp_path / "serial",
+        monkeypatch,
+        parallel_requests=1,
+    )
+    parallel_payload, _, parallel_client = _run_empresa_exemplo_llm_job(
+        tmp_path / "parallel",
+        monkeypatch,
+        parallel_requests=3,
+    )
+
+    assert serial_payload == parallel_payload
+    assert serial_payload["llm_audit"] == {
+        "prompt_versions": ["empresa_exemplo-v1"],
+        "models": ["claude-sonnet-4-20250514"],
+    }
+    assert len(serial_client.calls) == 6
+    assert len(parallel_client.calls) == 6
+
+
+def test_run_validation_job_parallel_llm_reduces_processing_time(
+    tmp_path,
+    monkeypatch,
+):
+    serial_payload, serial_elapsed, serial_client = _run_empresa_exemplo_llm_job(
+        tmp_path / "serial-slow",
+        monkeypatch,
+        parallel_requests=1,
+        delay_seconds=0.05,
+    )
+    parallel_payload, parallel_elapsed, parallel_client = _run_empresa_exemplo_llm_job(
+        tmp_path / "parallel-slow",
+        monkeypatch,
+        parallel_requests=3,
+        delay_seconds=0.05,
+    )
+
+    assert serial_payload == parallel_payload
+    assert serial_client.max_in_flight == 1
+    assert parallel_client.max_in_flight > 1
+    assert parallel_elapsed < serial_elapsed * 0.75
 
 
 def test_run_validation_job_keeps_redesim_descricao_in_preview_and_final_duplicates(

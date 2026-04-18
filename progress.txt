@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 16:35 -03
+Last Updated: 2026-04-18 17:12 -03
 
 ---
 
@@ -29,6 +29,8 @@ Last Updated: 2026-04-18 16:35 -03
 - Parse optional YAML frontmatter for tenant prompt files at load time and default legacy prompts to a stable version token so LLM audit/report metadata stays reproducible without breaking older prompts.
 - LLM response caching is tenant-configured with `llm.cache_ttl_seconds`; cache keys and persistence live in `app/core/llm_cache.py`, storage path comes from `VALIDATOR_LLM_CACHE_PATH`, and `force_refresh` job params bypass cache reads while refreshing successful writes.
 - LLM fallback model selection is tenant-configured with `llm.fallback_model`; retry only transient failures (timeouts, HTTP 429, HTTP 5xx), and preserve attempted model sequence plus primary/final failure details in warning issue metadata.
+- Safe validation parallelism should stay limited to isolated row-level phases (currently `llm_audit`); keep cross-row rules and shared aggregations in the serial pass, then merge only deterministic metadata back into shared context.
+- When parallelizing preview-time validation, ensure the batch size is at least the configured worker count; otherwise single-row batches neutralize the intended throughput gain.
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
@@ -920,6 +922,23 @@ Expected architectural direction:
   - `pytest` (398 tests)
 - **Learnings for future iterations:**
   - Bootstrap operacional deve falhar sem persistência configurada; criar o primeiro operador em memória faria o ambiente parecer inicializado mesmo perdendo o acesso após restart.
-  - Reexecução segura do bootstrap deve usar o `username` existente como chave de idempotência e só trocar o hash quando houver intenção explícita (`VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true`).
-  - O bootstrap do tenant oficial pertence ao startup/lifespan da API e ao `AuthService`, não ao tenant YAML nem a uma rota administrativa adicional.
+- Reexecução segura do bootstrap deve usar o `username` existente como chave de idempotência e só trocar o hash quando houver intenção explícita (`VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true`).
+- O bootstrap do tenant oficial pertence ao startup/lifespan da API e ao `AuthService`, não ao tenant YAML nem a uma rota administrativa adicional.
+---
+
+## 2026-04-18 17:12 -03 - US-046
+- Implementada paralelização controlada da fase segura de auditoria LLM no pipeline de validação, mantendo regras cross-row e agregações compartilhadas no fluxo serial da mesma `ValidationEngine`.
+- Adicionado `llm.parallel_requests` na tenant config, plano explícito de execução serial/paralela na engine, merge determinístico dos metadados LLM e proteção contra escrita concorrente no cache local do LLM.
+- Ajustado o cálculo do batch da prévia para nunca ficar abaixo do número de workers paralelos, evitando neutralizar o ganho de throughput com batches unitários.
+- Adicionados testes para plano de execução, filtro por regras, equivalência serial/paralela do resultado, ganho de tempo com cliente LLM lento e segurança do cache em escritas paralelas.
+- Files changed: `app/core/engine.py`, `app/core/llm_cache.py`, `app/core/tenant_config.py`, `app/rules/llm_audit.py`, `app/services/validation_service.py`, `app/tenants/empresa_exemplo/tenant.yaml`, `tests/test_engine.py`, `tests/test_llm_cache.py`, `tests/test_tenant.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `pytest tests/test_engine.py tests/test_llm_cache.py tests/test_tenant.py tests/test_validation_service.py -q`
+  - `ruff check --fix app tests`
+  - `ruff check app tests`
+  - `pytest -q`
+- **Learnings for future iterations:**
+  - Paralelize apenas fases realmente isoladas; regras que dependem de `all_rows` ou caches compartilhados devem continuar no passe serial para preservar semântica.
+  - Metadados de auditoria LLM sem findings explícitos ainda precisam ser agregados fora das issues para manter JSON/PDF reprodutíveis entre execuções seriais e paralelas.
+  - Cache local baseado em arquivo precisa de locking por caminho antes de suportar múltiplos workers na mesma API processando auditorias LLM em paralelo.
 ---

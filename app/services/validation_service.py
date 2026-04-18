@@ -4,6 +4,7 @@ import math
 import re
 import shutil
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -15,7 +16,8 @@ from app.core.canonical_fields import (
     DEFAULT_TENANT_COLUMNS,
     resolve_source_column_name,
 )
-from app.core.engine import ValidationEngine
+from app.core.engine import ValidationEngine, ValidationExecutionPlan
+from app.core.issue import ValidationIssue
 from app.core.job import JobRecord, JobStatus
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM, resolve_force_refresh
 from app.core.logging import get_logger, log_event
@@ -30,7 +32,11 @@ from app.core.validation_scope import (
 from app.rules.brand_model_consistency import BrandModelConsistencyRule
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
-from app.rules.llm_audit import LLM_AUDIT_METADATA_KEY, LLMAuditRule
+from app.rules.llm_audit import (
+    LLM_AUDIT_METADATA_KEY,
+    LLMAuditRule,
+    merge_llm_audit_metadata,
+)
 from app.rules.suspicious_patterns import SuspiciousPatternRule
 from app.rules.zero_item_quality import ZeroItemQualityRule
 from app.services.job_service import JobService
@@ -283,6 +289,79 @@ class ReviewFlagUpdate:
     row_index: int
     status: str
     review_flags: list[dict[str, object]]
+
+
+def _copy_llm_parallel_shared_context(shared_context: dict) -> dict:
+    return {
+        LLM_FORCE_REFRESH_PARAM: resolve_force_refresh(
+            shared_context.get(LLM_FORCE_REFRESH_PARAM)
+        )
+    }
+
+
+def _extract_llm_audit_metadata(shared_context: dict) -> dict[str, list[str]] | None:
+    metadata = shared_context.get(LLM_AUDIT_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        return None
+
+    extracted = {
+        "models": [
+            str(model).strip()
+            for model in metadata.get("models", [])
+            if str(model).strip()
+        ],
+        "prompt_versions": [
+            str(prompt_version).strip()
+            for prompt_version in metadata.get("prompt_versions", [])
+            if str(prompt_version).strip()
+        ],
+    }
+    if not extracted["models"] and not extracted["prompt_versions"]:
+        return None
+    return extracted
+
+
+def _validate_parallel_rule_batch(
+    engine: ValidationEngine,
+    *,
+    batch_indices: list[int],
+    normalized_rows: list[dict[str, str | int | float | None]],
+    raw_rows: list[dict[str, object]],
+    scoped_rows: list[dict[str, str | int | float | None]],
+    rule_names: tuple[str, ...],
+    base_shared_context: dict,
+    shared_context: dict,
+    max_workers: int,
+) -> dict[int, list[ValidationIssue]]:
+    if not batch_indices or not rule_names:
+        return {}
+
+    def _validate_row_with_isolated_context(
+        row_index: int,
+    ) -> tuple[list[ValidationIssue], dict[str, list[str]] | None]:
+        row_shared_context = _copy_llm_parallel_shared_context(base_shared_context)
+        issues = engine.validate_row(
+            row_index=row_index,
+            normalized_row=normalized_rows[row_index],
+            raw_row=raw_rows[row_index],
+            all_rows=scoped_rows,
+            shared_context=row_shared_context,
+            rule_names=rule_names,
+        )
+        return issues, _extract_llm_audit_metadata(row_shared_context)
+
+    results: dict[int, list[ValidationIssue]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            row_index: executor.submit(_validate_row_with_isolated_context, row_index)
+            for row_index in batch_indices
+        }
+        for row_index in batch_indices:
+            issues, metadata = futures[row_index].result()
+            merge_llm_audit_metadata(shared_context, metadata)
+            results[row_index] = issues
+
+    return results
 
 
 def _get_job_csv_file(
@@ -1025,11 +1104,12 @@ def ensure_rules_registered() -> None:
     register_rule(LLMAuditRule())
 
 
-def _resolve_batch_size(total_rows: int) -> int:
+def _resolve_batch_size(total_rows: int, *, parallel_workers: int = 1) -> int:
     if total_rows <= 0:
         return 1
 
     target_size = math.ceil(total_rows / TARGET_PREVIEW_BATCHES)
+    target_size = max(target_size, parallel_workers)
     return max(1, min(DEFAULT_BATCH_SIZE, target_size))
 
 
@@ -1195,14 +1275,20 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         )
         scoped_rows = [normalized_rows[idx] for idx in scoped_row_indices]
         total_rows = len(scoped_row_indices)
-        batch_size = _resolve_batch_size(total_rows)
+        execution_plan: ValidationExecutionPlan = engine.build_execution_plan(
+            scoped_row_count=total_rows
+        )
+        batch_size = _resolve_batch_size(
+            total_rows,
+            parallel_workers=execution_plan.parallel_workers,
+        )
         partial_duplicates = build_duplicate_section(
             normalized_rows,
             {},
             row_indices=scoped_row_indices,
         )
 
-        validation_results: dict[int, list] = {}
+        validation_results: dict[int, list[ValidationIssue]] = {}
         processed_row_indices: list[int] = []
         shared_context: dict = {
             LLM_FORCE_REFRESH_PARAM: resolve_force_refresh(
@@ -1247,13 +1333,31 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
 
             for idx in batch_indices:
                 _raise_if_cancellation_requested(job_id, job_service)
-                validation_results[idx] = engine.validate_row(
-                    row_index=idx,
-                    normalized_row=normalized_rows[idx],
-                    raw_row=raw_rows[idx],
-                    all_rows=scoped_rows,
+                validation_results[idx] = []
+                if execution_plan.serial_rule_names:
+                    validation_results[idx] = engine.validate_row(
+                        row_index=idx,
+                        normalized_row=normalized_rows[idx],
+                        raw_row=raw_rows[idx],
+                        all_rows=scoped_rows,
+                        shared_context=shared_context,
+                        rule_names=execution_plan.serial_rule_names,
+                    )
+
+            if execution_plan.parallel_rule_names:
+                parallel_results = _validate_parallel_rule_batch(
+                    engine,
+                    batch_indices=batch_indices,
+                    normalized_rows=normalized_rows,
+                    raw_rows=raw_rows,
+                    scoped_rows=scoped_rows,
+                    rule_names=execution_plan.parallel_rule_names,
+                    base_shared_context=shared_context,
                     shared_context=shared_context,
+                    max_workers=execution_plan.parallel_workers,
                 )
+                for idx in batch_indices:
+                    validation_results[idx].extend(parallel_results.get(idx, []))
 
             processed_row_indices.extend(batch_indices)
             partial_report = build_partial_report(

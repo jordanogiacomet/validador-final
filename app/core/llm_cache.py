@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import Any, ClassVar, Final, Protocol
 
 LLM_CACHE_PATH_ENV: Final[str] = "VALIDATOR_LLM_CACHE_PATH"
 LLM_FORCE_REFRESH_PARAM: Final[str] = "force_refresh"
@@ -27,6 +28,9 @@ class LLMResponseCache(Protocol):
 
 
 class FileLLMResponseCache:
+    _path_locks: ClassVar[dict[str, threading.RLock]] = {}
+    _path_locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
     def __init__(self, path: Path | str, *, clock: Any | None = None) -> None:
         self.path = Path(path)
         self._clock = clock or time.time
@@ -39,7 +43,8 @@ class FileLLMResponseCache:
         if ttl_seconds <= 0:
             return None
 
-        entry = self._read_entries().get(cache_key)
+        with self._get_lock():
+            entry = self._read_entries().get(cache_key)
         if not isinstance(entry, dict):
             return None
 
@@ -57,12 +62,22 @@ class FileLLMResponseCache:
         return response_text
 
     def set(self, cache_key: str, response_text: str) -> None:
-        entries = self._read_entries()
-        entries[cache_key] = {
-            "created_at": self._clock(),
-            "response_text": response_text,
-        }
-        self._write_entries(entries)
+        with self._get_lock():
+            entries = self._read_entries()
+            entries[cache_key] = {
+                "created_at": self._clock(),
+                "response_text": response_text,
+            }
+            self._write_entries(entries)
+
+    def _get_lock(self) -> threading.RLock:
+        path_key = str(self.path.resolve())
+        with self._path_locks_guard:
+            lock = self._path_locks.get(path_key)
+            if lock is None:
+                lock = threading.RLock()
+                self._path_locks[path_key] = lock
+            return lock
 
     def _read_entries(self) -> dict[str, dict[str, object]]:
         if not self.path.exists():

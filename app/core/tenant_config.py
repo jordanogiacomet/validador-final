@@ -18,6 +18,7 @@ class LLMConfig(BaseModel):
     healthcheck_enabled: bool = False
     model: str = ""
     fallback_model: str | None = None
+    parallel_requests: int = Field(default=1, ge=1)
     temperature: float = 0.0
     max_tokens: int = 1024
     prompt_file: str = ""

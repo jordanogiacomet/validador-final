@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from app.core.llm_cache import (
     FileLLMResponseCache,
     build_llm_cache_key,
@@ -65,6 +67,23 @@ def test_file_llm_response_cache_expires_stale_entries(tmp_path):
     now = 1100.0
 
     assert cache.get("key", ttl_seconds=60) is None
+
+
+def test_file_llm_response_cache_handles_parallel_writes(tmp_path):
+    cache_path = tmp_path / "llm_cache.json"
+
+    def write_entry(index: int) -> None:
+        FileLLMResponseCache(cache_path, clock=lambda: 1000.0).set(
+            f"key-{index}",
+            f"response-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(write_entry, range(8)))
+
+    cache = FileLLMResponseCache(cache_path, clock=lambda: 1000.0)
+    for index in range(8):
+        assert cache.get(f"key-{index}", ttl_seconds=60) == f"response-{index}"
 
 
 def test_resolve_force_refresh_accepts_boolean_and_string_values():

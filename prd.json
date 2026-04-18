@@ -789,8 +789,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 46,
-      "passes": false,
-      "notes": "A paralelização precisa ser pragmática: acelerar parsing, validação por lotes ou auditoria LLM quando seguro, sem quebrar regras dependentes de contexto compartilhado."
+      "passes": true,
+      "notes": "Implementado com plano explícito de execução na `ValidationEngine`: regras cross-row seguem no passe serial, a fase opcional `llm_audit` pode rodar em paralelo via `llm.parallel_requests`, o cache local recebeu proteção para escrita concorrente e testes focados cobrem equivalência serial/paralela e ganho de throughput."
     }
   ],
   "nonFunctionalRequirements": {

@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 
 from app.core.canonical_fields import normalize_row
 from app.core.context import ValidationContext
@@ -12,6 +13,14 @@ from app.core.validation_scope import DEFAULT_VALIDATION_SCOPE, ValidationScope
 from app.rules.base import BaseRule
 
 RowType = dict[str, str | int | float | None]
+PARALLEL_SAFE_RULE_NAMES = frozenset({"llm_audit"})
+
+
+@dataclass(frozen=True)
+class ValidationExecutionPlan:
+    serial_rule_names: tuple[str, ...]
+    parallel_rule_names: tuple[str, ...] = ()
+    parallel_workers: int = 1
 
 
 class ValidationEngine:
@@ -21,10 +30,16 @@ class ValidationEngine:
             tenant.normalization
         )
 
-    def get_enabled_rules(self) -> list[BaseRule]:
+    def get_enabled_rules(
+        self,
+        rule_names: tuple[str, ...] | list[str] | None = None,
+    ) -> list[BaseRule]:
         rules: list[BaseRule] = []
+        selected_rule_names = (
+            self.tenant.enabled_rules if rule_names is None else rule_names
+        )
 
-        for rule_name in self.tenant.enabled_rules:
+        for rule_name in selected_rule_names:
             if rule_name in self.tenant.disabled_rules:
                 continue
 
@@ -34,6 +49,42 @@ class ValidationEngine:
 
         return rules
 
+    def build_execution_plan(
+        self,
+        *,
+        scoped_row_count: int,
+    ) -> ValidationExecutionPlan:
+        enabled_rule_names = tuple(rule.name for rule in self.get_enabled_rules())
+        parallel_rule_names: tuple[str, ...] = ()
+        parallel_workers = 1
+
+        if (
+            scoped_row_count > 1
+            and self.tenant.llm.enabled
+            and self.tenant.llm.parallel_requests > 1
+        ):
+            parallel_rule_names = tuple(
+                rule_name
+                for rule_name in enabled_rule_names
+                if rule_name in PARALLEL_SAFE_RULE_NAMES
+            )
+            if parallel_rule_names:
+                parallel_workers = min(
+                    scoped_row_count,
+                    self.tenant.llm.parallel_requests,
+                )
+
+        serial_rule_names = tuple(
+            rule_name
+            for rule_name in enabled_rule_names
+            if rule_name not in parallel_rule_names
+        )
+        return ValidationExecutionPlan(
+            serial_rule_names=serial_rule_names,
+            parallel_rule_names=parallel_rule_names,
+            parallel_workers=parallel_workers,
+        )
+
     def validate_row(
         self,
         row_index: int,
@@ -41,6 +92,7 @@ class ValidationEngine:
         raw_row: dict[str, object] | None = None,
         all_rows: list[dict[str, str | int | float | None]] | None = None,
         shared_context: dict | None = None,
+        rule_names: tuple[str, ...] | list[str] | None = None,
     ) -> list[ValidationIssue]:
         source_shared_context = shared_context if shared_context is not None else {}
         context = ValidationContext(
@@ -54,7 +106,7 @@ class ValidationEngine:
 
         issues: list[ValidationIssue] = []
 
-        for rule in self.get_enabled_rules():
+        for rule in self.get_enabled_rules(rule_names=rule_names):
             if rule.applies(context):
                 started_at = time.perf_counter()
                 rule_issues = rule.validate(context)
@@ -114,6 +166,7 @@ class ValidationEngine:
         normalized_rows: list[RowType],
         raw_rows: list[dict[str, object]] | None = None,
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+        rule_names: tuple[str, ...] | list[str] | None = None,
     ) -> dict[int, list[ValidationIssue]]:
         scope_row_indices = self.get_scoped_row_indices(
             normalized_rows,
@@ -130,6 +183,7 @@ class ValidationEngine:
                 raw_row=raw_rows[idx] if raw_rows is not None else None,
                 all_rows=scope_rows,
                 shared_context=shared_context,
+                rule_names=rule_names,
             )
             results[idx] = issues
 
@@ -139,10 +193,12 @@ class ValidationEngine:
         self,
         raw_rows: list[dict[str, object]],
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+        rule_names: tuple[str, ...] | list[str] | None = None,
     ) -> dict[int, list[ValidationIssue]]:
         normalized_rows = self.normalize_rows(raw_rows)
         return self.validate_normalized_rows(
             normalized_rows,
             raw_rows=raw_rows,
             validation_scope=validation_scope,
+            rule_names=rule_names,
         )
