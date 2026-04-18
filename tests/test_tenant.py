@@ -6,6 +6,7 @@ from app.core.tenant_config import (
     CSVConfig,
     LLMConfig,
     NormalizationConfig,
+    SuspiciousPatternsConfig,
     TenantConfig,
 )
 from app.core.tenant_loader import (
@@ -28,6 +29,8 @@ class TestTenantConfig:
         assert config.normalization.brand_aliases == {}
         assert config.normalization.model_aliases == {}
         assert config.normalization.model_brands == {}
+        assert config.suspicious_patterns.literal_patterns == []
+        assert config.suspicious_patterns.regex_patterns == []
         assert config.csv.delimiter == ","
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
@@ -99,6 +102,18 @@ class TestTenantConfig:
         assert config.api_keys[0].key_id == "tenant-local"
         assert config.api_keys[0].value == "secret-value"
 
+    def test_config_with_suspicious_patterns(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            suspicious_patterns=SuspiciousPatternsConfig(
+                literal_patterns=["diversos", "teste"],
+                regex_patterns=[r"\bnao\s+informado\b"],
+            ),
+        )
+        assert config.suspicious_patterns.literal_patterns == ["diversos", "teste"]
+        assert config.suspicious_patterns.regex_patterns == [r"\bnao\s+informado\b"]
+
 
 class TestTenantLoader:
     def test_load_default_tenant(self) -> None:
@@ -106,6 +121,7 @@ class TestTenantLoader:
         assert config.tenant_id == "default"
         assert config.display_name == "Default Tenant"
         assert config.llm.enabled is False
+        assert config.suspicious_patterns.literal_patterns == []
         assert config.api_keys[0].key_id == "default-local"
 
     def test_load_default_by_id(self) -> None:

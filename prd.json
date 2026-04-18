@@ -450,8 +450,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 26,
-      "passes": false,
-      "notes": "Manter a regra conservadora e opt-in para evitar ruído em tenants sem padrões conhecidos."
+      "passes": true,
+      "notes": "Implementado com `SuspiciousPatternRule` opt-in, configuração tipada em `tenant.suspicious_patterns` para padrões literais e regex e cobertura focada para match literal, regex e ausência de configuração."
     },
     {
       "id": "US-027",

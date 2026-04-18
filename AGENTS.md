@@ -88,6 +88,7 @@ LLM settings
 prompt selection
 normalization dictionaries for canonical text fields
 brand/model consistency dictionaries keyed by canonical model when tenant rules need to infer expected Marca from Modelo
+new tenant-owned rule dictionaries/lists should prefer typed Pydantic sub-models in `app/core/tenant_config.py`, and regex-like entries should be validated at tenant load time
 
 Keep a working default tenant at all times.
 

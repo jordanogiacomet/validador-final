@@ -30,6 +30,10 @@ normalization:
   model_aliases: {}
   model_brands: {}
 
+suspicious_patterns:
+  literal_patterns: []
+  regex_patterns: []
+
 llm:
   enabled: false
   healthcheck_enabled: false

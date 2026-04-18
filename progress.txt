@@ -41,6 +41,7 @@ Last Updated: 2026-04-18 10:54 -03
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 - Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
+- New tenant-owned rule config should use typed Pydantic sub-models in `app/core/tenant_config.py`; validate regex-like entries during tenant load so jobs do not fail mid-validation.
 
 ---
 
@@ -258,6 +259,7 @@ Expected architectural direction:
 - Added focused service and API tests for highest-row duplicate resolution and field merging
 - Fixed the legacy integrity-rule integration test to request `ValidationScope.ALL_ITEMS` explicitly, preserving the current default `zero_items` operational scope
 - Applied ruff import-order fixes in `app/rules/integrity.py` and `app/services/report_service.py`
+
 - Updated `prd.json` with US-012 for duplicate consolidation
 - Deployed:
   - API image: `ttl.sh/validador-final-api-20260417104643:24h`
@@ -542,4 +544,15 @@ Expected architectural direction:
   - Keep `model_brands` keyed by canonical model names and let the normalizer project aliases onto that lookup; this avoids duplicating alias spellings across tenant dictionaries
   - Brand/model consistency should compare against normalized canonical row values, not `raw_row`, so alias normalization and future tenant dictionaries compose cleanly
   - Keep the rule opt-in and silent when the model is not dicionarized or the brand is blank; missing-brand coverage belongs to the existing quality rules, while this rule should stay focused on inconsistencies
+---
+
+## 2026-04-18 11:15 -03 - US-026
+- Implemented `SuspiciousPatternRule` in `app/rules/suspicious_patterns.py` to detect tenant-configured suspicious literals and regexes in canonical `descricao` and `complemento`
+- Added typed tenant config `SuspiciousPatternsConfig` in `app/core/tenant_config.py` and validated regex entries during config loading
+- Registered the new rule in `app/services/validation_service.py` and updated the default tenant example with an empty `suspicious_patterns` section
+- Added focused tests in `tests/test_suspicious_patterns.py` and expanded `tests/test_tenant.py` coverage for the new config defaults and parsing
+- Files changed: `app/core/tenant_config.py`, `app/rules/suspicious_patterns.py`, `app/services/validation_service.py`, `app/tenants/default/tenant.yaml`, `tests/test_tenant.py`, `tests/test_suspicious_patterns.py`
+- **Learnings for future iterations:**
+  - Regex-backed tenant config should be validated when the tenant is loaded, not lazily during rule execution
+  - Suspicious text detection should stay opt-in and operate over normalized canonical fields rather than raw upload parsing
 ---

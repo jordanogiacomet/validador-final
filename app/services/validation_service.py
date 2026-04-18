@@ -30,6 +30,7 @@ from app.rules.brand_model_consistency import BrandModelConsistencyRule
 from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
 from app.rules.llm_audit import LLMAuditRule
+from app.rules.suspicious_patterns import SuspiciousPatternRule
 from app.rules.zero_item_quality import ZeroItemQualityRule
 from app.services.job_service import JobService
 from app.services.report_service import (
@@ -835,6 +836,7 @@ def ensure_rules_registered() -> None:
     register_rule(ZeroItemQualityRule())
     register_rule(CategoryRequiredFieldsRule())
     register_rule(CategoryCriticalCheckRule())
+    register_rule(SuspiciousPatternRule())
     register_rule(LLMAuditRule())
 
 

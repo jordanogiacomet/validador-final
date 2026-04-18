@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class CategoryConfig(BaseModel):
@@ -26,6 +28,20 @@ class NormalizationConfig(BaseModel):
     model_brands: dict[str, str] = Field(default_factory=dict)
 
 
+class SuspiciousPatternsConfig(BaseModel):
+    literal_patterns: list[str] = Field(default_factory=list)
+    regex_patterns: list[str] = Field(default_factory=list)
+
+    @field_validator("regex_patterns")
+    @classmethod
+    def validate_regex_patterns(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            if not pattern.strip():
+                continue
+            re.compile(pattern)
+        return patterns
+
+
 class CSVConfig(BaseModel):
     delimiter: str = ","
     encoding: str = "utf-8"
@@ -45,6 +61,9 @@ class TenantConfig(BaseModel):
     thresholds: dict[str, int | float | str | bool] = Field(default_factory=dict)
     categories: list[CategoryConfig] = Field(default_factory=list)
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
+    suspicious_patterns: SuspiciousPatternsConfig = Field(
+        default_factory=SuspiciousPatternsConfig
+    )
     csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     api_keys: list[APIKeyConfig] = Field(default_factory=list)
