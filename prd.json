@@ -586,8 +586,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 34,
-      "passes": false,
-      "notes": "A emissão deve ser tratada como fluxo autenticado de sessão curta ou token operacional, evitando chave estática compartilhada entre operadores."
+      "passes": true,
+      "notes": "Coberto pelo fluxo já implementado em `POST /login` + `AuthService`: o backend recebe tenant/credenciais, emite `X-API-Key` escopada por tenant e operador, persiste apenas o hash da chave e registra `tenant_id`, `operator_id` e `api_key_id` de forma segura."
     },
     {
       "id": "US-035",

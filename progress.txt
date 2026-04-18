@@ -703,3 +703,15 @@ Expected architectural direction:
   - Store only issued API key hashes; the raw key should appear only in the login response and request header
   - Keeping the legacy `api_keys` fallback avoids breaking existing API tests and deployments while the login-issued key flow is adopted by the frontend
 ---
+
+## 2026-04-18 12:55 -03 - US-034
+- Validated that the existing backend login flow already satisfies the story acceptance criteria for authenticated `X-API-Key` issuance per tenant/operator
+- Confirmed coverage in `app/api/routes.py`, `app/services/auth_service.py`, `app/api/auth.py`, `tests/test_auth_service.py`, and `tests/test_api.py`; no additional backend code change was required
+- Updated `prd.json` to mark `US-034` as passed based on the shipped `/login` + issued-key implementation
+- Files changed: `prd.json`, `progress.txt`
+- Checks passed:
+  - `pytest tests/test_auth_service.py tests/test_api.py -k 'login or issued_api_key'` (6 tests)
+- **Learnings for future iterations:**
+  - Story splits around login/auth can overlap; when that happens, validate the existing acceptance contract first and only add code if the implementation actually falls short
+  - The backend contract for issued keys is already anchored in `POST /login` plus `AuthService`; future auth stories should extend key lifecycle behavior there instead of creating a parallel issuance path
+---
