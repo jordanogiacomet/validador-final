@@ -50,4 +50,4 @@ api_keys:
 operators:
   - operator_id: default-local-operator
     username: default.operator
-    password_hash: pbkdf2_sha256$120000$default-local-operator$a4856b6371a4e299050012d2f1bb2ab6f31da83a80558f5de69f3c98b7df1e43
+    password_hash: pbkdf2_sha256$120000$default-local-operator$d4b33a7accf06812fa29bc7c9557eadf30d0f93fbb60d937a163f57943c7ebc0

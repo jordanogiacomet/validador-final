@@ -26,6 +26,17 @@ export interface LoginResponse {
   api_key_id: string;
   x_api_key: string;
   header_name: string;
+  expires_at?: string | null;
+}
+
+export interface APIKeyRenewalResponse {
+  tenant_id: string;
+  operator_id: string;
+  api_key_id: string;
+  previous_api_key_id: string;
+  x_api_key: string;
+  expires_at: string;
+  header_name: string;
 }
 
 export interface UploadResponse {

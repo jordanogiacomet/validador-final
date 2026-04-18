@@ -27,6 +27,8 @@ describe("LoginScreen", () => {
     expect(screen.getByLabelText("Tenant")).toBeDefined();
     expect(screen.getByLabelText("Usuário")).toBeDefined();
     expect(screen.getByLabelText("Senha")).toBeDefined();
+    expect(screen.getByText("Credenciais iniciais configuradas")).toBeDefined();
+    expect(screen.getByText("default.operator")).toBeDefined();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeDefined();
   });
 
@@ -101,5 +103,20 @@ describe("LoginScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(message);
+  });
+
+  it("blocks tenant and username with invalid characters before calling login", async () => {
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Tenant"), { target: { value: "default';--" } });
+    fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador<script>" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(loginOperatorMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Use apenas letras, números, ponto, hífen ou underscore.")).toBeDefined();
+    expect(
+      screen.getByText("Use apenas letras, números, ponto, arroba, hífen ou underscore."),
+    ).toBeDefined();
   });
 });

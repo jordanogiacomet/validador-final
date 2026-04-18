@@ -29,8 +29,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
+if [[ "$TOOL" != "amp" && "$TOOL" != "claude" && "$TOOL" != "codex" ]]; then
+  echo "Error: Invalid tool '$TOOL'. Must be 'amp', 'claude', or 'codex'."
   exit 1
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +38,24 @@ PRD_FILE="$SCRIPT_DIR/prd.json"
 PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
 LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
+LAST_MESSAGE_FILE="$SCRIPT_DIR/.codex-last-message"
+
+run_codex() {
+  local prompt_file="$1"
+  rm -f "$LAST_MESSAGE_FILE"
+
+  npx -y @openai/codex@latest exec \
+    --model gpt-5.4 \
+    --config 'model_reasoning_effort="xhigh"' \
+    --sandbox danger-full-access \
+    --json \
+    --output-last-message "$LAST_MESSAGE_FILE" \
+    - < "$prompt_file"
+
+  if [[ -f "$LAST_MESSAGE_FILE" ]]; then
+    cat "$LAST_MESSAGE_FILE"
+  fi
+}
 
 # Archive previous run if branch changed
 if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
@@ -90,6 +108,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Run the selected tool with the ralph prompt
   if [[ "$TOOL" == "amp" ]]; then
     OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+  elif [[ "$TOOL" == "codex" ]]; then
+    OUTPUT=$(run_codex "$SCRIPT_DIR/AGENTS.ralph.md" 2>&1 | tee /dev/stderr) || true
   else
     # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
     OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true

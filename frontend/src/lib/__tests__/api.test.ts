@@ -4,8 +4,10 @@ import {
   clearApiSession,
   downloadApiFile,
   getApiSession,
+  getApiSessionExpiresAtMs,
   listTenants,
   loginOperator,
+  renewApiSession,
   setApiSession,
   setApiSessionInvalidHandler,
 } from "@/lib/api";
@@ -106,6 +108,63 @@ describe("api auth session helpers", () => {
     expect(headers.get("X-API-Key")).toBe("vapi_example");
     expect(getApiSession()).toBeNull();
     expect(window.sessionStorage.length).toBe(0);
+    expect(onSessionInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews the session and replaces the stored X-API-Key", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          tenant_id: "default",
+          operator_id: "op-1",
+          api_key_id: "issued-2",
+          previous_api_key_id: "issued-1",
+          x_api_key: "vapi_renewed",
+          expires_at: "2026-04-18T20:00:00+00:00",
+          header_name: "X-API-Key",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    const nextSession = await renewApiSession();
+
+    const [, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+    expect(nextSession.x_api_key).toBe("vapi_renewed");
+    expect(nextSession.api_key_id).toBe("issued-2");
+    expect(nextSession.expires_at).toBe("2026-04-18T20:00:00+00:00");
+    expect(getApiSession()?.x_api_key).toBe("vapi_renewed");
+    expect(getApiSessionExpiresAtMs()).toBe(
+      Date.parse("2026-04-18T20:00:00+00:00"),
+    );
+  });
+
+  it("clears the session when renewal is rejected as expired", async () => {
+    const onSessionInvalid = vi.fn();
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Expired API key" }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }),
+    );
+
+    setApiSession(SESSION);
+    setApiSessionInvalidHandler(onSessionInvalid);
+
+    await expect(renewApiSession()).rejects.toMatchObject({ status: 401 });
+
+    expect(getApiSession()).toBeNull();
     expect(onSessionInvalid).toHaveBeenCalledTimes(1);
   });
 

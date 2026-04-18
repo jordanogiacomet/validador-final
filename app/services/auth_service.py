@@ -211,6 +211,57 @@ class AuthService:
             detail="Active API key",
         )
 
+    def renew_api_key(
+        self,
+        *,
+        tenant_id: str,
+        api_key_id: str,
+        now: datetime | None = None,
+    ) -> IssuedAPIKey:
+        record = self._records.get(api_key_id)
+        if record is None or record.tenant_id != tenant_id:
+            raise AuthServiceError(404, "Issued API key not found")
+
+        current_time = now or datetime.now(UTC)
+        if record.revoked_at is not None:
+            raise AuthServiceError(401, "Revoked API key")
+
+        self._backfill_record_expiration(record)
+        if record.expires_at is not None and current_time >= record.expires_at:
+            self._mark_record_expired(record, current_time)
+            raise AuthServiceError(401, "Expired API key")
+
+        issued_ttl_seconds = self._get_tenant_ttl_seconds(record.tenant_id)
+        new_raw_api_key = f"vapi_{secrets.token_urlsafe(32)}"
+        new_record = IssuedAPIKeyRecord(
+            tenant_id=record.tenant_id,
+            operator_id=record.operator_id,
+            username=record.username,
+            key_hash=hash_api_key(new_raw_api_key),
+            created_at=current_time,
+            issued_ttl_seconds=issued_ttl_seconds,
+            expires_at=current_time + timedelta(seconds=issued_ttl_seconds),
+        )
+        record.revoked_at = current_time
+
+        self._records[new_record.key_id] = new_record
+        self._persist_records()
+
+        self._record_audit_event(
+            AuditEventType.API_KEY_RENEWED,
+            record,
+            details={
+                "successor_api_key_id": new_record.key_id,
+                "renewed_at": current_time.isoformat(),
+                "operator_id": record.operator_id,
+                "expires_at": new_record.expires_at.isoformat()
+                if new_record.expires_at is not None
+                else None,
+            },
+        )
+
+        return IssuedAPIKey(raw_api_key=new_raw_api_key, record=new_record)
+
     def revoke_api_key(
         self,
         *,

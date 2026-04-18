@@ -53,6 +53,7 @@ Last Updated: 2026-04-18 13:05 -03
 - New tenant-owned rule config should use typed Pydantic sub-models in `app/core/tenant_config.py`; validate regex-like entries during tenant load so jobs do not fail mid-validation.
 - Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
 - Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
+- Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 
 ---
 
@@ -753,4 +754,24 @@ Expected architectural direction:
   - Keep the login-issued key lifecycle in `AuthService`; routes should only expose login/revocation endpoints and middleware should consume the resolved status instead of duplicating expiry logic
   - Tenant-owned auth policy belongs in typed config (`tenant.auth`) so TTL changes stay declarative and do not require route-level branching
   - Expiration audit should be emitted only once on the first failed use of a stale key; persisting `expired_at` avoids duplicate audit noise on repeated requests
+---
+
+## 2026-04-18 14:25 -03 - US-037
+- Implementado `AuthService.renew_api_key` que emite novo `X-API-Key` e revoga o registro anterior na mesma transação, preservando tenant/operador e respeitando o TTL tenant-configurável
+- Adicionado endpoint autenticado `POST /api-keys/renew` que encapsula o fluxo de renovação usando o contexto resolvido pelo middleware, retornando `previous_api_key_id`, nova `x_api_key` e `expires_at`
+- Adicionado evento `AuditEventType.API_KEY_RENEWED` com detalhes ligando predecessor e sucessor (`successor_api_key_id`, `renewed_at`, `expires_at`)
+- `LoginResponse` e persistência de sessão no frontend passam a propagar `expires_at`; `renewApiSession` atualiza o storage com a chave renovada e mantém o handler de invalidação existente para falhas 401
+- Página inicial do frontend mostra banner com botão `Renovar sessão` quando faltam ≤ 5 min para expirar e trata erros de renovação sem forçar logout
+- Files changed: `app/core/audit.py`, `app/services/auth_service.py`, `app/api/routes.py`, `tests/test_auth_service.py`, `tests/test_api.py`, `frontend/src/lib/types.ts`, `frontend/src/lib/api.ts`, `frontend/src/app/page.tsx`, `frontend/src/app/globals.css`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/app/page.test.tsx`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (371 tests)
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (49 tests)
+  - `cd frontend && npm run lint`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended for the renewal banner and timer.
+- **Learnings for future iterations:**
+  - Renewal must revoke and issue in the same `AuthService` call so the predecessor key becomes invalid atomically with the successor creation, keeping middleware and audit aligned
+  - The `API_KEY_RENEWED` event should carry `successor_api_key_id` so downstream tooling can follow a session lineage without inspecting raw key hashes
+  - Frontend session clock watching should rely on `Date.now` + a light `setInterval`; use `vi.spyOn(Date, 'now')` in tests instead of `vi.useFakeTimers`, which stalls React Testing Library's internal timers
 ---

@@ -1,4 +1,5 @@
 import type {
+  APIKeyRenewalResponse,
   DuplicateResolutionResponse,
   JobListItemResponse,
   LoginRequestPayload,
@@ -62,6 +63,15 @@ function isLoginResponse(value: unknown): value is LoginResponse {
     typeof candidate.x_api_key === "string" &&
     typeof candidate.header_name === "string"
   );
+}
+
+export function getApiSessionExpiresAtMs(): number | null {
+  const session = getApiSession();
+  if (!session?.expires_at) {
+    return null;
+  }
+  const expiresAtMs = Date.parse(session.expires_at);
+  return Number.isFinite(expiresAtMs) ? expiresAtMs : null;
 }
 
 function readPersistedApiSession(): LoginResponse | null {
@@ -220,6 +230,22 @@ async function readResponse<T>(response: Response): Promise<T> {
 export async function listTenants(): Promise<TenantListItem[]> {
   const response = await apiFetch("/tenants");
   return readResponse<TenantListItem[]>(response);
+}
+
+export async function renewApiSession(): Promise<LoginResponse> {
+  const response = await apiFetch("/api-keys/renew", { method: "POST" });
+  const renewal = await readResponse<APIKeyRenewalResponse>(response);
+
+  const nextSession: LoginResponse = {
+    tenant_id: renewal.tenant_id,
+    operator_id: renewal.operator_id,
+    api_key_id: renewal.api_key_id,
+    x_api_key: renewal.x_api_key,
+    header_name: renewal.header_name,
+    expires_at: renewal.expires_at,
+  };
+  setApiSession(nextSession);
+  return nextSession;
 }
 
 export async function loginOperator(payload: LoginRequestPayload): Promise<LoginResponse> {

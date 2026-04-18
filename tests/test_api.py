@@ -17,6 +17,7 @@ client = TestClient(app)
 
 DEFAULT_API_KEY = "default-local-test-key"
 DEFAULT_API_KEY_ID = "default-local"
+DEFAULT_OPERATOR_PASSWORD = "Validador@2026!"
 REDESIM_API_KEY = "redesim-local-test-key"
 
 
@@ -34,7 +35,7 @@ def login_headers(
     *,
     tenant_id: str = "default",
     username: str = "default.operator",
-    password: str = "default-password",
+    password: str = DEFAULT_OPERATOR_PASSWORD,
 ) -> tuple[dict[str, str], dict]:
     response = client.post(
         "/login",
@@ -216,6 +217,47 @@ def test_revoke_current_issued_api_key_records_audit_event_and_blocks_access():
     ]
 
 
+def test_renew_issued_api_key_rotates_session_and_records_audit_event():
+    headers, payload = login_headers()
+
+    response = client.post("/api-keys/renew", headers=headers)
+    assert response.status_code == 200
+    renew_payload = response.json()
+    assert renew_payload["tenant_id"] == "default"
+    assert renew_payload["operator_id"] == "default-local-operator"
+    assert renew_payload["previous_api_key_id"] == payload["api_key_id"]
+    assert renew_payload["api_key_id"] != payload["api_key_id"]
+    assert renew_payload["x_api_key"] != payload["x_api_key"]
+    assert renew_payload["expires_at"]
+    assert renew_payload["header_name"] == "X-API-Key"
+
+    denied_old = client.get("/tenants", headers=headers)
+    assert denied_old.status_code == 401
+
+    new_headers = auth_headers(renew_payload["x_api_key"])
+    allowed_new = client.get("/tenants", headers=new_headers)
+    assert allowed_new.status_code == 200
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.API_KEY_RENEWED,
+        AuditEventType.API_KEY_ISSUED,
+    ]
+    renewal_event = events[0]
+    assert renewal_event.api_key_id == payload["api_key_id"]
+    assert renewal_event.details["successor_api_key_id"] == renew_payload["api_key_id"]
+
+
+def test_renew_issued_api_key_rejects_expired_session():
+    headers, _payload = login_headers()
+    record = auth_service.list_records()[0]
+    record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    response = client.post("/api-keys/renew", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Expired API key"
+
+
 def test_expired_issued_api_key_returns_401_and_records_audit_event():
     headers, payload = login_headers()
     record = auth_service.list_records()[0]
@@ -252,7 +294,7 @@ def test_login_rejects_unknown_tenant():
         json={
             "tenant_id": "missing",
             "username": "default.operator",
-            "password": "default-password",
+            "password": DEFAULT_OPERATOR_PASSWORD,
         },
     )
     assert response.status_code == 404
@@ -265,11 +307,25 @@ def test_login_rejects_operator_for_other_tenant():
         json={
             "tenant_id": "redesim",
             "username": "default.operator",
-            "password": "default-password",
+            "password": DEFAULT_OPERATOR_PASSWORD,
         },
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "Operator is not allowed for this tenant"
+
+
+def test_login_rejects_invalid_identifier_format():
+    response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default';--",
+            "username": "default.operator",
+            "password": DEFAULT_OPERATOR_PASSWORD,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "tenant_id contains invalid characters" in response.text
 
 
 def test_issued_api_key_rejects_conflicting_tenant_hint():

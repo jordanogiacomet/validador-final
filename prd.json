@@ -620,6 +620,108 @@
       "priority": 36,
       "passes": true,
       "notes": "Implementado com TTL tenant-configurável em `tenant.auth.issued_api_key_ttl_seconds`, revogação via `POST /api-keys/revoke`, eventos `api_key_issued`/`api_key_expired`/`api_key_revoked` no audit log e middleware retornando 401 consistente para chaves expiradas ou revogadas."
+    },
+    {
+      "id": "US-037",
+      "title": "Renovar sessão autenticada antes da expiração",
+      "description": "Como operador, preciso renovar minha sessão autenticada perto do vencimento para não perder contexto durante revisões longas e correções operacionais.",
+      "acceptanceCriteria": [
+        "Expor um fluxo seguro para renovar a X-API-Key emitida preservando o tenant autenticado",
+        "A renovação invalida ou substitui a chave anterior de forma auditável",
+        "Frontend avisa quando a sessão estiver próxima de expirar e permite renovar sem logout forçado",
+        "Falha de renovação mantém comportamento consistente de retorno ao login",
+        "Eventos de renovação ficam registrados no audit log do tenant",
+        "Testes cobrem renovação bem-sucedida, renovação com chave expirada e invalidação da chave antiga",
+        "Ruff lint, pytest e checks de frontend passam"
+      ],
+      "priority": 37,
+      "passes": true,
+      "notes": "Implementado com `AuthService.renew_api_key` que emite novo `X-API-Key` e invalida o anterior na mesma transação, endpoint autenticado `POST /api-keys/renew`, evento de auditoria `api_key_renewed` com `successor_api_key_id` e UI de aviso com botão `Renovar sessão` no frontend consumindo `renewApiSession` em `frontend/src/lib/api.ts`."
+    },
+    {
+      "id": "US-038",
+      "title": "Rastrear reprocessamentos a partir do job original",
+      "description": "Como operador, preciso saber quando um job foi reprocessado, de qual job ele se originou e qual tentativa está mais recente para não me perder entre execuções relacionadas.",
+      "acceptanceCriteria": [
+        "Persistir referência ao job de origem quando um reprocessamento for criado",
+        "Expor no payload do job informações mínimas de lineage como parent_job_id e latest_retry_job_id quando aplicável",
+        "Frontend mostra de forma discreta a relação entre job original e reprocessamentos",
+        "Audit log registra o vínculo entre o job de origem e o novo job gerado",
+        "A implementação permanece tenant-agnostic e sem duplicar a orquestração de jobs",
+        "Testes cobrem persistência, leitura e autorização tenant-scoped do lineage",
+        "Ruff lint, pytest e checks de frontend passam"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "Melhoria sobre o fluxo de reprocessamento já existente para reduzir ambiguidade operacional sem alterar a engine de validação."
+    },
+    {
+      "id": "US-039",
+      "title": "Exportar CSV operacional com base nos filtros ativos do resultado",
+      "description": "Como operador, preciso exportar apenas o subconjunto filtrado do resultado atual para compartilhar lotes menores de correção com outras áreas.",
+      "acceptanceCriteria": [
+        "Permitir exportar um CSV operacional filtrado a partir dos filtros já existentes de busca, severidade, categoria, duplicatas e marcação para revisão",
+        "Preservar o CSV completo atual como opção separada",
+        "Manter a fonte de verdade dos filtros no frontend em `presentation.ts` ou em helpers compartilhados equivalentes",
+        "Exportação protegida continua usando os helpers autenticados de `frontend/src/lib/api.ts`",
+        "Estado dos filtros do job atual é refletido corretamente no arquivo exportado",
+        "Testes de frontend cobrem combinação de filtros e conteúdo exportado",
+        "Checks de frontend passam"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": "Melhoria incremental do workspace operacional, reaproveitando os filtros existentes em vez de criar uma nova taxonomia de resultado."
+    },
+    {
+      "id": "US-040",
+      "title": "Criar painel operacional de auditoria no frontend",
+      "description": "Como operador, preciso visualizar os eventos de auditoria no frontend para investigar revogações de chave, reprocessamentos e ações operacionais sem consultar logs brutos.",
+      "acceptanceCriteria": [
+        "Adicionar área de auditoria no frontend consumindo o endpoint autenticado `/audit` já existente",
+        "Permitir filtros por tipo de evento, intervalo recente e job_id quando disponível",
+        "Exibir tenant_id, api_key_id, timestamps e detalhes resumidos de cada evento",
+        "Manter os fetches autenticados centralizados em `frontend/src/lib/api.ts`",
+        "Resetar filtros locais quando o contexto de tenant ou job ativo mudar, quando fizer sentido",
+        "Testes de frontend cobrem carregamento, filtros e estados vazios",
+        "Checks de frontend passam"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "A base backend já existe via `AuditService` e `GET /audit`; a evolução esperada é principalmente de apresentação e navegação operacional."
+    },
+    {
+      "id": "US-041",
+      "title": "Gerenciar operadores por tenant e substituir a credencial seed inicial",
+      "description": "Como administrador operacional, preciso cadastrar, desabilitar e rotacionar operadores por tenant para não depender indefinidamente da credencial seed configurada em arquivo.",
+      "acceptanceCriteria": [
+        "Criar fluxo administrativo para listar operadores configurados por tenant sem expor segredos ou hashes",
+        "Permitir cadastrar novo operador e desabilitar operador existente mantendo o tenant como escopo obrigatório",
+        "Permitir rotacionar a senha da credencial seed inicial e registrar a ação em audit log",
+        "Persistir apenas hashes de senha e manter o contrato tipado em `TenantConfig` ou storage equivalente da camada de auth",
+        "A API continua fina e delega a regra de negócio para o serviço de autenticação",
+        "Testes cobrem criação, desabilitação, rotação e restrição por tenant",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "Evolução natural da autenticação multi-tenant atual. Deve evitar hardcode adicional de operadores em produção e substituir a dependência operacional da senha bootstrap."
+    },
+    {
+      "id": "US-042",
+      "title": "Manter a interface operacional simples para usuários não técnicos",
+      "description": "Como gestor operacional, preciso que a interface continue simples, direta e fácil de entender por usuários com baixa familiaridade técnica para que a operação patrimonial não dependa de treinamento excessivo.",
+      "acceptanceCriteria": [
+        "Revisar os principais fluxos do frontend para remover excesso de jargão técnico, ruído visual e ações ambíguas",
+        "Priorizar linguagem operacional clara, botões autoexplicativos e estados vazios que orientem a próxima ação",
+        "Garantir que login, upload, filtros, revisão e exportação continuem compreensíveis em poucos passos",
+        "Evitar densidade excessiva de controles na mesma área da tela",
+        "Manter a lógica de apresentação centralizada nos helpers/shared components já existentes sem espalhar comportamento ad hoc",
+        "Adicionar cobertura de frontend para os fluxos simplificados mais críticos",
+        "Checks de frontend passam"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "Essa story existe para preservar simplicidade operacional como requisito permanente do produto. A intenção é manter o site entendível por operador patrimonial comum, sem transformar a UI em painel técnico carregado."
     }
   ],
   "nonFunctionalRequirements": {

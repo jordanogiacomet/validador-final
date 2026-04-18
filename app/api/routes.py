@@ -1,11 +1,12 @@
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import (
     API_KEY_HEADER,
@@ -62,6 +63,9 @@ audit_service = _build_audit_service()
 auth_service.set_audit_service(audit_service)
 job_service = _build_job_service()
 
+LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+LOGIN_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@-]+$")
+
 
 class UploadResponse(BaseModel):
     job_id: str
@@ -80,6 +84,22 @@ class LoginRequest(BaseModel):
     tenant_id: str = Field(min_length=1)
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
+
+    @field_validator("tenant_id")
+    @classmethod
+    def validate_tenant_id(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not LOGIN_TENANT_ID_PATTERN.fullmatch(normalized_value):
+            raise ValueError("tenant_id contains invalid characters")
+        return normalized_value
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not LOGIN_USERNAME_PATTERN.fullmatch(normalized_value):
+            raise ValueError("username contains invalid characters")
+        return normalized_value
 
 
 class LoginResponse(BaseModel):
@@ -198,6 +218,16 @@ class APIKeyRevocationResponse(BaseModel):
     revoked_at: datetime
 
 
+class APIKeyRenewalResponse(BaseModel):
+    tenant_id: str
+    operator_id: str
+    api_key_id: str
+    previous_api_key_id: str
+    x_api_key: str
+    expires_at: datetime
+    header_name: str = API_KEY_HEADER
+
+
 def _get_job_validation_scope_value(job) -> ValidationScope:
     return parse_validation_scope(job.params.get(VALIDATION_SCOPE_PARAM))
 
@@ -305,6 +335,27 @@ async def login(payload: LoginRequest) -> LoginResponse:
         tenant_id=issued_key.record.tenant_id,
         operator_id=issued_key.record.operator_id,
         api_key_id=issued_key.record.key_id,
+        x_api_key=issued_key.raw_api_key,
+        expires_at=issued_key.record.expires_at or issued_key.record.created_at,
+    )
+
+
+@router.post("/api-keys/renew", response_model=APIKeyRenewalResponse)
+async def renew_api_key(request: Request) -> APIKeyRenewalResponse:
+    auth = get_authenticated_tenant(request)
+    try:
+        issued_key = auth_service.renew_api_key(
+            tenant_id=auth.tenant_id,
+            api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return APIKeyRenewalResponse(
+        tenant_id=issued_key.record.tenant_id,
+        operator_id=issued_key.record.operator_id,
+        api_key_id=issued_key.record.key_id,
+        previous_api_key_id=auth.api_key_id,
         x_api_key=issued_key.raw_api_key,
         expires_at=issued_key.record.expires_at or issued_key.record.created_at,
     )
