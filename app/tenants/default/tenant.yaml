@@ -27,3 +27,4 @@ categories: []
 
 llm:
   enabled: false
+  healthcheck_enabled: false

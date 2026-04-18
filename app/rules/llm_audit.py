@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 TENANTS_DIR = Path(__file__).resolve().parent.parent / "tenants"
 
 VALID_SEVERITIES = {"warning", "error"}
+DEFAULT_LLM_PROVIDER_HOST = "api.anthropic.com"
+DEFAULT_LLM_PROVIDER_PORT = 443
 
 
 class LLMClient(Protocol):
@@ -53,6 +56,18 @@ def get_default_client() -> LLMClient:
 def set_default_client(client: LLMClient | None) -> None:
     global _default_client
     _default_client = client
+
+
+def get_llm_provider_target(model: str) -> tuple[str, int]:
+    del model
+    return DEFAULT_LLM_PROVIDER_HOST, DEFAULT_LLM_PROVIDER_PORT
+
+
+def probe_llm_provider(model: str, timeout_ms: int = 500) -> str:
+    host, port = get_llm_provider_target(model)
+    timeout_seconds = max(timeout_ms, 1) / 1000.0
+    with socket.create_connection((host, port), timeout=timeout_seconds):
+        return f"{host}:{port}"
 
 
 def load_prompt_template(tenant_id: str, prompt_file: str) -> str:

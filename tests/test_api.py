@@ -38,7 +38,14 @@ REDESIM_CSV_CONTENT = (
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert [check["name"] for check in payload["checks"]] == [
+        "uploads",
+        "results",
+        "job_store",
+    ]
+    assert all(check["ok"] is True for check in payload["checks"])
 
 
 def test_frontend_page_renders_friendly_form():

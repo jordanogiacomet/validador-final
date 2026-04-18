@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware import request_id_middleware
 from app.api.routes import router
+from app.core.health import HealthReport, build_health_report, get_health_status_code
 from app.core.logging import configure_logging
 from app.core.metrics import (
     get_metrics_content_type,
@@ -44,9 +45,18 @@ app.add_middleware(
 app.include_router(router)
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/health", response_model=HealthReport)
+async def health(response: Response) -> HealthReport:
+    from app.api import routes as api_routes
+    from app.services import validation_service
+
+    report = build_health_report(
+        uploads_dir=validation_service.UPLOADS_DIR,
+        results_dir=validation_service.RESULTS_DIR,
+        job_store_path=api_routes.job_service.storage_path,
+    )
+    response.status_code = get_health_status_code(report)
+    return report
 
 
 @app.get("/metrics", include_in_schema=False)

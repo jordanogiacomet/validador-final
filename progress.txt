@@ -33,6 +33,8 @@ Last Updated: 2026-04-17 15:49 -02
 - Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
 - Cross-request correlation comes from `app/api/middleware.py` (request_id contextvar + `X-Request-ID` header echoed back on responses); do not introduce a parallel request-id mechanism.
 - Prometheus instrumentation should stay centralized in `app/core/metrics.py`, remain gated by `VALIDATOR_METRICS_ENABLED`, and never use `job_id`/`request_id` as metric labels.
+- Keep `/health` thin by delegating probes to `app/core/health.py`; uploads/results/job_store are critical checks, while LLM reachability is an optional degradation path that is opt-in per tenant via `llm.healthcheck_enabled`.
+- LLM health probes should stay conservative: use low-cost provider reachability checks with aggressive timeout defaults instead of triggering a full audit completion.
 
 ---
 
@@ -452,4 +454,19 @@ Expected architectural direction:
   - Use a dedicated Prometheus `CollectorRegistry` in `app/core/metrics.py` so tests can reset instrumentation cleanly without colliding with the process-global default registry
   - Keep metric labels low-cardinality and tenant-agnostic: `tenant_id`, `rule`, `severity`, `status`, and bounded `outcome` values are acceptable; `job_id` and `request_id` are not
   - LLM latency/failure metrics belong inside `LLMAuditRule`, while rule-level execution and issue counts belong in the generic engine so non-LLM rules inherit observability automatically
+---
+
+## 2026-04-18 10:25 -03 - US-020
+- Implemented operational health probing in `app/core/health.py` and changed `/health` in `app/main.py` to return a global status plus structured checks with `name`, `ok`, `latency_ms`, and optional `detail`
+- Added critical storage probes for uploads, results, and the optional JSON job store; critical failures now return HTTP 503 while optional failures can degrade the payload without taking the endpoint down
+- Added conservative LLM reachability probing through `app/rules/llm_audit.py`, exposed as an opt-in per-tenant flag `llm.healthcheck_enabled` in `app/core/tenant_config.py`
+- Exposed `JobService.storage_path` for health inspection and updated seed tenant examples plus focused health/API tests
+- Files changed: `app/core/health.py`, `app/core/tenant_config.py`, `app/main.py`, `app/rules/llm_audit.py`, `app/services/job_service.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `tests/test_health.py`, `tests/test_api.py`, `app/tests/test_health.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (287 tests)
+- **Learnings for future iterations:**
+  - Keep LLM health checks separate from LLM audit execution: a socket-level provider reachability probe is enough for `/health` and avoids unnecessary token spend
+  - Resolve mutable runtime dependencies inside the route path (for example, `job_service` from `app.api.routes`) instead of capturing them by value in `app.main`, otherwise tests and future storage swaps become harder
+  - When a config contract grows for an operational feature, update the seed tenant YAMLs even if the new field defaults safely; it makes the intended opt-in posture explicit
 ---

@@ -135,6 +135,8 @@ Keep Prometheus wiring centralized in `app/core/metrics.py`
 Metrics must stay opt-in via `VALIDATOR_METRICS_ENABLED`
 Never use `job_id`, `request_id`, or other per-request values as Prometheus labels
 Expose `/metrics` from the API layer only; services and rules should call helper functions instead of importing `prometheus_client` directly
+Keep `/health` thin by delegating probes to `app/core/health.py`
+Treat uploads/results/job_store as critical health checks; keep LLM reachability probes opt-in per tenant via `llm.healthcheck_enabled` and conservative enough to avoid full audit completions
 Reporting Guidance
 Reports should be practical for operational correction workflows
 Report formatting should be separated from validation logic

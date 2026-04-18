@@ -352,8 +352,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 20,
-      "passes": false,
-      "notes": "Manter a probe do LLM conservadora para não estourar custo. Evolução futura: expor versão do build no payload."
+      "passes": true,
+      "notes": "Implementado com `app/core/health.py` e `/health` estruturado em `app/main.py`, cobrindo uploads/results/job_store e degradação opcional por LLM. A probe de LLM permanece conservadora via reachability de provedor e só roda quando o tenant opta por `llm.healthcheck_enabled`. Evolução futura: expor versão do build no payload."
     },
     {
       "id": "US-021",

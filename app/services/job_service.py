@@ -20,6 +20,10 @@ class JobService:
         self._storage_path = Path(storage_path) if storage_path is not None else None
         self._load_jobs()
 
+    @property
+    def storage_path(self) -> Path | None:
+        return self._storage_path
+
     def create_job(
         self,
         tenant_id: str,
