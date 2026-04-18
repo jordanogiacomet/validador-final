@@ -720,7 +720,7 @@
         "Checks de frontend passam"
       ],
       "priority": 42,
-      "passes": false,
+      "passes": true,
       "notes": "Essa story existe para preservar simplicidade operacional como requisito permanente do produto. A intenção é manter o site entendível por operador patrimonial comum, sem transformar a UI em painel técnico carregado."
     }
   ],

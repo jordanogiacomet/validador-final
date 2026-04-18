@@ -41,19 +41,19 @@ function validateLoginForm(values: LoginFormState): LoginFieldErrors {
   const normalizedUsername = values.username.trim();
 
   if (!normalizedTenantId) {
-    errors.tenantId = "Informe o tenant para entrar no contexto correto.";
+    errors.tenantId = "Informe o código da empresa.";
   } else if (!TENANT_ID_PATTERN.test(normalizedTenantId)) {
     errors.tenantId = "Use apenas letras, números, ponto, hífen ou underscore.";
   }
 
   if (!normalizedUsername) {
-    errors.username = "Informe o usuário autorizado para este tenant.";
+    errors.username = "Informe o usuário autorizado para essa empresa.";
   } else if (!USERNAME_PATTERN.test(normalizedUsername)) {
     errors.username = "Use apenas letras, números, ponto, arroba, hífen ou underscore.";
   }
 
   if (!values.password.trim()) {
-    errors.password = "Informe a senha da operação.";
+    errors.password = "Informe a senha para continuar.";
   }
 
   return errors;
@@ -66,19 +66,19 @@ function getLoginErrorMessage(error: unknown): string {
     }
 
     if (error.status === 404) {
-      return "Tenant inexistente. Revise o identificador informado.";
+      return "Empresa inexistente. Revise o código informado.";
     }
 
     if (error.status === 403) {
       if (error.message === "Operator is not allowed for this tenant") {
-        return "Este usuário não pode acessar o tenant informado.";
+        return "Este usuário não pode acessar a empresa informada.";
       }
 
       if (error.message === "Operator is disabled") {
-        return "Este usuário está desabilitado para acesso.";
+        return "Este usuário está desabilitado.";
       }
 
-      return "Acesso negado para o tenant informado.";
+      return "Acesso negado para a empresa informada.";
     }
   }
 
@@ -149,53 +149,52 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     <div className="auth-shell">
       <section className="auth-layout">
         <div className="auth-hero">
-          <div className="panel-kicker auth-kicker">Plataforma patrimonial</div>
-          <h1 className="auth-heading">Acesso seguro para a central operacional multi-tenant.</h1>
+          <div className="panel-kicker auth-kicker">Validação patrimonial</div>
+          <h1 className="auth-heading">Entre e siga um fluxo simples de conferência patrimonial.</h1>
           <p className="auth-lead">
-            Controle uploads, auditoria e correções com sessão temporária por tenant,
-            autenticação hash-based e trilha operacional contínua.
+            A tela foi organizada para três passos diretos: entrar, enviar a planilha e revisar o resultado.
           </p>
 
           <div className="auth-feature-grid">
             <article className="auth-feature-card">
-              <strong>Contexto isolado</strong>
-              <p>Cada operador entra no tenant correto antes de abrir jobs, relatórios e exportações.</p>
+              <strong>1. Entrar</strong>
+              <p>Informe empresa, usuário e senha para abrir sua área de trabalho.</p>
             </article>
             <article className="auth-feature-card">
-              <strong>Credencial temporária</strong>
-              <p>O login emite uma chave operacional curta e o frontend reutiliza o header autenticado.</p>
+              <strong>2. Enviar a planilha</strong>
+              <p>Escolha o CSV e o tipo de conferência. O processamento começa logo em seguida.</p>
             </article>
             <article className="auth-feature-card">
-              <strong>Auditoria rastreável</strong>
-              <p>Emissão, expiração e revogação de sessão permanecem alinhadas ao tenant ativo.</p>
+              <strong>3. Corrigir e baixar</strong>
+              <p>Revise as pendências, faça os ajustes necessários e exporte os arquivos finais.</p>
             </article>
           </div>
 
-          <div className="auth-trust-row" aria-label="Indicadores de segurança do login">
-            <span className="auth-trust-pill">Tenant scoped</span>
-            <span className="auth-trust-pill">PBKDF2</span>
-            <span className="auth-trust-pill">X-API-Key temporária</span>
+          <div className="auth-trust-row" aria-label="Atalhos do fluxo inicial">
+            <span className="auth-trust-pill">Sem telas extras</span>
+            <span className="auth-trust-pill">Busca simples</span>
+            <span className="auth-trust-pill">Exportação direta</span>
           </div>
         </div>
 
         <section className="panel auth-panel">
-          <div className="panel-kicker">Acesso operacional</div>
-          <h2 className="panel-title auth-title">Entrar na central</h2>
+          <div className="panel-kicker">Acesso</div>
+          <h2 className="panel-title auth-title">Abra sua área de trabalho</h2>
           <p className="panel-copy auth-copy">
-            Informe tenant, usuário e senha para iniciar a sessão do workspace.
+            Informe empresa, usuário e senha. Depois disso você já poderá enviar a planilha.
           </p>
 
           <div className="auth-bootstrap-card">
             <div className="auth-bootstrap-head">
               <div>
-                <span className="auth-bootstrap-label">Bootstrap local</span>
-                <strong>Credenciais iniciais configuradas</strong>
+                <span className="auth-bootstrap-label">Ambiente local</span>
+                <strong>Dados iniciais já configurados</strong>
               </div>
-              <span className="auth-bootstrap-badge">tenant padrão</span>
+              <span className="auth-bootstrap-badge">empresa padrão</span>
             </div>
             <dl className="auth-bootstrap-list">
               <div>
-                <dt>Tenant inicial</dt>
+                <dt>Empresa inicial</dt>
                 <dd>{INITIAL_ACCESS.tenantId}</dd>
               </div>
               <div>
@@ -204,14 +203,13 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               </div>
             </dl>
             <p className="auth-bootstrap-note">
-              A senha seed fica no tenant default para bootstrap local e deve ser trocada
-              na configuração antes de expor o ambiente.
+              A senha inicial fica na configuração deste ambiente local e deve ser trocada antes de uso fora do setup interno.
             </p>
           </div>
 
           <form className="form-grid" noValidate onSubmit={handleSubmit}>
             <div className="field">
-              <label htmlFor="tenant-id">Tenant</label>
+              <label htmlFor="tenant-id">Código da empresa</label>
               <input
                 id="tenant-id"
                 name="tenant_id"
@@ -225,7 +223,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               {fieldErrors.tenantId ? (
                 <p className="inline-error">{fieldErrors.tenantId}</p>
               ) : (
-                <small>Use o identificador exato do tenant. Ex.: `default`.</small>
+                <small>Use o código informado pela sua equipe. Ex.: `default`.</small>
               )}
             </div>
 
@@ -244,7 +242,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               {fieldErrors.username ? (
                 <p className="inline-error">{fieldErrors.username}</p>
               ) : (
-                <small>O usuário é validado dentro do tenant informado.</small>
+                <small>Use o mesmo usuário autorizado para essa empresa.</small>
               )}
             </div>
 
@@ -262,7 +260,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               {fieldErrors.password ? (
                 <p className="inline-error">{fieldErrors.password}</p>
               ) : (
-                <small>A autenticação usa hash PBKDF2 e chave operacional temporária.</small>
+                <small>Use a senha informada para a operação.</small>
               )}
             </div>
 

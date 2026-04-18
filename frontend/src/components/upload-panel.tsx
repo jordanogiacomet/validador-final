@@ -32,12 +32,15 @@ export function UploadPanel({
 }: UploadPanelProps) {
   return (
     <section className="panel control-card">
-      <div className="panel-kicker">Entrada do lote</div>
-      <h2 className="panel-title">Novo processamento</h2>
+      <div className="panel-kicker">1. Enviar planilha</div>
+      <h2 className="panel-title">Começar nova conferência</h2>
+      <p className="panel-copy">
+        Escolha a empresa, selecione o CSV e diga o que deseja conferir. O restante acontece automaticamente.
+      </p>
 
       <form className="form-grid" onSubmit={onSubmit}>
         <div className="field">
-          <label htmlFor="tenant">Organização</label>
+          <label htmlFor="tenant">Empresa</label>
           <select
             id="tenant"
             name="tenant_id"
@@ -77,7 +80,7 @@ export function UploadPanel({
         </div>
 
         <div className="field">
-          <label>Escopo da análise</label>
+          <label>O que deseja conferir?</label>
           <div className="scope-options">
             {(["zero_items", "duplicate_items", "all_items"] as ValidationScope[]).map((scope) => (
               <label className="scope-option" key={scope}>
@@ -93,10 +96,10 @@ export function UploadPanel({
                 </div>
                 <span>
                   {scope === "zero_items"
-                    ? "Valida apenas itens novos."
+                    ? "Conferir somente bens cadastrados do zero."
                     : scope === "duplicate_items"
-                      ? "Valida apenas itens repetidos."
-                      : "Valida todas as linhas do CSV."}
+                      ? "Conferir somente itens repetidos."
+                      : "Conferir todas as linhas da planilha."}
                 </span>
               </label>
             ))}
@@ -104,7 +107,7 @@ export function UploadPanel({
         </div>
 
         <button className="cta" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Processando lote..." : "Processar lote"}
+          {isSubmitting ? "Iniciando conferência..." : "Iniciar conferência"}
         </button>
       </form>
     </section>

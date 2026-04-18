@@ -24,10 +24,10 @@ describe("LoginScreen", () => {
   it("renders the typed tenant login fields", () => {
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    expect(screen.getByLabelText("Tenant")).toBeDefined();
+    expect(screen.getByLabelText("Código da empresa")).toBeDefined();
     expect(screen.getByLabelText("Usuário")).toBeDefined();
     expect(screen.getByLabelText("Senha")).toBeDefined();
-    expect(screen.getByText("Credenciais iniciais configuradas")).toBeDefined();
+    expect(screen.getByText("Dados iniciais já configurados")).toBeDefined();
     expect(screen.getByText("default.operator")).toBeDefined();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeDefined();
   });
@@ -38,9 +38,9 @@ describe("LoginScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(loginOperatorMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("Informe o tenant para entrar no contexto correto.")).toBeDefined();
-    expect(screen.getByText("Informe o usuário autorizado para este tenant.")).toBeDefined();
-    expect(screen.getByText("Informe a senha da operação.")).toBeDefined();
+    expect(await screen.findByText("Informe o código da empresa.")).toBeDefined();
+    expect(screen.getByText("Informe o usuário autorizado para essa empresa.")).toBeDefined();
+    expect(screen.getByText("Informe a senha para continuar.")).toBeDefined();
   });
 
   it("submits valid credentials and forwards the issued session", async () => {
@@ -55,7 +55,7 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={onAuthenticated} />);
 
-    fireEvent.change(screen.getByLabelText("Tenant"), { target: { value: "default" } });
+    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default" } });
     fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
@@ -83,21 +83,21 @@ describe("LoginScreen", () => {
       "Credenciais inválidas. Revise usuário e senha.",
     ],
     [
-      "tenant inexistente",
+      "empresa inexistente",
       new ApiError("Tenant not found", 404),
-      "Tenant inexistente. Revise o identificador informado.",
+      "Empresa inexistente. Revise o código informado.",
     ],
     [
-      "tenant incompatível",
+      "empresa incompatível",
       new ApiError("Operator is not allowed for this tenant", 403),
-      "Este usuário não pode acessar o tenant informado.",
+      "Este usuário não pode acessar a empresa informada.",
     ],
   ])("shows a clear message for %s", async (_label, error, message) => {
     loginOperatorMock.mockRejectedValueOnce(error);
 
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Tenant"), { target: { value: "default" } });
+    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default" } });
     fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
@@ -108,7 +108,7 @@ describe("LoginScreen", () => {
   it("blocks tenant and username with invalid characters before calling login", async () => {
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Tenant"), { target: { value: "default';--" } });
+    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default';--" } });
     fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador<script>" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));

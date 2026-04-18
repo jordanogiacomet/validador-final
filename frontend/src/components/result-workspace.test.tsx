@@ -86,6 +86,13 @@ function renderWorkspace(job: JobStatusResponse | null, onOpenRelatedJob?: (jobI
 }
 
 describe("ResultWorkspace job lineage", () => {
+  it("shows the simplified review guide before the summary cards", () => {
+    renderWorkspace(buildJob());
+
+    expect(screen.getByText("3. Revise o resultado")).toBeDefined();
+    expect(screen.getByText("Nenhuma pendência aberta neste lote")).toBeDefined();
+  });
+
   it("hides the lineage banner when the job has no reprocess relations", () => {
     renderWorkspace(buildJob());
     expect(screen.queryByLabelText("Histórico de reprocessamento")).toBeNull();

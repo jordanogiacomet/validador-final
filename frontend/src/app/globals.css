@@ -376,6 +376,7 @@ p {
 .process-card,
 .audit-card,
 .actions-card,
+.result-guide-card,
 .result-search-card,
 .duplicates-card,
 .nav-card,
@@ -807,6 +808,11 @@ thead th {
   border: 1px solid rgba(255, 255, 255, 0.7);
 }
 
+.lot-card-emphasis {
+  background: linear-gradient(180deg, rgba(232, 241, 239, 0.96), rgba(255, 255, 255, 0.92));
+  border-color: rgba(21, 78, 74, 0.14);
+}
+
 .lot-metadata {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -830,6 +836,18 @@ thead th {
   margin: 0;
   font-weight: 600;
   line-height: 1.5;
+}
+
+.lot-guidance-title {
+  display: block;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.lot-guidance-copy {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .step-list {
@@ -1093,6 +1111,23 @@ thead th {
 .audit-card {
   display: grid;
   gap: 18px;
+}
+
+.audit-collapsed-note {
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px dashed rgba(21, 78, 74, 0.2);
+  background: linear-gradient(180deg, rgba(21, 78, 74, 0.04), rgba(255, 255, 255, 0.78));
+}
+
+.audit-collapsed-note strong {
+  display: block;
+}
+
+.audit-collapsed-note p {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .audit-head,

@@ -58,6 +58,8 @@ describe("AuditPanel", () => {
 
     render(<AuditPanel tenantId="default" currentJobId={null} />);
 
+    expect(screen.queryByLabelText("Tipo de evento")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Abrir histórico" }));
     expect(screen.getByText("Carregando trilha de auditoria...")).toBeDefined();
 
     deferred.resolve([
@@ -116,6 +118,7 @@ describe("AuditPanel", () => {
     ]);
 
     render(<AuditPanel tenantId="default" currentJobId={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Abrir histórico" }));
 
     await screen.findByText("Novo lote job-201 gerado. Origem job-200.");
 
@@ -126,11 +129,11 @@ describe("AuditPanel", () => {
     expect(screen.getByText("Novo lote job-201 gerado. Origem job-200.")).toBeDefined();
     expect(screen.queryByText(/3 de 12 linha\(s\) em escopo/)).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("Job"), {
+    fireEvent.change(screen.getByLabelText("Lote"), {
       target: { value: "job-201" },
     });
 
-    expect(screen.getByText("1 evento(s) exibido(s) de 3. Tenant em foco: default.")).toBeDefined();
+    expect(screen.getByText("1 evento(s) exibido(s) de 3. Empresa em foco: default.")).toBeDefined();
 
     fireEvent.change(screen.getByLabelText("Tipo de evento"), {
       target: { value: "all" },
@@ -141,7 +144,7 @@ describe("AuditPanel", () => {
 
     expect(screen.queryByText(/3 de 12 linha\(s\) em escopo/)).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("Job"), {
+    fireEvent.change(screen.getByLabelText("Lote"), {
       target: { value: "job-inexistente" },
     });
 
@@ -163,32 +166,35 @@ describe("AuditPanel", () => {
     ]);
 
     const { rerender } = render(<AuditPanel tenantId="default" currentJobId="job-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Abrir histórico" }));
 
     await screen.findByText(/3 de 12 linha\(s\) em escopo/);
 
     fireEvent.change(screen.getByLabelText("Tipo de evento"), {
       target: { value: "job_completed" },
     });
-    fireEvent.change(screen.getByLabelText("Job"), {
+    fireEvent.change(screen.getByLabelText("Lote"), {
       target: { value: "job-1" },
     });
 
     rerender(<AuditPanel tenantId="default" currentJobId="job-2" />);
+    fireEvent.click(screen.getByRole("button", { name: "Abrir histórico" }));
 
     await waitFor(() => {
       expect((screen.getByLabelText("Tipo de evento") as HTMLSelectElement).value).toBe("all");
     });
-    expect((screen.getByLabelText("Job") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Lote") as HTMLInputElement).value).toBe("");
   });
 
   it("shows a clear empty state when the tenant has no audit events yet", async () => {
     listAuditEventsMock.mockResolvedValue([]);
 
     render(<AuditPanel tenantId="default" currentJobId="job-55" />);
+    fireEvent.click(screen.getByRole("button", { name: "Abrir histórico" }));
 
     expect(await screen.findByText("Ainda não há eventos registrados")).toBeDefined();
     expect(
-      screen.getByText("O tenant default ainda não registrou eventos para o job aberto."),
+      screen.getByText("A empresa default ainda não registrou eventos para o lote aberto."),
     ).toBeDefined();
   });
 });

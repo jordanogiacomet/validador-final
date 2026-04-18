@@ -55,6 +55,8 @@ Last Updated: 2026-04-18 15:36 -03
 - Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
 - Client-generated operational CSV exports should be built from the same `frontend/src/lib/presentation.ts` helpers that power the on-screen filters, then downloaded through a shared browser helper in `frontend/src/lib/api.ts`.
 - Tenant-scoped operational panels in the frontend should fetch through authenticated helpers in `frontend/src/lib/api.ts` and keep local filter/reset behavior in `frontend/src/lib/presentation.ts`, resetting context-sensitive filters when the tenant or `currentJobId` changes.
+- For operator-facing frontend flows, keep the main path step-based (`Enviar planilha` -> `Acompanhar lote` -> `Revisar resultado`) and push secondary panels like audit behind an explicit disclosure to reduce visual noise.
+- Prefer operator-facing labels like `empresa` and `lote` in the primary UI copy; reserve backend terms like `tenant` and `job` for technical or support contexts only.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
@@ -853,4 +855,23 @@ Expected architectural direction:
   - Keep operator-management business rules in `AuthService`; routes should only resolve tenant scope and shape request/response models.
   - Treat tenant-configured operators as immutable bootstrap credentials and persist runtime operator changes in a dedicated auth store overlay so production does not depend on editing tenant YAML.
   - When disabling an operator, revoke that operator's active issued API keys in the same service flow to make the access change effective immediately and keep audit events coherent.
+---
+
+## 2026-04-18 15:54 -03 - US-042
+- Simplified the main frontend flow with step-based copy across login, upload, process tracking, and result review so non-technical operators see a clearer path from entering the workspace to exporting files.
+- Reduced primary-screen noise by moving the audit area below the result workspace, collapsing it behind an explicit "Abrir histórico" action, and renaming primary labels from `tenant`/`job` to `empresa`/`lote` in operator-facing contexts.
+- Added shared presentation guidance in `frontend/src/lib/presentation.ts` for the current next step and result-review state, keeping simplification logic centralized instead of scattering ad hoc copy in components.
+- Added focused frontend coverage for the simplified login wording, collapsed audit flow, result review guide, and process next-step guidance.
+- Files changed: `frontend/src/app/globals.css`, `frontend/src/components/active-jobs-panel.tsx`, `frontend/src/components/audit-panel.tsx`, `frontend/src/components/audit-panel.test.tsx`, `frontend/src/components/login-screen.tsx`, `frontend/src/components/login-screen.test.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/process-card.tsx`, `frontend/src/components/process-card.test.tsx`, `frontend/src/components/result-workspace.tsx`, `frontend/src/components/result-workspace.test.tsx`, `frontend/src/components/upload-panel.tsx`, `frontend/src/lib/presentation.ts`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (62 tests)
+  - `cd frontend && npm run lint`
+  - `ruff check app tests`
+  - `pytest -q`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended for the simplified login/workspace copy and the collapsed audit disclosure.
+- **Learnings for future iterations:**
+  - Keep operator guidance text in shared presentation helpers or shared cards when the message depends on result/job state; this avoids divergent copy between status cards and review panels.
+  - Secondary operational panels can stay available without crowding the main screen when they are clearly marked as optional and opened explicitly.
+  - When adding frontend tests for JSX files under this repo's `jsx: preserve` config, remember to import `React` explicitly in any newly tested component or test file.
 ---

@@ -18,8 +18,11 @@ export function ActiveJobsPanel({
 }: ActiveJobsPanelProps) {
   return (
     <section className="panel control-card jobs-card">
-      <div className="panel-kicker">Fila</div>
-      <h2 className="panel-title">Lotes em andamento</h2>
+      <div className="panel-kicker">Se precisar</div>
+      <h2 className="panel-title">Outros lotes em aberto</h2>
+      <p className="panel-copy">
+        Use esta lista para voltar a um lote que ainda está rodando ou que foi aberto há pouco.
+      </p>
 
       <div className="job-list">
         {isLoading && !jobs.length ? (
@@ -64,7 +67,7 @@ export function ActiveJobsPanel({
 
               <div className="job-item-actions">
                 <button className="action-button" type="button" onClick={() => onOpenJob(job.job_id)}>
-                  Acompanhar
+                  Abrir lote
                 </button>
                 <button
                   className={`action-button ${canCancel ? "" : "primary"}`.trim()}
@@ -72,7 +75,7 @@ export function ActiveJobsPanel({
                   disabled={!canCancel}
                   onClick={() => onCancelJob(job.job_id)}
                 >
-                  {job.cancel_requested ? "Cancelando..." : "Cancelar"}
+                  {job.cancel_requested ? "Parando..." : "Parar lote"}
                 </button>
               </div>
             </article>

@@ -58,7 +58,7 @@ import { useJobPolling } from "@/hooks/use-job-polling";
 
 const FALLBACK_TENANT: TenantListItem = {
   tenant_id: "default",
-  display_name: "Default Tenant",
+  display_name: "Empresa padrão",
   is_default: true,
 };
 
@@ -111,7 +111,7 @@ function getTenantLabel(tenants: TenantListItem[], tenantId: string | null): str
     return tenantId;
   }
 
-  return `${tenant.display_name} (${tenant.tenant_id})`;
+  return tenant.display_name;
 }
 
 function buildRowCacheKey(jobId: string, rowIndex: number): string {
@@ -894,11 +894,6 @@ export function OperationalWorkspace() {
 
           <StateBanner banner={banner} />
 
-          <AuditPanel
-            tenantId={currentJob?.tenant_id || selectedTenantId}
-            currentJobId={currentJobId}
-          />
-
           <ResultWorkspace
             job={currentJob}
             currentJobId={currentJobId}
@@ -917,6 +912,11 @@ export function OperationalWorkspace() {
             onResolveBulkSameNameDuplicates={handleResolveBulkSameNameDuplicates}
             onReprocess={handleReprocess}
             onOpenRelatedJob={openJob}
+          />
+
+          <AuditPanel
+            tenantId={currentJob?.tenant_id || selectedTenantId}
+            currentJobId={currentJobId}
           />
         </main>
       </div>

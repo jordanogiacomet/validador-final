@@ -261,6 +261,125 @@ export function buildFinalScopeCopy(scope: ValidationScope): string {
   return "Itens cadastrados do zero validados. PDF, JSON e CSV estão disponíveis.";
 }
 
+export function buildProcessGuidance(job: JobStatusResponse | null): {
+  title: string;
+  detail: string;
+} {
+  if (!job) {
+    return {
+      title: "Envie uma planilha para começar",
+      detail: "Escolha a empresa, selecione o CSV e clique em Iniciar conferência.",
+    };
+  }
+
+  if (job.cancel_requested) {
+    return {
+      title: "O lote está sendo encerrado",
+      detail: "Aguarde alguns instantes. Se precisar, envie outro arquivo depois.",
+    };
+  }
+
+  if (job.status === "canceled") {
+    return {
+      title: "Este lote foi interrompido",
+      detail: "Se ainda precisar conferir o arquivo, envie um novo lote.",
+    };
+  }
+
+  if (job.status === "failed") {
+    return {
+      title: "Revise a falha e envie novamente",
+      detail:
+        job.error_message || job.status_detail || "O arquivo não pôde ser concluído nesta tentativa.",
+    };
+  }
+
+  if (job.status === "completed") {
+    if (Number(job.rows_with_issues ?? 0) > 0) {
+      return {
+        title: "Revise as pendências encontradas",
+        detail: "Use a lista abaixo para corrigir o que for necessário e depois baixar os arquivos.",
+      };
+    }
+
+    return {
+      title: "O lote terminou sem pendências abertas",
+      detail: "Os arquivos finais já estão prontos para baixar ou compartilhar.",
+    };
+  }
+
+  return {
+    title: "Acompanhe sem sair desta tela",
+    detail: "A prévia e os números do lote serão atualizados automaticamente durante a conferência.",
+  };
+}
+
+export function buildResultWorkspaceGuide({
+  job,
+  summary,
+  isPartial,
+}: {
+  job: JobStatusResponse | null;
+  summary: Partial<SummaryPayload> | null | undefined;
+  isPartial: boolean;
+}): { title: string; detail: string } {
+  if (!job && !isPartial) {
+    return {
+      title: "O resultado aparecerá aqui",
+      detail: "Depois que a conferência começar, esta área mostra a prévia, os filtros e os arquivos para baixar.",
+    };
+  }
+
+  if (job?.cancel_requested) {
+    return {
+      title: "O lote está sendo interrompido",
+      detail: "Quando o encerramento terminar, você poderá enviar outro arquivo.",
+    };
+  }
+
+  if (job?.status === "canceled") {
+    return {
+      title: "Este lote foi cancelado",
+      detail: "Envie um novo arquivo quando quiser iniciar outra conferência.",
+    };
+  }
+
+  if (job?.status === "failed") {
+    return {
+      title: "A conferência não foi concluída",
+      detail:
+        job.error_message || job.status_detail || "Revise a mensagem acima e envie o arquivo novamente.",
+    };
+  }
+
+  if (isPartial) {
+    return {
+      title: "A prévia já pode ser revisada",
+      detail: "Você já pode olhar as linhas liberadas. Os números continuam crescendo até o lote terminar.",
+    };
+  }
+
+  if (job?.status === "completed") {
+    const rowsWithIssues = Number(summary?.rows_with_issues ?? job.rows_with_issues ?? 0);
+    if (rowsWithIssues > 0) {
+      return {
+        title: "Comece pelas linhas com pendência",
+        detail: "Use a busca e os filtros só se quiser reduzir a lista. Ao final, baixe os arquivos ou rode nova conferência.",
+      };
+    }
+
+    return {
+      title: "Nenhuma pendência aberta neste lote",
+      detail: "Se quiser, baixe os arquivos finais e siga para o próximo CSV.",
+    };
+  }
+
+  return {
+    title: "A primeira prévia está a caminho",
+    detail: "Assim que houver linhas prontas para revisão, elas aparecerão aqui automaticamente.",
+  };
+}
+
 export function formatFieldName(field: string | null | undefined): string {
   if (!field) {
     return "Revisão geral";

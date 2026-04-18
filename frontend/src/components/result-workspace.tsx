@@ -6,6 +6,7 @@ import {
 } from "@/lib/api";
 import {
   buildFilteredOperationalExportCsv,
+  buildResultWorkspaceGuide,
   buildResultFilterGroups,
   buildScopeSummaryCopy,
   describeIssue,
@@ -113,9 +114,29 @@ function JobLineageBanner({
 
 const DUPLICATE_FILTER_LABELS: Record<DuplicateDisplayFilter, string> = {
   all: "Todos",
-  normal: "Nomes iguais",
-  conflict: "Nomes diferentes",
+  normal: "Mesmo nome",
+  conflict: "Nome diferente",
 };
+
+function ResultGuideCard({
+  job,
+  summary,
+  isPartial,
+}: {
+  job: JobStatusResponse | null;
+  summary: Partial<SummaryPayload>;
+  isPartial: boolean;
+}) {
+  const guide = buildResultWorkspaceGuide({ job, summary, isPartial });
+
+  return (
+    <section className="panel result-guide-card">
+      <div className="panel-kicker">3. Revise o resultado</div>
+      <h2 className="panel-title">{guide.title}</h2>
+      <p className="panel-copy">{guide.detail}</p>
+    </section>
+  );
+}
 
 function SummarySection({
   summary,
@@ -403,6 +424,8 @@ export function ResultWorkspace({
     <>
       <JobLineageBanner job={job} onOpenRelatedJob={onOpenRelatedJob} />
 
+      <ResultGuideCard job={job} summary={summary} isPartial={isPartial} />
+
       <SummarySection
         summary={summary}
         validationScope={validationScope}
@@ -413,12 +436,12 @@ export function ResultWorkspace({
       <section className="panel result-search-card">
         <div className="result-search-row">
           <div className="field result-search-field">
-            <label htmlFor="result-search-input">Buscar no resultado</label>
+            <label htmlFor="result-search-input">Procurar linha ou problema</label>
             <input
               id="result-search-input"
               type="search"
               value={searchInput}
-              placeholder="Item, nome do bem, linha, campo ou orientação"
+              placeholder="Item, linha, campo ou orientação"
               onChange={(event) => setSearchInput(event.target.value)}
             />
           </div>
@@ -440,7 +463,7 @@ export function ResultWorkspace({
         <p className="result-search-meta">
           {hasSearch || hasActiveFilters
             ? `${filteredDuplicates.length} duplicidade(s) e ${searchProblemOccurrenceCount} ocorrência(s) exibidas.`
-            : `${duplicates.length} grupo(s) de duplicidade e ${totalProblemOccurrenceCount} ocorrência(s) no resultado.`}
+            : `${duplicates.length} grupo(s) de duplicidade e ${totalProblemOccurrenceCount} ocorrência(s) encontrados neste lote.`}
         </p>
 
         {resultFilterGroups.length || reviewFlagCount || showReviewOnly ? (
@@ -510,8 +533,8 @@ export function ResultWorkspace({
 
       {!isPartial && currentJobId ? (
         <section className="panel actions-card">
-          <div className="panel-kicker">Artefatos do lote</div>
-          <h2 className="panel-title">Arquivos finais</h2>
+          <div className="panel-kicker">Baixar arquivos</div>
+          <h2 className="panel-title">Arquivos prontos deste lote</h2>
           <div className="actions">
             <button
               className="action-link"
@@ -542,13 +565,13 @@ export function ResultWorkspace({
           {duplicates.length || allGroups.length ? (
             <div className="export-actions">
               <div>
-                <div className="panel-kicker">CSVs de correção</div>
+                <div className="panel-kicker">Separar por assunto</div>
               </div>
 
               <div className="export-actions-grid">
                 <article className="export-card">
-                  <small>{hasActiveOperationalExportFilters ? "Filtros atuais" : "Visão atual"}</small>
-                  <strong>CSV operacional do que está na tela</strong>
+                  <small>{hasActiveOperationalExportFilters ? "Recorte atual" : "Tela completa"}</small>
+                  <strong>CSV do que você está vendo agora</strong>
                   <p>{filteredOperationalExportCount} registro(s) visíveis.</p>
                   <button
                     className="action-link"
@@ -557,15 +580,15 @@ export function ResultWorkspace({
                     onClick={() => handleDownloadFilteredOperationalExport()}
                   >
                     {hasActiveOperationalExportFilters
-                      ? "Baixar visão filtrada em CSV"
-                      : "Baixar resumo operacional em CSV"}
+                      ? "Baixar este recorte"
+                      : "Baixar este resumo"}
                   </button>
                 </article>
 
                 {duplicates.length ? (
                   <article className="export-card">
                     <small>Duplicidades</small>
-                    <strong>CSV apenas com itens duplicados</strong>
+                    <strong>CSV só com os itens repetidos</strong>
                     <p>{duplicates.length} grupo(s).</p>
                     <button
                       className="action-link"
@@ -577,7 +600,7 @@ export function ResultWorkspace({
                         )
                       }
                     >
-                      Baixar duplicados em CSV
+                      Baixar somente duplicados
                     </button>
                   </article>
                 ) : null}
@@ -599,7 +622,7 @@ export function ResultWorkspace({
                           )
                         }
                       >
-                        Baixar este grupo em CSV
+                        Baixar somente este grupo
                       </button>
                     </article>
                   );
@@ -612,8 +635,8 @@ export function ResultWorkspace({
 
       {!isPartial && hasPendingCorrections && currentJobId ? (
         <section className="panel correction-card">
-          <div className="panel-kicker">Correções aplicadas</div>
-          <h2 className="panel-title">CSV corrigido nesta sessão</h2>
+          <div className="panel-kicker">Depois de corrigir</div>
+          <h2 className="panel-title">Planilha ajustada nesta sessão</h2>
           <div className="correction-actions">
             <button
               className="action-link"
@@ -623,7 +646,7 @@ export function ResultWorkspace({
               Baixar CSV corrigido
             </button>
             <button className="action-button primary" type="button" disabled={isReprocessing} onClick={onReprocess}>
-              {isReprocessing ? "Reprocessando..." : "Reprocessar lote"}
+              {isReprocessing ? "Rodando nova conferência..." : "Rodar nova conferência"}
             </button>
           </div>
           {downloadError ? <p className="inline-error">{downloadError}</p> : null}
@@ -633,11 +656,11 @@ export function ResultWorkspace({
       {duplicates.length ? (
         <section className="panel duplicates-card">
           <div className="panel-kicker">Duplicidades</div>
-          <h2 className="panel-title">Itens repetidos</h2>
+          <h2 className="panel-title">Compare itens repetidos</h2>
           {bulkConsolidatableSameNameDuplicates.length ? (
             <div className="duplicate-bulk-actions">
               <p>
-                Consolida em massa apenas grupos de <b>Nomes iguais</b> com <b>2 ocorrências</b>.
+                Este atalho resolve automaticamente grupos de <b>mesmo nome</b> com <b>2 ocorrências</b>.
               </p>
               <button
                 className="action-button primary"
@@ -646,8 +669,8 @@ export function ResultWorkspace({
                 onClick={onResolveBulkSameNameDuplicates}
               >
                 {isResolvingBulkSameNameDuplicates
-                  ? "Consolidando..."
-                  : `Consolidar em massa (${bulkConsolidatableSameNameDuplicates.length})`}
+                  ? "Resolvendo..."
+                  : `Resolver casos simples (${bulkConsolidatableSameNameDuplicates.length})`}
               </button>
             </div>
           ) : null}
@@ -696,11 +719,7 @@ export function ResultWorkspace({
                       disabled={isPartial || isResolvingBulkSameNameDuplicates}
                       onClick={() => onResolveDuplicate(duplicate)}
                     >
-                      {isPartial
-                        ? "Disponível após conclusão"
-                        : hasDescriptionConflict
-                          ? "Resolver duplicidade"
-                          : "Consolidar ocorrências"}
+                      {isPartial ? "Aguarde a conclusão" : "Abrir comparação"}
                     </button>
                   </div>
                 </article>
@@ -731,8 +750,8 @@ export function ResultWorkspace({
 
       {groups.length ? (
         <section className="panel nav-card">
-          <div className="panel-kicker">Atalhos</div>
-          <h2 className="panel-title">Grupos de correção</h2>
+          <div className="panel-kicker">Ir direto</div>
+          <h2 className="panel-title">Problemas por assunto</h2>
           <div className="nav-chips">
             {groups.map(({ code, occurrences }) => {
               const severity = occurrences.some((occurrence) => occurrence.severity === "error")
