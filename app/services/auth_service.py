@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -30,6 +32,10 @@ from app.core.tenant_loader import (
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
+OFFICIAL_TENANT_ID_ENV = "VALIDATOR_OFFICIAL_TENANT_ID"
+BOOTSTRAP_ADMIN_USERNAME_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_USERNAME"
+BOOTSTRAP_ADMIN_PASSWORD_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD"
+BOOTSTRAP_ADMIN_FORCE_RESET_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET"
 
 if TYPE_CHECKING:
     from app.services.audit_service import AuditService
@@ -84,6 +90,14 @@ class ResolvedAPIKey:
     tenant_id: str
     api_key_id: str
     operator_id: str | None = None
+
+
+@dataclass(frozen=True)
+class BootstrapAdminConfig:
+    tenant_id: str
+    username: str
+    password: str
+    force_password_reset: bool = False
 
 
 class IssuedAPIKeyStatus(StrEnum):
@@ -141,6 +155,43 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hmac.compare_digest(digest, expected_digest)
 
 
+def _parse_env_bool(raw_value: str) -> bool:
+    return raw_value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def load_bootstrap_admin_config_from_env(
+    env: Mapping[str, str] | None = None,
+) -> BootstrapAdminConfig | None:
+    environment = os.environ if env is None else env
+    username = environment.get(BOOTSTRAP_ADMIN_USERNAME_ENV, "").strip()
+    password = environment.get(BOOTSTRAP_ADMIN_PASSWORD_ENV, "")
+
+    if not username and not password:
+        return None
+
+    if not username or not password:
+        raise ValueError(
+            "Bootstrap admin requires both "
+            f"{BOOTSTRAP_ADMIN_USERNAME_ENV} and {BOOTSTRAP_ADMIN_PASSWORD_ENV}"
+        )
+
+    tenant_id = environment.get(OFFICIAL_TENANT_ID_ENV, "").strip()
+    if not tenant_id:
+        raise ValueError(
+            "Bootstrap admin requires "
+            f"{OFFICIAL_TENANT_ID_ENV} to identify the official tenant"
+        )
+
+    return BootstrapAdminConfig(
+        tenant_id=tenant_id,
+        username=username,
+        password=password,
+        force_password_reset=_parse_env_bool(
+            environment.get(BOOTSTRAP_ADMIN_FORCE_RESET_ENV, "")
+        ),
+    )
+
+
 class AuthService:
     def __init__(
         self,
@@ -194,6 +245,62 @@ class AuthService:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         self._load_tenant_for_login(normalized_tenant_id)
         return self._list_effective_operators(normalized_tenant_id)
+
+    def bootstrap_admin_from_env(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> EffectiveOperator | None:
+        config = load_bootstrap_admin_config_from_env(env)
+        if config is None:
+            return None
+        return self.ensure_bootstrap_admin(config)
+
+    def ensure_bootstrap_admin(
+        self,
+        config: BootstrapAdminConfig,
+    ) -> EffectiveOperator:
+        if self._operator_storage_path is None:
+            raise AuthServiceError(
+                500,
+                "Bootstrap admin requires persistent operator storage",
+            )
+
+        normalized_tenant_id = canonicalize_tenant_id(config.tenant_id)
+        normalized_username = config.username.strip()
+        self._load_tenant_for_login(normalized_tenant_id)
+        existing_operator = self._find_operator_by_username(
+            normalized_tenant_id,
+            normalized_username,
+        )
+        if existing_operator is not None:
+            if not config.force_password_reset:
+                return existing_operator
+
+            updated_operator = self._store_effective_operator(
+                existing_operator,
+                password_hash=hash_password(config.password),
+            )
+            self._record_operator_audit_event(
+                AuditEventType.OPERATOR_PASSWORD_ROTATED,
+                operator=updated_operator,
+                api_key_id=None,
+                details={"bootstrap": True},
+            )
+            return updated_operator
+
+        if self._list_effective_operators(normalized_tenant_id):
+            raise AuthServiceError(
+                409,
+                "Bootstrap admin cannot create a first operator for a tenant "
+                "that already has operators",
+            )
+
+        return self.create_operator(
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            password=config.password,
+        )
 
     def create_operator(
         self,

@@ -771,8 +771,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 45,
-      "passes": false,
-      "notes": "Essa story conversa diretamente com a futura gestão de operadores por tenant e reduz a dependência operacional de credenciais seed mantidas manualmente."
+      "passes": true,
+      "notes": "Implementado com bootstrap env-driven no startup da API via `AuthService.bootstrap_admin_from_env`, usando `VALIDATOR_OFFICIAL_TENANT_ID` + credenciais bootstrap persistidas no store de operadores. O fluxo cria o primeiro operador apenas quando o tenant oficial ainda não tem operadores, salva somente hash/metadados mínimos e permite reset explícito de senha com `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true`."
     },
     {
       "id": "US-046",

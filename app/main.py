@@ -1,9 +1,10 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.auth import api_key_auth_middleware
+from app.api.auth import api_key_auth_middleware, auth_service
 from app.api.middleware import request_id_middleware
 from app.api.routes import router
 from app.core.health import HealthReport, build_health_report, get_health_status_code
@@ -13,10 +14,21 @@ from app.core.metrics import (
     metrics_enabled,
     render_metrics,
 )
+from app.services.auth_service import AuthServiceError
 
 configure_logging()
 
-app = FastAPI(title="Multi-Tenant Inventory Validator")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        auth_service.bootstrap_admin_from_env()
+    except (AuthServiceError, ValueError) as exc:
+        raise RuntimeError("Failed to bootstrap the initial administrative operator") from exc
+    yield
+
+
+app = FastAPI(title="Multi-Tenant Inventory Validator", lifespan=lifespan)
 
 app.middleware("http")(request_id_middleware)
 app.middleware("http")(api_key_auth_middleware)

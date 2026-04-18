@@ -63,6 +63,7 @@ Last Updated: 2026-04-18 16:35 -03
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
+- Environment-driven first-admin bootstrap should run through `AuthService` over persisted operator storage (`VALIDATOR_SQLITE_PATH` or `VALIDATOR_OPERATOR_STORE_PATH`), use `VALIDATOR_OFFICIAL_TENANT_ID` as the canonical tenant target, and stay idempotent unless `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true` is set explicitly.
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 
@@ -907,4 +908,18 @@ Expected architectural direction:
   - Promova renomes de tenant como migração declarativa de configuração: um alias no tenant canônico evita espalhar exceções por rota, engine e regras.
   - Quando já existe persistência local de `tenant_id`, migre os registros para o identificador canônico na carga do serviço para preservar jobs/audit/auth legados sem criar filtros duplicados.
   - `list_tenants()` deve expor apenas tenants canônicos; aliases servem para compatibilidade de entrada, não para duplicar opções operacionais.
+---
+
+## 2026-04-18 16:57 -03 - US-045
+- Implementado bootstrap env-driven do primeiro operador administrativo em `AuthService`, com leitura de `VALIDATOR_OFFICIAL_TENANT_ID`, `VALIDATOR_BOOTSTRAP_ADMIN_USERNAME`, `VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD` e reset explícito opcional por `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET`.
+- O startup da API agora executa o bootstrap no lifespan do FastAPI; o fluxo exige storage persistente de operadores, cria o primeiro operador apenas quando o tenant oficial ainda não tem operadores, salva somente hash da senha e permanece idempotente em reexecuções sem sobrescrever a senha por padrão.
+- Documentado o fluxo no `README.md` e no deployment Kubernetes de exemplo com env vars/secret refs opcionais para o operador inicial do tenant oficial.
+- Files changed: `app/services/auth_service.py`, `app/main.py`, `tests/test_auth_service.py`, `README.md`, `deploy/k8s/deployment.yaml`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (398 tests)
+- **Learnings for future iterations:**
+  - Bootstrap operacional deve falhar sem persistência configurada; criar o primeiro operador em memória faria o ambiente parecer inicializado mesmo perdendo o acesso após restart.
+  - Reexecução segura do bootstrap deve usar o `username` existente como chave de idempotência e só trocar o hash quando houver intenção explícita (`VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true`).
+  - O bootstrap do tenant oficial pertence ao startup/lifespan da API e ao `AuthService`, não ao tenant YAML nem a uma rota administrativa adicional.
 ---

@@ -3,9 +3,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core import tenant_loader
 from app.core.audit import AuditEventType
 from app.services.audit_service import AuditService
 from app.services.auth_service import (
+    BOOTSTRAP_ADMIN_FORCE_RESET_ENV,
+    BOOTSTRAP_ADMIN_PASSWORD_ENV,
+    BOOTSTRAP_ADMIN_USERNAME_ENV,
+    OFFICIAL_TENANT_ID_ENV,
     AuthService,
     AuthServiceError,
     IssuedAPIKeyStatus,
@@ -17,6 +22,18 @@ DEFAULT_PASSWORD_HASH = (
     "d4b33a7accf06812fa29bc7c9557eadf30d0f93fbb60d937a163f57943c7ebc0"
 )
 DEFAULT_PASSWORD = "Validador@2026!"
+
+
+def install_bootstrap_test_tenant(monkeypatch, tmp_path, tenant_id: str = "tenant_oficial") -> str:
+    tenants_dir = tmp_path / "tenants"
+    tenant_dir = tenants_dir / tenant_id
+    tenant_dir.mkdir(parents=True)
+    tenant_dir.joinpath("tenant.yaml").write_text(
+        f"tenant_id: {tenant_id}\ndisplay_name: Tenant Oficial\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tenant_loader, "TENANTS_DIR", tenants_dir)
+    return tenant_id
 
 
 def test_verify_password_accepts_seed_operator_hash() -> None:
@@ -285,6 +302,149 @@ def test_issue_api_key_accepts_redesim_v2_alias_and_returns_canonical_tenant() -
     )
 
     assert issued_key.record.tenant_id == "redesim"
+
+
+def test_bootstrap_admin_from_env_creates_first_operator_and_supports_login_after_reload(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+
+    operator = service.bootstrap_admin_from_env(
+        env={
+            OFFICIAL_TENANT_ID_ENV: tenant_id,
+            BOOTSTRAP_ADMIN_USERNAME_ENV: "admin.operacional",
+            BOOTSTRAP_ADMIN_PASSWORD_ENV: "Bootstrap@2026",
+        }
+    )
+
+    assert operator is not None
+    assert operator.tenant_id == tenant_id
+    assert operator.username == "admin.operacional"
+    assert operator.is_seed is False
+
+    payload = json.loads(operator_storage_path.read_text(encoding="utf-8"))
+    assert payload == [
+        {
+            "tenant_id": tenant_id,
+            "operator_id": operator.operator_id,
+            "username": "admin.operacional",
+            "password_hash": payload[0]["password_hash"],
+            "disabled": False,
+        }
+    ]
+    assert payload[0]["password_hash"] != "Bootstrap@2026"
+    assert "Bootstrap@2026" not in operator_storage_path.read_text(encoding="utf-8")
+
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    issued_key = reloaded.issue_api_key(
+        tenant_id=tenant_id,
+        username="admin.operacional",
+        password="Bootstrap@2026",
+    )
+
+    assert issued_key.record.tenant_id == tenant_id
+    assert issued_key.record.operator_id == operator.operator_id
+
+
+def test_bootstrap_admin_from_env_is_idempotent_without_overwriting_password(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+    first = service.bootstrap_admin_from_env(
+        env={
+            OFFICIAL_TENANT_ID_ENV: tenant_id,
+            BOOTSTRAP_ADMIN_USERNAME_ENV: "admin.operacional",
+            BOOTSTRAP_ADMIN_PASSWORD_ENV: "Bootstrap@2026",
+        }
+    )
+    payload_before = json.loads(operator_storage_path.read_text(encoding="utf-8"))
+
+    second = service.bootstrap_admin_from_env(
+        env={
+            OFFICIAL_TENANT_ID_ENV: tenant_id,
+            BOOTSTRAP_ADMIN_USERNAME_ENV: "admin.operacional",
+            BOOTSTRAP_ADMIN_PASSWORD_ENV: "OutraSenha@2026",
+        }
+    )
+    payload_after = json.loads(operator_storage_path.read_text(encoding="utf-8"))
+
+    assert first is not None
+    assert second is not None
+    assert second.operator_id == first.operator_id
+    assert payload_after == payload_before
+    assert verify_password("Bootstrap@2026", payload_after[0]["password_hash"]) is True
+    assert verify_password("OutraSenha@2026", payload_after[0]["password_hash"]) is False
+
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    issued_key = reloaded.issue_api_key(
+        tenant_id=tenant_id,
+        username="admin.operacional",
+        password="Bootstrap@2026",
+    )
+    assert issued_key.record.operator_id == first.operator_id
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        reloaded.issue_api_key(
+            tenant_id=tenant_id,
+            username="admin.operacional",
+            password="OutraSenha@2026",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid credentials"
+
+
+def test_bootstrap_admin_from_env_force_reset_updates_existing_operator_password(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+    first = service.bootstrap_admin_from_env(
+        env={
+            OFFICIAL_TENANT_ID_ENV: tenant_id,
+            BOOTSTRAP_ADMIN_USERNAME_ENV: "admin.operacional",
+            BOOTSTRAP_ADMIN_PASSWORD_ENV: "Bootstrap@2026",
+        }
+    )
+
+    updated = service.bootstrap_admin_from_env(
+        env={
+            OFFICIAL_TENANT_ID_ENV: tenant_id,
+            BOOTSTRAP_ADMIN_USERNAME_ENV: "admin.operacional",
+            BOOTSTRAP_ADMIN_PASSWORD_ENV: "SenhaAtualizada@2026",
+            BOOTSTRAP_ADMIN_FORCE_RESET_ENV: "true",
+        }
+    )
+
+    assert first is not None
+    assert updated is not None
+    assert updated.operator_id == first.operator_id
+
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    with pytest.raises(AuthServiceError) as exc_info:
+        reloaded.issue_api_key(
+            tenant_id=tenant_id,
+            username="admin.operacional",
+            password="Bootstrap@2026",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid credentials"
+
+    issued_key = reloaded.issue_api_key(
+        tenant_id=tenant_id,
+        username="admin.operacional",
+        password="SenhaAtualizada@2026",
+    )
+    assert issued_key.record.operator_id == updated.operator_id
 
 
 def test_create_operator_persists_only_hashed_password_and_supports_login_after_reload(

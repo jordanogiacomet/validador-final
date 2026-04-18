@@ -52,6 +52,22 @@ spec:
               value: "^https?://[^/]+:30092$"
             - name: VALIDATOR_SQLITE_PATH
               value: /app/results/operational.sqlite3
+            - name: VALIDATOR_OFFICIAL_TENANT_ID
+              value: redesim
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: username
+                  optional: true
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: password
+                  optional: true
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET
+              value: "false"
           readinessProbe:
             httpGet:
               path: /health

@@ -267,6 +267,30 @@ If `VALIDATOR_SQLITE_PATH` is not set, the legacy JSON-backed env vars remain su
 - `VALIDATOR_API_KEY_STORE_PATH`
 - `VALIDATOR_OPERATOR_STORE_PATH`
 
+Bootstrap do primeiro operador administrativo
+
+To create the first administrative operator for the official tenant during API startup, set:
+
+```bash
+export VALIDATOR_SQLITE_PATH="results/operational.sqlite3"
+export VALIDATOR_OFFICIAL_TENANT_ID="redesim"
+export VALIDATOR_BOOTSTRAP_ADMIN_USERNAME="admin.operacional"
+export VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD="troque-esta-senha"
+uvicorn app.main:app --reload
+```
+
+The bootstrap flow uses the persisted operator store, saves only the password hash plus operator
+metadata, and is safe to rerun:
+
+- if the configured username does not exist and the official tenant has no operators yet, the
+  startup creates the first operator
+- if the same username already exists, the startup leaves it unchanged by default
+- set `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true` only when you intentionally want startup to
+  replace that operator's password hash
+
+Bootstrap is intentionally disabled when no persistent operator store is configured, because the
+initial admin must survive process restarts.
+
 Generated artifacts remain file-based on purpose:
 
 - uploaded CSV files
