@@ -11,6 +11,18 @@ import type {
 
 export type DuplicateDisplayFilter = "all" | "normal" | "conflict";
 
+export interface ResultSearchState {
+  jobId: string | null;
+  input: string;
+  debouncedQuery: string;
+}
+
+export interface DuplicateFilterCounts {
+  all: number;
+  normal: number;
+  conflict: number;
+}
+
 export const PROCESS_STEPS = [
   {
     id: "file_received",
@@ -148,6 +160,43 @@ export function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+export function normalizeSearchText(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function hasResultSearchQuery(query: string | null | undefined): boolean {
+  return normalizeSearchText(query).length > 0;
+}
+
+function matchesResultSearch(
+  values: Array<string | number | null | undefined>,
+  query: string | null | undefined,
+): boolean {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return values.some((value) => normalizeSearchText(value).includes(normalizedQuery));
+}
+
+export function resetResultSearchState(jobId: string | null): ResultSearchState {
+  return {
+    jobId,
+    input: "",
+    debouncedQuery: "",
+  };
+}
+
 export function getValidatedTotalRows(summary: Partial<SummaryPayload>): number {
   return Number(summary.validated_rows ?? summary.total_rows ?? 0);
 }
@@ -198,6 +247,90 @@ export function filterDuplicates(
     const hasConflict = hasDuplicateDescriptionConflict(duplicate);
     return filter === "conflict" ? hasConflict : !hasConflict;
   });
+}
+
+export function duplicateMatchesResultSearch(
+  duplicate: DuplicateGroup,
+  query: string | null | undefined,
+): boolean {
+  const lineNumbers = duplicate.row_indices.map((rowIndex) => lineNumber(rowIndex));
+  return matchesResultSearch(
+    [
+      duplicate.item,
+      duplicate.descricao,
+      duplicate.count,
+      ...lineNumbers,
+      ...lineNumbers.map((line) => `linha ${line}`),
+    ],
+    query,
+  );
+}
+
+export function problemOccurrenceMatchesResultSearch(
+  occurrence: ProblemOccurrence,
+  query: string | null | undefined,
+  code?: string,
+): boolean {
+  return matchesResultSearch(
+    [
+      code,
+      occurrence.item,
+      occurrence.descricao,
+      occurrence.severity,
+      occurrence.message,
+      occurrence.field,
+      formatFieldName(occurrence.field),
+      lineNumber(occurrence.row_index),
+      `linha ${lineNumber(occurrence.row_index)}`,
+    ],
+    query,
+  );
+}
+
+export function filterDuplicatesForResultSearch(
+  duplicates: DuplicateGroup[],
+  filter: DuplicateDisplayFilter,
+  query: string | null | undefined,
+): DuplicateGroup[] {
+  const displayFilteredDuplicates = filterDuplicates(duplicates, filter);
+  if (!hasResultSearchQuery(query)) {
+    return displayFilteredDuplicates;
+  }
+
+  return displayFilteredDuplicates.filter((duplicate) => duplicateMatchesResultSearch(duplicate, query));
+}
+
+export function getDuplicateFilterCounts(
+  duplicates: DuplicateGroup[],
+  query: string | null | undefined = "",
+): DuplicateFilterCounts {
+  const searchFilteredDuplicates = hasResultSearchQuery(query)
+    ? duplicates.filter((duplicate) => duplicateMatchesResultSearch(duplicate, query))
+    : duplicates;
+
+  return {
+    all: searchFilteredDuplicates.length,
+    normal: searchFilteredDuplicates.filter((duplicate) => !hasDuplicateDescriptionConflict(duplicate)).length,
+    conflict: searchFilteredDuplicates.filter((duplicate) => hasDuplicateDescriptionConflict(duplicate)).length,
+  };
+}
+
+export function filterProblemGroupsForResultSearch(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+  query: string | null | undefined,
+): Record<string, ProblemOccurrence[]> {
+  if (!hasResultSearchQuery(query)) {
+    return groupedProblems;
+  }
+
+  return Object.fromEntries(
+    Object.entries(groupedProblems)
+      .map(([code, occurrences]) => [
+        code,
+        occurrences.filter((occurrence) => problemOccurrenceMatchesResultSearch(occurrence, query, code)),
+      ])
+      .filter(([, occurrences]) => occurrences.length > 0),
+  );
 }
 
 export function getBulkConsolidatableSameNameDuplicates(

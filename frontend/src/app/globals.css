@@ -104,6 +104,7 @@ p {
 .control-card,
 .process-card,
 .actions-card,
+.result-search-card,
 .duplicates-card,
 .nav-card,
 .clean-card,
@@ -667,6 +668,25 @@ thead th {
 
 .summary-card.success {
   background: linear-gradient(180deg, rgba(230, 246, 238, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.result-search-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.result-search-field {
+  flex: 1 1 auto;
+  min-width: min(320px, 100%);
+}
+
+.result-search-meta {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .export-actions,

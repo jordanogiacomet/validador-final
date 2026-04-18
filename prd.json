@@ -516,8 +516,8 @@
         "Checks de frontend (typecheck, test, lint) passam"
       ],
       "priority": 30,
-      "passes": false,
-      "notes": "Implementação puramente frontend sobre o payload já retornado pela API. Nenhuma mudança de contrato backend."
+      "passes": true,
+      "notes": "Implementado no frontend sobre o payload existente: busca textual debounced no workspace, normalização case/accent-insensitive, combinação com filtros de duplicatas e reset ao trocar de job. Checks de frontend passaram."
     },
     {
       "id": "US-031",

@@ -9,15 +9,19 @@ import {
 import {
   buildScopeSummaryCopy,
   describeIssue,
-  filterDuplicates,
+  filterDuplicatesForResultSearch,
+  filterProblemGroupsForResultSearch,
   formatFieldName,
   getBulkConsolidatableSameNameDuplicates,
+  getDuplicateFilterCounts,
   getSourceTotalRows,
   getValidatedTotalRows,
+  hasResultSearchQuery,
   hasDuplicateDescriptionConflict,
   isDuplicateItemsScope,
   isZeroItemsScope,
   lineNumber,
+  resetResultSearchState,
   resolveEditableField,
   slugify,
 } from "@/lib/presentation";
@@ -227,12 +231,25 @@ export function ResultWorkspace({
   onReprocess,
 }: ResultWorkspaceProps) {
   const [duplicateFilter, setDuplicateFilter] = useState<DuplicateDisplayFilter>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const activeData = previewData || reportData;
   const isPartial = Boolean(previewData);
 
   useEffect(() => {
+    const resetSearch = resetResultSearchState(currentJobId);
     setDuplicateFilter("all");
+    setSearchInput(resetSearch.input);
+    setDebouncedSearchQuery(resetSearch.debouncedQuery);
   }, [currentJobId]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchInput);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   if (!activeData) {
     return <EmptyState job={job} />;
@@ -241,16 +258,31 @@ export function ResultWorkspace({
   const summary = activeData.summary;
   const duplicates = activeData.duplicates ?? [];
   const groupedProblems = activeData.grouped_problems ?? {};
-  const groups = sortProblemGroups(groupedProblems);
+  const allGroups = sortProblemGroups(groupedProblems);
+  const filteredGroupedProblems = filterProblemGroupsForResultSearch(
+    groupedProblems,
+    debouncedSearchQuery,
+  );
+  const groups = sortProblemGroups(filteredGroupedProblems);
   const processedRows = Number(summary.processed_rows ?? job?.processed_rows ?? getValidatedTotalRows(summary));
   const showCleanState = Number(summary.rows_with_issues ?? 0) === 0;
-  const duplicateFilterCounts = {
-    all: duplicates.length,
-    normal: duplicates.filter((duplicate) => !hasDuplicateDescriptionConflict(duplicate)).length,
-    conflict: duplicates.filter((duplicate) => hasDuplicateDescriptionConflict(duplicate)).length,
-  };
+  const duplicateFilterCounts = getDuplicateFilterCounts(duplicates, debouncedSearchQuery);
   const bulkConsolidatableSameNameDuplicates = getBulkConsolidatableSameNameDuplicates(duplicates);
-  const filteredDuplicates = filterDuplicates(duplicates, duplicateFilter);
+  const filteredDuplicates = filterDuplicatesForResultSearch(
+    duplicates,
+    duplicateFilter,
+    debouncedSearchQuery,
+  );
+  const hasSearch = hasResultSearchQuery(debouncedSearchQuery);
+  const searchProblemOccurrenceCount = groups.reduce(
+    (total, group) => total + group.occurrences.length,
+    0,
+  );
+  const totalProblemOccurrenceCount = allGroups.reduce(
+    (total, group) => total + group.occurrences.length,
+    0,
+  );
+  const showSearchEmptyState = hasSearch && filteredDuplicates.length === 0 && groups.length === 0;
 
   return (
     <>
@@ -260,6 +292,40 @@ export function ResultWorkspace({
         isPartial={isPartial}
         processedRows={processedRows}
       />
+
+      <section className="panel result-search-card">
+        <div className="result-search-row">
+          <div className="field result-search-field">
+            <label htmlFor="result-search-input">Buscar no resultado</label>
+            <input
+              id="result-search-input"
+              type="search"
+              value={searchInput}
+              placeholder="Item, nome do bem, linha, campo ou orientação"
+              onChange={(event) => setSearchInput(event.target.value)}
+            />
+          </div>
+
+          {searchInput ? (
+            <button
+              className="action-button"
+              type="button"
+              onClick={() => {
+                setSearchInput("");
+                setDebouncedSearchQuery("");
+              }}
+            >
+              Limpar
+            </button>
+          ) : null}
+        </div>
+
+        <p className="result-search-meta">
+          {hasSearch
+            ? `${filteredDuplicates.length} duplicidade(s) e ${searchProblemOccurrenceCount} ocorrência(s) encontradas.`
+            : `${duplicates.length} grupo(s) de duplicidade e ${totalProblemOccurrenceCount} ocorrência(s) no resultado.`}
+        </p>
+      </section>
 
       {!isPartial && currentJobId ? (
         <section className="panel actions-card">
@@ -277,7 +343,7 @@ export function ResultWorkspace({
             </a>
           </div>
 
-          {duplicates.length || groups.length ? (
+          {duplicates.length || allGroups.length ? (
             <div className="export-actions">
               <div>
                 <div className="panel-kicker">CSVs de correção</div>
@@ -298,7 +364,7 @@ export function ResultWorkspace({
                   </article>
                 ) : null}
 
-                {groups.map(({ code, occurrences }) => {
+                {allGroups.map(({ code, occurrences }) => {
                   const guide = describeIssue(code, occurrences[0]?.message);
                   return (
                     <article className="export-card" key={code}>
@@ -414,13 +480,23 @@ export function ResultWorkspace({
               <article className="duplicate-card duplicate-card-empty">
                 <strong>Nenhum item neste filtro</strong>
                 <p>
-                  {duplicateFilter === "normal"
+                  {hasSearch
+                    ? "Nenhuma duplicidade corresponde à busca atual."
+                    : duplicateFilter === "normal"
                     ? "Não há duplicados com nomes iguais para revisar neste lote."
                     : "Não há duplicados com nomes diferentes para revisar neste lote."}
                 </p>
               </article>
             )}
           </div>
+        </section>
+      ) : null}
+
+      {showSearchEmptyState ? (
+        <section className="panel empty-card">
+          <div className="panel-kicker">Busca</div>
+          <h2 className="panel-title">Nenhuma linha corresponde à busca atual</h2>
+          <p>Revise o termo usado ou limpe a busca para voltar ao resultado completo.</p>
         </section>
       ) : null}
 

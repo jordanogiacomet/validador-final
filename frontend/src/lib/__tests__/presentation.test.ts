@@ -4,12 +4,18 @@ import {
   buildScopeSummaryCopy,
   describeIssue,
   filterDuplicates,
+  filterDuplicatesForResultSearch,
+  filterProblemGroupsForResultSearch,
   formatStatusChip,
   getBulkConsolidatableSameNameDuplicates,
+  getDuplicateFilterCounts,
   getValidationScopeLabel,
   hasDuplicateDescriptionConflict,
   normalizeValidationScope,
+  normalizeSearchText,
+  resetResultSearchState,
 } from "@/lib/presentation";
+import type { DuplicateGroup, ProblemOccurrence } from "@/lib/types";
 
 describe("presentation helpers", () => {
   it("normalizes unknown validation scope to zero_items", () => {
@@ -69,7 +75,7 @@ describe("presentation helpers", () => {
   });
 
   it("filters duplicate groups between normal and vermelho cards", () => {
-    const duplicates = [
+    const duplicates: DuplicateGroup[] = [
       {
         item: "1100",
         descricao: "Mesa",
@@ -89,8 +95,78 @@ describe("presentation helpers", () => {
     expect(filterDuplicates(duplicates, "conflict")).toEqual([duplicates[1]]);
   });
 
+  it("matches result search without case or accent sensitivity", () => {
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      ZERO_ITEM_COMPLEMENTO_SHORT: [
+        {
+          row_index: 0,
+          item: "1100",
+          descricao: "Ar Condicionado",
+          severity: "warning",
+          message: "Complemento muito curto para ÁREA técnica",
+          field: "complemento",
+        },
+        {
+          row_index: 1,
+          item: "2200",
+          descricao: "Mesa administrativa",
+          severity: "warning",
+          message: "Marca ausente",
+          field: "marca",
+        },
+      ],
+    };
+
+    expect(normalizeSearchText("  ÁREA   TÉCNICA ")).toBe("area tecnica");
+    expect(filterProblemGroupsForResultSearch(groupedProblems, "area tecnica")).toEqual({
+      ZERO_ITEM_COMPLEMENTO_SHORT: [groupedProblems.ZERO_ITEM_COMPLEMENTO_SHORT[0]],
+    });
+    expect(filterProblemGroupsForResultSearch(groupedProblems, "linha 3")).toEqual({
+      ZERO_ITEM_COMPLEMENTO_SHORT: [groupedProblems.ZERO_ITEM_COMPLEMENTO_SHORT[1]],
+    });
+  });
+
+  it("combines result search with duplicate display filters", () => {
+    const duplicates: DuplicateGroup[] = [
+      {
+        item: "1100",
+        descricao: "Mesa São Paulo",
+        row_indices: [0, 1],
+        count: 2,
+      },
+      {
+        item: "2200",
+        descricao: "Cadeira / Poltrona",
+        has_description_conflict: true,
+        row_indices: [4, 9],
+        count: 2,
+      },
+    ];
+
+    expect(filterDuplicatesForResultSearch(duplicates, "normal", "sao paulo")).toEqual([
+      duplicates[0],
+    ]);
+    expect(filterDuplicatesForResultSearch(duplicates, "conflict", "cadeira")).toEqual([
+      duplicates[1],
+    ]);
+    expect(filterDuplicatesForResultSearch(duplicates, "normal", "cadeira")).toEqual([]);
+    expect(getDuplicateFilterCounts(duplicates, "cadeira")).toEqual({
+      all: 1,
+      normal: 0,
+      conflict: 1,
+    });
+  });
+
+  it("builds a blank result search state when the active job changes", () => {
+    expect(resetResultSearchState("job-2")).toEqual({
+      jobId: "job-2",
+      input: "",
+      debouncedQuery: "",
+    });
+  });
+
   it("returns only same-name duplicate groups with exactly two occurrences for bulk consolidation", () => {
-    const duplicates = [
+    const duplicates: DuplicateGroup[] = [
       {
         item: "3300",
         descricao: "Mesa",

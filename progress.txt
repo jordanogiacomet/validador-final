@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 11:52 -03
+Last Updated: 2026-04-18 12:00 -03
 
 ---
 
@@ -31,6 +31,7 @@ Last Updated: 2026-04-18 11:52 -03
 - LLM fallback model selection is tenant-configured with `llm.fallback_model`; retry only transient failures (timeouts, HTTP 429, HTTP 5xx), and preserve attempted model sequence plus primary/final failure details in warning issue metadata.
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
+- Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
 - Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
@@ -607,4 +608,21 @@ Expected architectural direction:
   - Keep LLM fallback policy explicit and narrow so configuration does not turn every provider/client error into a duplicate request
   - Cache keys already include model, so fallback cache behavior composes naturally when the attempted model is passed through the existing key builder
   - Failure issue metadata is the right place to preserve attempted model order and primary/final failure reasons; reports and downstream tools can read structured details without parsing message text
+---
+
+## 2026-04-18 12:00 -03 - US-030
+- Added debounced text search to the result workspace, filtering visible duplicate cards and problem occurrence rows without changing the backend/API contract
+- Added normalized case- and accent-insensitive search helpers in `frontend/src/lib/presentation.ts`, including duplicate-filter combination and problem-group filtering over the existing result payload
+- Reset result search input and debounced query whenever `currentJobId` changes, alongside the existing duplicate filter reset
+- Added focused frontend coverage for normalized matching, reset state, and combining search with duplicate display filters
+- Files changed: `frontend/src/components/result-workspace.tsx`, `frontend/src/lib/presentation.ts`, `frontend/src/lib/__tests__/presentation.test.ts`, `frontend/src/app/globals.css`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended before deployment.
+- **Learnings for future iterations:**
+  - Result workspace search can stay frontend-only because duplicate groups and grouped problem occurrences already carry enough text metadata for operational filtering
+  - Keep search normalization in shared presentation helpers so counts, duplicate cards, and problem rows use the same matching semantics
+  - Debounced search state should be cleared on job changes together with other local workspace filters to avoid stale filtered views
 ---
