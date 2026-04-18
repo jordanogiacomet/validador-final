@@ -13,7 +13,15 @@ import yaml
 
 from app.core.context import ValidationContext
 from app.core.issue import ValidationIssue
-from app.core.metrics import record_llm_request
+from app.core.llm_cache import (
+    LLM_FORCE_REFRESH_PARAM,
+    FileLLMResponseCache,
+    LLMResponseCache,
+    build_llm_cache_key,
+    normalize_llm_cache_payload,
+    resolve_force_refresh,
+)
+from app.core.metrics import record_llm_cache_lookup, record_llm_request
 from app.core.tenant_config import LLMConfig
 from app.rules.base import BaseRule
 
@@ -204,13 +212,23 @@ def normalize_findings(
 class LLMAuditRule(BaseRule):
     name: str = "llm_audit"
 
-    def __init__(self, client: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        client: LLMClient | None = None,
+        cache: LLMResponseCache | None = None,
+    ) -> None:
         self._client = client
+        self._cache = cache
 
     def _get_client(self) -> LLMClient:
         if self._client is not None:
             return self._client
         return get_default_client()
+
+    def _get_cache(self) -> LLMResponseCache:
+        if self._cache is not None:
+            return self._cache
+        return FileLLMResponseCache.from_env()
 
     def applies(self, context: ValidationContext) -> bool:
         if not context.tenant.llm.enabled:
@@ -245,6 +263,52 @@ class LLMAuditRule(BaseRule):
             prompt_version=loaded_prompt.version,
         )
         prompt = format_prompt(loaded_prompt.template, context.normalized_row)
+        cache_ttl_seconds = llm_config.cache_ttl_seconds
+        cache_key = build_llm_cache_key(
+            tenant_id=context.tenant.tenant_id,
+            prompt_version=loaded_prompt.version,
+            model=llm_config.model,
+            payload=normalize_llm_cache_payload(context.normalized_row),
+        )
+        force_refresh = resolve_force_refresh(
+            context.shared_context.get(LLM_FORCE_REFRESH_PARAM)
+        )
+
+        if cache_ttl_seconds > 0:
+            if force_refresh:
+                record_llm_cache_lookup(
+                    context.tenant.tenant_id,
+                    llm_config.model,
+                    outcome="bypass",
+                )
+            else:
+                try:
+                    cached_response = self._get_cache().get(
+                        cache_key,
+                        ttl_seconds=cache_ttl_seconds,
+                    )
+                except Exception as exc:
+                    logger.warning("LLM audit cache read failed: %s", exc)
+                    cached_response = None
+
+                if cached_response is not None:
+                    record_llm_cache_lookup(
+                        context.tenant.tenant_id,
+                        llm_config.model,
+                        outcome="hit",
+                    )
+                    findings = parse_llm_response(cached_response)
+                    return normalize_findings(
+                        findings,
+                        model=llm_config.model,
+                        prompt_version=loaded_prompt.version,
+                    )
+
+                record_llm_cache_lookup(
+                    context.tenant.tenant_id,
+                    llm_config.model,
+                    outcome="miss",
+                )
 
         try:
             started_at = time.perf_counter()
@@ -274,6 +338,12 @@ class LLMAuditRule(BaseRule):
                     ),
                 )
             ]
+
+        if cache_ttl_seconds > 0:
+            try:
+                self._get_cache().set(cache_key, response_text)
+            except Exception as exc:
+                logger.warning("LLM audit cache write failed: %s", exc)
 
         record_llm_request(
             context.tenant.tenant_id,

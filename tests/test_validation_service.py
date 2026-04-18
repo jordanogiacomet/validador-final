@@ -6,6 +6,7 @@ import pytest
 
 import app.services.validation_service as validation_service
 from app.core.job import JobStatus
+from app.core.llm_cache import LLM_CACHE_PATH_ENV
 from app.rules.llm_audit import set_default_client
 from app.services.job_service import JobService
 from app.services.validation_service import (
@@ -242,6 +243,7 @@ def test_run_validation_job_records_llm_prompt_version_in_result_and_pdf(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv(LLM_CACHE_PATH_ENV, str(tmp_path / "llm_cache.json"))
 
     csv_path = tmp_path / "empresa_exemplo.csv"
     csv_path.write_text(EMPRESA_EXEMPLO_LLM_CONTENT, encoding="utf-8")

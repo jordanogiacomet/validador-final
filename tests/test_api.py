@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import audit_service, job_service
 from app.core.audit import AuditEventType
+from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.main import app
 from app.services.validation_service import run_validation_job
 
@@ -218,6 +219,20 @@ def test_upload_can_request_duplicate_items_scope():
     )
     assert response.status_code == 200
     assert response.json()["validation_scope"] == "duplicate_items"
+
+
+def test_upload_can_request_llm_force_refresh():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post(
+        "/validate?tenant_id=default&force_refresh=true",
+        files=files,
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    job = job_service.get_job(response.json()["job_id"])
+    assert job is not None
+    assert job.params[LLM_FORCE_REFRESH_PARAM] is True
 
 
 def test_upload_invalid_tenant():
@@ -1078,6 +1093,42 @@ def test_reprocess_job_preserves_validation_scope():
     new_job = job_service.get_job(payload["job_id"])
     assert new_job is not None
     assert new_job.params["validation_scope"] == "all_items"
+
+    Path(csv_path).unlink(missing_ok=True)
+    if new_job.file_path:
+        Path(new_job.file_path).unlink(missing_ok=True)
+    if new_job.result_path:
+        Path(new_job.result_path).unlink(missing_ok=True)
+    if new_job.report_path:
+        Path(new_job.report_path).unlink(missing_ok=True)
+
+
+def test_reprocess_job_can_override_llm_force_refresh():
+    job = job_service.create_job(
+        tenant_id="default",
+        file_name="corrigido.csv",
+        params={"validation_scope": "all_items", LLM_FORCE_REFRESH_PARAM: False},
+    )
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa executiva,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(
+        f"/jobs/{job.job_id}/reprocess?force_refresh=true",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    new_job = job_service.get_job(response.json()["job_id"])
+    assert new_job is not None
+    assert new_job.params["validation_scope"] == "all_items"
+    assert new_job.params[LLM_FORCE_REFRESH_PARAM] is True
 
     Path(csv_path).unlink(missing_ok=True)
     if new_job.file_path:

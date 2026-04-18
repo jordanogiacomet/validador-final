@@ -483,8 +483,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 28,
-      "passes": false,
-      "notes": "Cache single-node é aceitável por ora. Evoluir para cache compartilhado se houver múltiplas réplicas."
+      "passes": true,
+      "notes": "Implementado com cache JSON local chaveado por tenant_id, prompt_version, modelo e payload normalizado; TTL configurável em tenant.llm.cache_ttl_seconds, bypass por force_refresh e métricas opt-in de hit/miss/bypass."
     },
     {
       "id": "US-029",

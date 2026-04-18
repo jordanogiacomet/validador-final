@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import job_service
+from app.core.llm_cache import LLM_CACHE_PATH_ENV
 from app.core.metrics import (
     METRICS_ENABLED_ENV,
     get_metrics_content_type,
@@ -31,6 +32,7 @@ class _FakeLLMClient:
     ) -> None:
         self._response_text = response_text
         self._error = error
+        self.calls = 0
 
     def complete(
         self,
@@ -40,15 +42,17 @@ class _FakeLLMClient:
         max_tokens: int,
     ) -> str:
         del model, prompt, temperature, max_tokens
+        self.calls += 1
         if self._error is not None:
             raise self._error
         return self._response_text
 
 
 @pytest.fixture(autouse=True)
-def reset_metrics_test_state(monkeypatch: pytest.MonkeyPatch):
+def reset_metrics_test_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
     job_service._jobs.clear()
     monkeypatch.delenv(METRICS_ENABLED_ENV, raising=False)
+    monkeypatch.setenv(LLM_CACHE_PATH_ENV, str(tmp_path / "llm_cache.json"))
     reset_metrics_state()
     set_default_client(None)
     yield
@@ -68,13 +72,12 @@ def test_metrics_endpoint_exposes_prometheus_payload_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv(METRICS_ENABLED_ENV, "true")
-    set_default_client(
-        _FakeLLMClient(
-            response_text=(
-                '[{"issue":"Descrição suspeita","severity":"warning","field":"descricao"}]'
-            )
+    llm_client = _FakeLLMClient(
+        response_text=(
+            '[{"issue":"Descrição suspeita","severity":"warning","field":"descricao"}]'
         )
     )
+    set_default_client(llm_client)
 
     response = client.post(
         "/validate",
@@ -87,6 +90,19 @@ def test_metrics_endpoint_exposes_prometheus_payload_when_enabled(
     job = job_service.get_job(response.json()["job_id"])
     assert job is not None
     assert job.status.value == "completed"
+
+    cached_response = client.post(
+        "/validate",
+        params={"tenant_id": "empresa_exemplo"},
+        files={"file": ("inventario.csv", BytesIO(CSV_CONTENT.encode("utf-8")), "text/csv")},
+        headers={"X-API-Key": EMPRESA_EXEMPLO_API_KEY},
+    )
+
+    assert cached_response.status_code == 200
+    cached_job = job_service.get_job(cached_response.json()["job_id"])
+    assert cached_job is not None
+    assert cached_job.status.value == "completed"
+    assert llm_client.calls == 1
 
     metrics_response = client.get("/metrics")
 
@@ -104,6 +120,9 @@ def test_metrics_endpoint_exposes_prometheus_payload_when_enabled(
     assert 'rule="llm_audit"' in body
     assert 'outcome="success"' in body
     assert "validator_llm_request_duration_seconds" in body
+    assert "validator_llm_cache_total" in body
+    assert 'outcome="miss"' in body
+    assert 'outcome="hit"' in body
 
 
 def test_metrics_endpoint_tracks_llm_failures(

@@ -34,6 +34,7 @@ class TestTenantConfig:
         assert config.csv.delimiter == ","
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
+        assert config.llm.cache_ttl_seconds == 0
         assert config.api_keys == []
 
     def test_config_with_categories(self) -> None:
@@ -62,10 +63,15 @@ class TestTenantConfig:
         config = TenantConfig(
             tenant_id="t",
             display_name="T",
-            llm=LLMConfig(enabled=True, model="claude-sonnet-4-20250514"),
+            llm=LLMConfig(
+                enabled=True,
+                model="claude-sonnet-4-20250514",
+                cache_ttl_seconds=300,
+            ),
         )
         assert config.llm.enabled is True
         assert config.llm.model == "claude-sonnet-4-20250514"
+        assert config.llm.cache_ttl_seconds == 300
 
     def test_config_with_csv_options(self) -> None:
         config = TenantConfig(
@@ -139,6 +145,7 @@ class TestTenantLoader:
         )
         assert config.normalization.model_brands["ThinkPad T14 Gen 1"] == "Lenovo"
         assert config.llm.enabled is True
+        assert config.llm.cache_ttl_seconds == 86400
         assert config.thresholds["short_complement_max_words"] == 5
 
     def test_load_redesim(self) -> None:

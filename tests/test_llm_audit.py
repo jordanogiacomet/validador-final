@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.core.context import ValidationContext
+from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM, FileLLMResponseCache
 from app.core.registry import RULE_REGISTRY, register_rule
 from app.core.tenant_config import LLMConfig, TenantConfig
 from app.rules.llm_audit import (
@@ -22,7 +23,11 @@ def teardown_function():
     RULE_REGISTRY.clear()
 
 
-def _tenant(llm_enabled: bool = True, prompt_file: str = "prompts/audit.txt") -> TenantConfig:
+def _tenant(
+    llm_enabled: bool = True,
+    prompt_file: str = "prompts/audit.txt",
+    cache_ttl_seconds: int = 0,
+) -> TenantConfig:
     return TenantConfig(
         tenant_id="empresa_exemplo",
         display_name="Empresa Exemplo",
@@ -33,6 +38,7 @@ def _tenant(llm_enabled: bool = True, prompt_file: str = "prompts/audit.txt") ->
             temperature=0.0,
             max_tokens=1024,
             prompt_file=prompt_file,
+            cache_ttl_seconds=cache_ttl_seconds,
         ),
     )
 
@@ -41,6 +47,7 @@ def _ctx(
     tenant: TenantConfig | None = None,
     row: dict | None = None,
     flag_zero: int = 1,
+    shared_context: dict | None = None,
 ) -> ValidationContext:
     if tenant is None:
         tenant = _tenant()
@@ -61,6 +68,7 @@ def _ctx(
         tenant=tenant,
         row_index=0,
         normalized_row=row,
+        shared_context=shared_context or {},
     )
 
 
@@ -288,6 +296,82 @@ def test_validate_passes_correct_params_to_client():
     call = client.calls[0]
     assert call["temperature"] == 0.0
     assert call["max_tokens"] == 1024
+
+
+def test_validate_caches_successful_response_and_reuses_it(tmp_path):
+    now = 1000.0
+    cache_path = tmp_path / "llm_cache.json"
+    cache = FileLLMResponseCache(cache_path, clock=lambda: now)
+    response = (
+        '[{"issue": "Complemento genérico", "severity": "warning", '
+        '"field": "complemento"}]'
+    )
+    client = FakeLLMClient(response=response)
+    rule = LLMAuditRule(client=client, cache=cache)
+    tenant = _tenant(cache_ttl_seconds=60)
+
+    first_issues = rule.validate(_ctx(tenant=tenant))
+    second_client = FakeLLMClient(
+        response='[{"issue": "Não deveria chamar", "field": "descricao"}]'
+    )
+    second_rule = LLMAuditRule(
+        client=second_client,
+        cache=FileLLMResponseCache(cache_path, clock=lambda: now),
+    )
+    second_issues = second_rule.validate(_ctx(tenant=tenant))
+
+    assert len(client.calls) == 1
+    assert second_client.calls == []
+    assert first_issues[0].message == second_issues[0].message
+    assert "Complemento genérico" in second_issues[0].message
+
+
+def test_validate_ttl_expired_cache_calls_llm_again(tmp_path):
+    now = 1000.0
+    cache = FileLLMResponseCache(tmp_path / "llm_cache.json", clock=lambda: now)
+    client = FakeLLMClient(
+        response='[{"issue": "Primeira resposta", "field": "descricao"}]'
+    )
+    rule = LLMAuditRule(client=client, cache=cache)
+    tenant = _tenant(cache_ttl_seconds=60)
+
+    first_issues = rule.validate(_ctx(tenant=tenant))
+    assert "Primeira resposta" in first_issues[0].message
+
+    now = 1100.0
+    client.response = '[{"issue": "Resposta atualizada", "field": "descricao"}]'
+    second_issues = rule.validate(_ctx(tenant=tenant))
+
+    assert len(client.calls) == 2
+    assert "Resposta atualizada" in second_issues[0].message
+
+
+def test_validate_force_refresh_bypasses_and_refreshes_cache(tmp_path):
+    now = 1000.0
+    cache = FileLLMResponseCache(tmp_path / "llm_cache.json", clock=lambda: now)
+    client = FakeLLMClient(
+        response='[{"issue": "Resposta cacheada", "field": "descricao"}]'
+    )
+    rule = LLMAuditRule(client=client, cache=cache)
+    tenant = _tenant(cache_ttl_seconds=60)
+
+    cached_issues = rule.validate(_ctx(tenant=tenant))
+    assert "Resposta cacheada" in cached_issues[0].message
+
+    client.response = '[{"issue": "Resposta forçada", "field": "descricao"}]'
+    refreshed_issues = rule.validate(
+        _ctx(
+            tenant=tenant,
+            shared_context={LLM_FORCE_REFRESH_PARAM: True},
+        )
+    )
+
+    client.response = '[{"issue": "Resposta que não deve ser chamada", "field": "descricao"}]'
+    reused_issues = rule.validate(_ctx(tenant=tenant))
+
+    assert len(client.calls) == 2
+    assert "Resposta forçada" in refreshed_issues[0].message
+    assert "Resposta forçada" in reused_issues[0].message
 
 
 # --- engine integration ---

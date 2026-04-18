@@ -74,6 +74,7 @@ class MetricsState:
     rule_issues_total: Counter
     llm_requests_total: Counter
     llm_request_duration_seconds: Histogram
+    llm_cache_total: Counter
 
 
 _state: MetricsState | None = None
@@ -143,6 +144,12 @@ def _build_state() -> MetricsState:
             "LLM audit request duration in seconds.",
             labelnames=("tenant_id", "rule", "model", "outcome"),
             buckets=_LLM_DURATION_BUCKETS,
+            registry=registry,
+        ),
+        llm_cache_total=Counter(
+            "validator_llm_cache_total",
+            "LLM audit cache lookups by tenant, model, and outcome.",
+            labelnames=("tenant_id", "rule", "model", "outcome"),
             registry=registry,
         ),
     )
@@ -234,3 +241,20 @@ def record_llm_request(
     state.llm_request_duration_seconds.labels(**labels).observe(
         _seconds_from_ms(duration_ms)
     )
+
+
+def record_llm_cache_lookup(
+    tenant_id: str,
+    model: str,
+    *,
+    outcome: str,
+) -> None:
+    if not metrics_enabled():
+        return
+
+    get_metrics_state().llm_cache_total.labels(
+        tenant_id=tenant_id,
+        rule=_LLM_RULE_NAME,
+        model=_normalize_label(model),
+        outcome=_normalize_label(outcome),
+    ).inc()

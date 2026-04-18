@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.api.auth import get_authenticated_tenant, resolve_request_tenant_id
 from app.api.frontend import build_frontend_html
 from app.core.audit import AuditEvent, AuditEventType
+from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.tenant_config import DEFAULT_TENANT_ID
 from app.core.tenant_loader import load_tenant_config
 from app.core.validation_scope import (
@@ -267,6 +268,7 @@ async def upload_and_validate(
     file: UploadFile,
     tenant_id: str | None = None,
     validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+    force_refresh: bool = False,
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
     auth = get_authenticated_tenant(request)
@@ -277,7 +279,10 @@ async def upload_and_validate(
         tenant_id=resolved_tenant_id,
         file_name=stored_file_name,
         api_key_id=auth.api_key_id,
-        params={VALIDATION_SCOPE_PARAM: validation_scope.value},
+        params={
+            VALIDATION_SCOPE_PARAM: validation_scope.value,
+            LLM_FORCE_REFRESH_PARAM: force_refresh,
+        },
     )
     file_path = build_job_upload_path(
         resolved_tenant_id,
@@ -523,6 +528,7 @@ async def resolve_duplicate_rows(
 async def reprocess_job(
     request: Request,
     job_id: str,
+    force_refresh: bool | None = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
     _get_authorized_job(request, job_id)
@@ -532,6 +538,7 @@ async def reprocess_job(
             job_id,
             job_service,
             api_key_id=auth.api_key_id,
+            force_refresh=force_refresh,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None

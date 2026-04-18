@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 11:26 -03
+Last Updated: 2026-04-18 11:44 -03
 
 ---
 
@@ -27,6 +27,7 @@ Last Updated: 2026-04-18 11:26 -03
 - Use Protocol-based abstractions for external service clients (e.g., LLM) to enable testability without mocking internals.
 - Tenant-specific prompt files live under `app/tenants/{tenant_id}/prompts/`; reference via `prompt_file` in tenant YAML.
 - Parse optional YAML frontmatter for tenant prompt files at load time and default legacy prompts to a stable version token so LLM audit/report metadata stays reproducible without breaking older prompts.
+- LLM response caching is tenant-configured with `llm.cache_ttl_seconds`; cache keys and persistence live in `app/core/llm_cache.py`, storage path comes from `VALIDATOR_LLM_CACHE_PATH`, and `force_refresh` job params bypass cache reads while refreshing successful writes.
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
@@ -571,4 +572,21 @@ Expected architectural direction:
   - Parse prompt version metadata where prompt files are loaded, not inside report generation, so legacy/default handling stays centralized and future cache keys can reuse the same contract
   - Carry LLM audit provenance through `ValidationIssue.meta` for row-level consumers, but also mirror job-level LLM metadata in `shared_context` so final reports still know the prompt version when the LLM returns no findings
   - Report metadata should be derived in the service/report layer from structured issue/shared-context data rather than hardcoded route-level fields
+---
+
+## 2026-04-18 11:44 -03 - US-028
+- Implemented persistent JSON-backed LLM response caching keyed by tenant_id, prompt_version, model, and normalized audit payload
+- Added tenant-configured TTL via `llm.cache_ttl_seconds`; `0` keeps caching disabled, while positive values enable local cache reuse
+- Added `force_refresh` job/API param support so validation and reprocess jobs can bypass cache reads while storing the refreshed successful response
+- Added opt-in Prometheus cache metrics through centralized helpers with bounded outcomes (`hit`, `miss`, `bypass`)
+- Files changed: `app/core/llm_cache.py`, `app/core/metrics.py`, `app/core/tenant_config.py`, `app/rules/llm_audit.py`, `app/services/validation_service.py`, `app/api/routes.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `tests/test_llm_cache.py`, `tests/test_llm_audit.py`, `tests/test_tenant.py`, `tests/test_metrics.py`, `tests/test_validation_service.py`, `tests/test_api.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check --fix app tests`
+  - `pytest tests/test_llm_cache.py tests/test_llm_audit.py tests/test_tenant.py tests/test_metrics.py tests/test_validation_service.py::test_run_validation_job_records_llm_prompt_version_in_result_and_pdf tests/test_api.py::test_upload_can_request_llm_force_refresh tests/test_api.py::test_reprocess_job_can_override_llm_force_refresh`
+  - `ruff check app tests`
+  - `pytest` (335 tests)
+- **Learnings for future iterations:**
+  - Cache storage should stay outside the LLM rule in `app/core/llm_cache.py`; the rule only builds keys, reads/writes successful responses, and preserves existing failure warnings
+  - Keep cache metrics centralized in `app/core/metrics.py` with bounded labels and no per-job identifiers, matching the existing observability contract
+  - Set `VALIDATOR_LLM_CACHE_PATH` in tests that exercise real tenant LLM flows so cache files do not leak into the default `results/` tree
 ---

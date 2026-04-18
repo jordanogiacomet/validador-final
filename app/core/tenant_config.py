@@ -20,6 +20,7 @@ class LLMConfig(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 1024
     prompt_file: str = ""
+    cache_ttl_seconds: int = Field(default=0, ge=0)
 
 
 class NormalizationConfig(BaseModel):
