@@ -161,6 +161,7 @@ Keep result review-marker filtering in `frontend/src/lib/presentation.ts` helper
 When filtering result categories in the frontend, derive available categories from `CATEGORY_*` issue codes in the existing grouped problem payload unless the backend contract explicitly grows a category field.
 Reset local result filters/search when `currentJobId` changes so operators do not carry stale views between jobs.
 Keep frontend authentication plumbing centralized in `frontend/src/lib/api.ts`: `/login` is the only unauthenticated flow, and the rest of the workspace should consume the issued `X-API-Key` through shared helpers instead of ad hoc fetch calls.
+Protected frontend downloads must also go through shared helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
 Improvement Workflow
 
 When the user asks for an improvement:

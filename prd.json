@@ -602,8 +602,8 @@
         "Checks de frontend passam"
       ],
       "priority": 35,
-      "passes": false,
-      "notes": "Esta story fecha o fluxo operacional para que o usuário final não precise copiar e colar a key manualmente."
+      "passes": true,
+      "notes": "Implementado com sessão persistida em sessionStorage via `frontend/src/lib/api.ts`, injeção automática do header `X-API-Key` em chamadas autenticadas e downloads protegidos, logout explícito na shell e retorno ao login quando a sessão é invalidada pela API."
     },
     {
       "id": "US-036",

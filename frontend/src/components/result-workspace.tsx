@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
-  buildCorrectedCsvUrl,
-  buildOperationalExportUrl,
-  buildReportUrl,
-  buildResultUrl,
+  downloadApiFile,
 } from "@/lib/api";
 import {
   buildResultFilterGroups,
@@ -249,6 +246,7 @@ export function ResultWorkspace({
   );
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const activeData = previewData || reportData;
   const isPartial = Boolean(previewData);
 
@@ -259,6 +257,7 @@ export function ResultWorkspace({
     setResultFilters(resetResultFilterState());
     setSearchInput(resetSearch.input);
     setDebouncedSearchQuery(resetSearch.debouncedQuery);
+    setDownloadError(null);
   }, [currentJobId]);
 
   useEffect(() => {
@@ -322,6 +321,19 @@ export function ResultWorkspace({
   const canReviewRows = !isPartial && Boolean(currentJobId);
   const showResultFilterEmptyState =
     (hasSearch || hasActiveFilters) && filteredDuplicates.length === 0 && groups.length === 0;
+
+  async function handleDownload(path: string, fallbackFileName: string) {
+    try {
+      setDownloadError(null);
+      await downloadApiFile(path, fallbackFileName);
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Não foi possível baixar o arquivo solicitado.";
+      setDownloadError(message);
+    }
+  }
 
   return (
     <>
@@ -435,16 +447,31 @@ export function ResultWorkspace({
           <div className="panel-kicker">Artefatos do lote</div>
           <h2 className="panel-title">Arquivos finais</h2>
           <div className="actions">
-            <a className="action-link" href={buildReportUrl(currentJobId)} target="_blank" rel="noreferrer">
+            <button
+              className="action-link"
+              type="button"
+              onClick={() => void handleDownload(`/jobs/${currentJobId}/report`, `relatorio-${currentJobId}.pdf`)}
+            >
               Baixar relatório PDF
-            </a>
-            <a className="action-link" href={buildResultUrl(currentJobId)} target="_blank" rel="noreferrer">
+            </button>
+            <button
+              className="action-link"
+              type="button"
+              onClick={() =>
+                void handleDownload(`/jobs/${currentJobId}/result`, `resultado-${currentJobId}.json`)
+              }
+            >
               Baixar dados estruturados
-            </a>
-            <a className="action-link" href={buildCorrectedCsvUrl(currentJobId)}>
+            </button>
+            <button
+              className="action-link"
+              type="button"
+              onClick={() => void handleDownload(`/jobs/${currentJobId}/csv`, `corrigido-${currentJobId}.csv`)}
+            >
               Baixar CSV corrigido
-            </a>
+            </button>
           </div>
+          {downloadError ? <p className="inline-error">{downloadError}</p> : null}
 
           {duplicates.length || allGroups.length ? (
             <div className="export-actions">
@@ -458,12 +485,18 @@ export function ResultWorkspace({
                     <small>Duplicidades</small>
                     <strong>CSV apenas com itens duplicados</strong>
                     <p>{duplicates.length} grupo(s).</p>
-                    <a
+                    <button
                       className="action-link"
-                      href={buildOperationalExportUrl(currentJobId, "duplicates")}
+                      type="button"
+                      onClick={() =>
+                        void handleDownload(
+                          `/jobs/${currentJobId}/exports/csv?kind=duplicates`,
+                          `duplicidades-${currentJobId}.csv`,
+                        )
+                      }
                     >
                       Baixar duplicados em CSV
-                    </a>
+                    </button>
                   </article>
                 ) : null}
 
@@ -474,12 +507,18 @@ export function ResultWorkspace({
                       <small>{code}</small>
                       <strong>{guide.title}</strong>
                       <p>{occurrences.length} ocorrência(s).</p>
-                      <a
+                      <button
                         className="action-link"
-                        href={buildOperationalExportUrl(currentJobId, "problem_group", code)}
+                        type="button"
+                        onClick={() =>
+                          void handleDownload(
+                            `/jobs/${currentJobId}/exports/csv?kind=problem_group&problem_code=${encodeURIComponent(code)}`,
+                            `${slugify(code)}-${currentJobId}.csv`,
+                          )
+                        }
                       >
                         Baixar este grupo em CSV
-                      </a>
+                      </button>
                     </article>
                   );
                 })}
@@ -494,13 +533,18 @@ export function ResultWorkspace({
           <div className="panel-kicker">Correções aplicadas</div>
           <h2 className="panel-title">CSV corrigido nesta sessão</h2>
           <div className="correction-actions">
-            <a className="action-link" href={buildCorrectedCsvUrl(currentJobId)}>
+            <button
+              className="action-link"
+              type="button"
+              onClick={() => void handleDownload(`/jobs/${currentJobId}/csv`, `corrigido-${currentJobId}.csv`)}
+            >
               Baixar CSV corrigido
-            </a>
+            </button>
             <button className="action-button primary" type="button" disabled={isReprocessing} onClick={onReprocess}>
               {isReprocessing ? "Reprocessando..." : "Reprocessar lote"}
             </button>
           </div>
+          {downloadError ? <p className="inline-error">{downloadError}</p> : null}
         </section>
       ) : null}
 

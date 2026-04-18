@@ -17,8 +17,10 @@ import type {
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const DEPLOYED_BACKEND_PORT = "30091";
 const API_KEY_HEADER = "X-API-Key";
+const API_SESSION_STORAGE_KEY = "validator.api_session.v1";
 
 let currentSession: LoginResponse | null = null;
+let sessionInvalidHandler: (() => void) | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -43,30 +45,143 @@ export function getApiBaseUrl(): string {
   return DEFAULT_API_BASE_URL;
 }
 
+function canUseSessionStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined";
+}
+
+function isLoginResponse(value: unknown): value is LoginResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<LoginResponse>;
+  return (
+    typeof candidate.tenant_id === "string" &&
+    typeof candidate.operator_id === "string" &&
+    typeof candidate.api_key_id === "string" &&
+    typeof candidate.x_api_key === "string" &&
+    typeof candidate.header_name === "string"
+  );
+}
+
+function readPersistedApiSession(): LoginResponse | null {
+  if (!canUseSessionStorage()) {
+    return null;
+  }
+
+  const rawSession = window.sessionStorage.getItem(API_SESSION_STORAGE_KEY);
+  if (!rawSession) {
+    return null;
+  }
+
+  try {
+    const parsedSession = JSON.parse(rawSession) as unknown;
+    if (isLoginResponse(parsedSession)) {
+      return parsedSession;
+    }
+  } catch {
+    // Invalid persisted payloads should not keep the operator locked out.
+  }
+
+  window.sessionStorage.removeItem(API_SESSION_STORAGE_KEY);
+  return null;
+}
+
+function persistApiSession(session: LoginResponse | null): void {
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  if (!session) {
+    window.sessionStorage.removeItem(API_SESSION_STORAGE_KEY);
+    return;
+  }
+
+  window.sessionStorage.setItem(API_SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
 export function buildApiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${getApiBaseUrl()}${normalizedPath}`;
 }
 
 export function getApiSession(): LoginResponse | null {
+  if (!currentSession) {
+    currentSession = readPersistedApiSession();
+  }
   return currentSession;
 }
 
 export function setApiSession(session: LoginResponse | null): void {
   currentSession = session;
+  persistApiSession(session);
 }
 
 export function clearApiSession(): void {
   currentSession = null;
+  persistApiSession(null);
+}
+
+export function setApiSessionInvalidHandler(handler: (() => void) | null): void {
+  sessionInvalidHandler = handler;
 }
 
 function buildRequestHeaders(headers?: HeadersInit, includeAuth = true): Headers {
   const nextHeaders = new Headers(headers);
-  const apiKey = includeAuth ? currentSession?.x_api_key?.trim() : "";
+  const apiKey = includeAuth ? getApiSession()?.x_api_key?.trim() : "";
   if (apiKey) {
     nextHeaders.set(API_KEY_HEADER, apiKey);
   }
   return nextHeaders;
+}
+
+async function readErrorDetail(response: Response): Promise<string> {
+  const responseClone = response.clone();
+  const contentType = responseClone.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await responseClone.json()) as Record<string, unknown>;
+      return typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      return "";
+    }
+  }
+
+  try {
+    return await responseClone.text();
+  } catch {
+    return "";
+  }
+}
+
+async function shouldInvalidateSession(
+  response: Response,
+  includeAuth: boolean,
+): Promise<boolean> {
+  if (!includeAuth || !getApiSession()) {
+    return false;
+  }
+
+  if (response.status === 401) {
+    return true;
+  }
+
+  if (response.status !== 403) {
+    return false;
+  }
+
+  const detail = await readErrorDetail(response);
+  return /api key|expired|revoked/i.test(detail);
+}
+
+function invalidateSession(): void {
+  if (!getApiSession()) {
+    return;
+  }
+
+  clearApiSession();
+  sessionInvalidHandler?.();
 }
 
 async function apiFetch(
@@ -75,10 +190,14 @@ async function apiFetch(
   options: { includeAuth?: boolean } = {},
 ): Promise<Response> {
   const includeAuth = options.includeAuth ?? true;
-  return fetch(buildApiUrl(path), {
+  const response = await fetch(buildApiUrl(path), {
     ...init,
     headers: buildRequestHeaders(init.headers, includeAuth),
   });
+  if (await shouldInvalidateSession(response, includeAuth)) {
+    invalidateSession();
+  }
+  return response;
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -224,6 +343,53 @@ export async function reprocessJob(jobId: string): Promise<UploadResponse> {
     method: "POST",
   });
   return readResponse<UploadResponse>(response);
+}
+
+function resolveDownloadFileName(
+  contentDisposition: string | null,
+  fallbackFileName: string,
+): string {
+  if (!contentDisposition) {
+    return fallbackFileName;
+  }
+
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return fallbackFileName;
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || fallbackFileName;
+}
+
+export async function downloadApiFile(
+  path: string,
+  fallbackFileName: string,
+): Promise<void> {
+  const response = await apiFetch(path);
+  if (!response.ok) {
+    await readResponse<Record<string, never>>(response);
+    return;
+  }
+
+  const blob = await response.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = resolveDownloadFileName(
+    response.headers.get("content-disposition"),
+    fallbackFileName,
+  );
+  link.rel = "noreferrer";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
 }
 
 export function buildReportUrl(jobId: string): string {

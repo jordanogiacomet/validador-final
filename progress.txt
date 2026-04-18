@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 12:00 -03
+Last Updated: 2026-04-18 13:05 -03
 
 ---
 
@@ -51,6 +51,7 @@ Last Updated: 2026-04-18 12:00 -03
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
 - New tenant-owned rule config should use typed Pydantic sub-models in `app/core/tenant_config.py`; validate regex-like entries during tenant load so jobs do not fail mid-validation.
 - Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
+- Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
 
 ---
 
@@ -714,4 +715,24 @@ Expected architectural direction:
 - **Learnings for future iterations:**
   - Story splits around login/auth can overlap; when that happens, validate the existing acceptance contract first and only add code if the implementation actually falls short
   - The backend contract for issued keys is already anchored in `POST /login` plus `AuthService`; future auth stories should extend key lifecycle behavior there instead of creating a parallel issuance path
+---
+
+## 2026-04-18 13:05 -03 - US-035
+- Persisted the issued frontend session in `sessionStorage` through `frontend/src/lib/api.ts` so the workspace can restore the active `X-API-Key` without manual operator input
+- Added automatic session invalidation handling for authenticated API responses and wired the app shell to return to the login screen when the key becomes invalid
+- Added an explicit logout action in the frontend shell that clears the active session state and stored key
+- Replaced protected artifact/export download links with authenticated download helpers so report/result/CSV downloads also send `X-API-Key`
+- Added focused frontend coverage for session persistence, auth-header injection, logout, invalid-session redirect, and protected downloads
+- Files changed: `frontend/src/lib/api.ts`, `frontend/src/components/result-workspace.tsx`, `frontend/src/app/page.tsx`, `frontend/src/app/globals.css`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/app/page.test.tsx`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (44 tests)
+  - `cd frontend && npm run lint`
+  - `ruff check app tests`
+  - `pytest` (357 tests)
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended for the login/logout/download flow.
+- **Learnings for future iterations:**
+  - Keep frontend auth state centralized in `frontend/src/lib/api.ts`, including invalid-session callbacks, so page-level routing can react without duplicating 401 handling across components
+  - Protected downloads must use authenticated fetch helpers rather than raw anchors because the browser will not attach `X-API-Key` automatically to `<a href>` requests
+  - `sessionStorage` fits the current operator flow better than in-memory state alone because it survives refresh without turning the issued key into a longer-lived local artifact
 ---
