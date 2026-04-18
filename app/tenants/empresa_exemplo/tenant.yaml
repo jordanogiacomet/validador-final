@@ -49,3 +49,7 @@ llm:
   temperature: 0.0
   max_tokens: 1024
   prompt_file: prompts/audit.txt
+
+api_keys:
+  - key_id: empresa-exemplo-local
+    value: empresa-exemplo-local-test-key

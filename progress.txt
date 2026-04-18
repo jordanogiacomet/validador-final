@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-17 15:49 -02
+Last Updated: 2026-04-18 10:36 -03
 
 ---
 
@@ -16,8 +16,8 @@ Last Updated: 2026-04-17 15:49 -02
 - Preserve the distinction between collected items and zero-created items as a core domain concept.
 - Use `progress.txt` to record assumptions, gotchas, and reusable learnings for future iterations.
 - Only mark a story as passed when implementation is complete and quality checks pass.
-- Quality gates are: `ruff check app/` (lint) and `pytest app/tests/` (tests). No mypy/pyright installed.
-- Run `ruff check --fix app/` to auto-fix import sorting issues before committing.
+- Quality gates are: `ruff check app tests` (lint) and `pytest` (tests). No mypy/pyright installed.
+- Run `ruff check --fix app tests` to auto-fix import sorting issues before committing.
 - Use `Path(__file__).resolve().parent` for module-relative paths instead of hardcoded relative paths.
 - Tenant configs use typed Pydantic sub-models (`CategoryConfig`, `LLMConfig`) — keep them in `app/core/tenant_config.py`.
 - Clear `RULE_REGISTRY` in test setup/teardown to avoid cross-test contamination.
@@ -35,6 +35,8 @@ Last Updated: 2026-04-17 15:49 -02
 - Prometheus instrumentation should stay centralized in `app/core/metrics.py`, remain gated by `VALIDATOR_METRICS_ENABLED`, and never use `job_id`/`request_id` as metric labels.
 - Keep `/health` thin by delegating probes to `app/core/health.py`; uploads/results/job_store are critical checks, while LLM reachability is an optional degradation path that is opt-in per tenant via `llm.healthcheck_enabled`.
 - LLM health probes should stay conservative: use low-cost provider reachability checks with aggressive timeout defaults instead of triggering a full audit completion.
+- Tenant-scoped API auth should derive tenant context from `X-API-Key`; any `tenant_id` request parameter is only a hint and must be rejected on mismatch.
+- Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
 
 ---
 
@@ -469,4 +471,18 @@ Expected architectural direction:
   - Keep LLM health checks separate from LLM audit execution: a socket-level provider reachability probe is enough for `/health` and avoids unnecessary token spend
   - Resolve mutable runtime dependencies inside the route path (for example, `job_service` from `app.api.routes`) instead of capturing them by value in `app.main`, otherwise tests and future storage swaps become harder
   - When a config contract grows for an operational feature, update the seed tenant YAMLs even if the new field defaults safely; it makes the intended opt-in posture explicit
+---
+
+## 2026-04-18 10:36 -03 - US-021
+- Implemented tenant-scoped API key authentication with `X-API-Key`, deriving tenant context in middleware and rejecting request `tenant_id` hints that do not match the authenticated tenant
+- Restricted tenant listing, job listing, job status, artifact downloads, row editing, duplicate resolution, cancellation, and reprocessing to the authenticated tenant while keeping `/health`, `/metrics`, and `OPTIONS` preflight public
+- Added `api_keys` support to tenant configs and seed tenant YAMLs, plus focused coverage for missing key, invalid key, tenant mismatch, scoped job access, and tenant API-key resolution
+- Files changed: `app/api/auth.py`, `app/api/routes.py`, `app/core/tenant_config.py`, `app/core/tenant_loader.py`, `app/main.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `app/tenants/redesim/tenant.yaml`, `app/tenants/redesim_v2/tenant.yaml`, `tests/test_api.py`, `tests/test_logging.py`, `tests/test_metrics.py`, `tests/test_tenant.py`, `AGENTS.md`
+- Checks passed:
+  - `ruff check --fix app tests`
+  - `pytest` (295 tests)
+- **Learnings for future iterations:**
+  - Middleware-authenticated tenant context should be the source of truth for API authorization; routes should only compare request hints or job ownership against that context, not reload tenant selection logic ad hoc
+  - If API auth depends on a custom header such as `X-API-Key`, unauthenticated `OPTIONS` requests must remain allowed so browser CORS preflight does not break uploads or PATCH flows
+  - Keeping tenant API keys in `tenant.yaml` as `{key_id, value}` pairs preserves a working default tenant today and leaves the loader as the only place that needs to change if secrets move to an external store later
 ---

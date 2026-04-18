@@ -369,8 +369,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 21,
-      "passes": false,
-      "notes": "Manter o parâmetro tenant_id do request como hint apenas; a verdade é a key. Documentar rotação de keys na documentação do tenant."
+      "passes": true,
+      "notes": "Implementado com `api_keys` na configuração dos tenants, middleware FastAPI validando `X-API-Key`, escopo de jobs/artifacts pelo tenant autenticado e testes cobrindo ausência de key, key inválida, conflito de tenant e acesso autorizado. O parâmetro `tenant_id` do request permanece apenas como hint e retorna 403 em caso de conflito."
     },
     {
       "id": "US-022",

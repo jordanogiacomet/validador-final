@@ -25,6 +25,11 @@ class CSVConfig(BaseModel):
     encoding: str = "utf-8"
 
 
+class APIKeyConfig(BaseModel):
+    key_id: str
+    value: str = Field(min_length=1)
+
+
 class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str
@@ -35,6 +40,7 @@ class TenantConfig(BaseModel):
     categories: list[CategoryConfig] = Field(default_factory=list)
     csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    api_keys: list[APIKeyConfig] = Field(default_factory=list)
 
 
 DEFAULT_TENANT_ID = "default"

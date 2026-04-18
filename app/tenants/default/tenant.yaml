@@ -28,3 +28,7 @@ categories: []
 llm:
   enabled: false
   healthcheck_enabled: false
+
+api_keys:
+  - key_id: default-local
+    value: default-local-test-key

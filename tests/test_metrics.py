@@ -14,6 +14,8 @@ from app.rules.llm_audit import set_default_client
 
 client = TestClient(app)
 
+EMPRESA_EXEMPLO_API_KEY = "empresa-exemplo-local-test-key"
+
 CSV_CONTENT = (
     "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
     "001,,Cadeira,,,SN-1,Sala 1,CC-1,,Observação\n"
@@ -78,6 +80,7 @@ def test_metrics_endpoint_exposes_prometheus_payload_when_enabled(
         "/validate",
         params={"tenant_id": "empresa_exemplo"},
         files={"file": ("inventario.csv", BytesIO(CSV_CONTENT.encode("utf-8")), "text/csv")},
+        headers={"X-API-Key": EMPRESA_EXEMPLO_API_KEY},
     )
 
     assert response.status_code == 200
@@ -113,6 +116,7 @@ def test_metrics_endpoint_tracks_llm_failures(
         "/validate",
         params={"tenant_id": "empresa_exemplo"},
         files={"file": ("inventario.csv", BytesIO(CSV_CONTENT.encode("utf-8")), "text/csv")},
+        headers={"X-API-Key": EMPRESA_EXEMPLO_API_KEY},
     )
 
     assert response.status_code == 200

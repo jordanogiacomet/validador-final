@@ -130,6 +130,8 @@ Keep API handlers thin
 API endpoints should delegate orchestration to services
 API code should not contain validation business rules
 API code should not know tenant-specific rule details beyond selecting the tenant or config
+Tenant-scoped API auth should derive tenant context from the API key; request `tenant_id` values are hints and must be rejected on mismatch
+Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep operational probes like `/health` public
 Observability Guidance
 Keep Prometheus wiring centralized in `app/core/metrics.py`
 Metrics must stay opt-in via `VALIDATOR_METRICS_ENABLED`

@@ -27,6 +27,8 @@ from app.core.logging import (
 from app.core.tenant_config import DEFAULT_TENANT_ID
 from app.main import app
 
+DEFAULT_API_KEY = "default-local-test-key"
+
 
 class _RecordingHandler(logging.Handler):
     def __init__(self) -> None:
@@ -285,6 +287,7 @@ def test_validation_service_emits_started_and_completed_events(captured_records)
         "/validate",
         files={"file": ("inventario.csv", BytesIO(csv_content.encode("utf-8")), "text/csv")},
         params={"tenant_id": DEFAULT_TENANT_ID},
+        headers={"X-API-Key": DEFAULT_API_KEY},
     )
     assert response.status_code == 200
     job_id = response.json()["job_id"]

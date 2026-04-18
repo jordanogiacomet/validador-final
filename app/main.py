@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.auth import api_key_auth_middleware
 from app.api.middleware import request_id_middleware
 from app.api.routes import router
 from app.core.health import HealthReport, build_health_report, get_health_status_code
@@ -18,6 +19,7 @@ configure_logging()
 app = FastAPI(title="Multi-Tenant Inventory Validator")
 
 app.middleware("http")(request_id_middleware)
+app.middleware("http")(api_key_auth_middleware)
 
 
 def _get_cors_origins() -> list[str]:

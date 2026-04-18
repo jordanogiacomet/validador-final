@@ -208,3 +208,7 @@ categories:
 
 llm:
   enabled: false
+
+api_keys:
+  - key_id: redesim-local
+    value: redesim-local-test-key

@@ -1,10 +1,17 @@
 import pytest
 
-from app.core.tenant_config import CategoryConfig, CSVConfig, LLMConfig, TenantConfig
+from app.core.tenant_config import (
+    APIKeyConfig,
+    CategoryConfig,
+    CSVConfig,
+    LLMConfig,
+    TenantConfig,
+)
 from app.core.tenant_loader import (
     list_tenants,
     load_default_tenant_config,
     load_tenant_config,
+    resolve_tenant_api_key,
 )
 
 
@@ -20,6 +27,7 @@ class TestTenantConfig:
         assert config.csv.delimiter == ","
         assert config.csv.encoding == "utf-8"
         assert config.llm.enabled is False
+        assert config.api_keys == []
 
     def test_config_with_categories(self) -> None:
         config = TenantConfig(
@@ -61,6 +69,15 @@ class TestTenantConfig:
         assert config.csv.delimiter == ";"
         assert config.csv.encoding == "iso-8859-1"
 
+    def test_config_with_api_keys(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            api_keys=[APIKeyConfig(key_id="tenant-local", value="secret-value")],
+        )
+        assert config.api_keys[0].key_id == "tenant-local"
+        assert config.api_keys[0].value == "secret-value"
+
 
 class TestTenantLoader:
     def test_load_default_tenant(self) -> None:
@@ -68,6 +85,7 @@ class TestTenantLoader:
         assert config.tenant_id == "default"
         assert config.display_name == "Default Tenant"
         assert config.llm.enabled is False
+        assert config.api_keys[0].key_id == "default-local"
 
     def test_load_default_by_id(self) -> None:
         config = load_tenant_config("default")
@@ -118,3 +136,12 @@ class TestTenantLoader:
         config = load_default_tenant_config()
         assert config.columns["item"] == "Item"
         assert config.columns["placa_anterior"] == "Placa Anterior"
+
+    def test_resolve_tenant_api_key_returns_scoped_match(self) -> None:
+        match = resolve_tenant_api_key("redesim-local-test-key")
+        assert match is not None
+        assert match.tenant.tenant_id == "redesim"
+        assert match.api_key.key_id == "redesim-local"
+
+    def test_resolve_tenant_api_key_returns_none_for_unknown_value(self) -> None:
+        assert resolve_tenant_api_key("missing-key") is None

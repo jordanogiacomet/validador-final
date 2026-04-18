@@ -3,14 +3,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+from app.api.auth import get_authenticated_tenant, resolve_request_tenant_id
 from app.api.frontend import build_frontend_html
 from app.core.job import JobStatus
 from app.core.tenant_config import DEFAULT_TENANT_ID
-from app.core.tenant_loader import list_tenants, load_tenant_config
+from app.core.tenant_loader import load_tenant_config
 from app.core.validation_scope import (
     DEFAULT_VALIDATION_SCOPE,
     VALIDATION_SCOPE_PARAM,
@@ -189,33 +190,45 @@ def _build_tenant_list_item_response(tenant_id: str) -> TenantListItemResponse:
     )
 
 
+def _get_authorized_job(request: Request, job_id: str):
+    job = job_service.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    auth = get_authenticated_tenant(request)
+    if job.tenant_id != auth.tenant_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"API key does not grant access to tenant '{job.tenant_id}'",
+        )
+
+    return job
+
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def frontend() -> HTMLResponse:
     return HTMLResponse(build_frontend_html())
 
 
 @router.get("/tenants", response_model=list[TenantListItemResponse])
-async def get_tenants() -> list[TenantListItemResponse]:
-    return [_build_tenant_list_item_response(tenant_id) for tenant_id in list_tenants()]
+async def get_tenants(request: Request) -> list[TenantListItemResponse]:
+    auth = get_authenticated_tenant(request)
+    return [_build_tenant_list_item_response(auth.tenant_id)]
 
 
 @router.post("/validate", response_model=UploadResponse)
 async def upload_and_validate(
+    request: Request,
     file: UploadFile,
-    tenant_id: str = "default",
+    tenant_id: str | None = None,
     validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
-    try:
-        load_tenant_config(tenant_id)
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=404, detail=f"Tenant not found: {tenant_id}"
-        ) from None
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
 
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     job = job_service.create_job(
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id,
         file_name=file.filename,
         params={VALIDATION_SCOPE_PARAM: validation_scope.value},
     )
@@ -239,22 +252,21 @@ async def upload_and_validate(
 
 
 @router.get("/jobs", response_model=list[JobListItemResponse])
-async def list_jobs(active_only: bool = False) -> list[JobListItemResponse]:
-    jobs = job_service.list_jobs(active_only=active_only)
+async def list_jobs(request: Request, active_only: bool = False) -> list[JobListItemResponse]:
+    auth = get_authenticated_tenant(request)
+    jobs = job_service.list_jobs(tenant_id=auth.tenant_id, active_only=active_only)
     return [_build_job_list_item_response(job) for job in jobs]
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str) -> JobStatusResponse:
-    job = job_service.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
+async def get_job_status(request: Request, job_id: str) -> JobStatusResponse:
+    job = _get_authorized_job(request, job_id)
     return _build_job_status_response(job)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(job_id: str) -> JobStatusResponse:
+async def cancel_job(request: Request, job_id: str) -> JobStatusResponse:
+    _get_authorized_job(request, job_id)
     try:
         job = job_service.request_job_cancellation(job_id)
     except KeyError as exc:
@@ -266,11 +278,8 @@ async def cancel_job(job_id: str) -> JobStatusResponse:
 
 
 @router.get("/jobs/{job_id}/result")
-async def download_result(job_id: str) -> dict:
-    job = job_service.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
+async def download_result(request: Request, job_id: str) -> dict:
+    job = _get_authorized_job(request, job_id)
     if job.status != JobStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Job not completed: {job.status.value}")
 
@@ -283,11 +292,8 @@ async def download_result(job_id: str) -> dict:
 
 
 @router.get("/jobs/{job_id}/report")
-async def download_report(job_id: str):
-    job = job_service.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
+async def download_report(request: Request, job_id: str):
+    job = _get_authorized_job(request, job_id)
     if job.status != JobStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Job not completed: {job.status.value}")
 
@@ -304,7 +310,8 @@ async def download_report(job_id: str):
 
 
 @router.get("/jobs/{job_id}/csv")
-async def download_job_csv(job_id: str):
+async def download_job_csv(request: Request, job_id: str):
+    _get_authorized_job(request, job_id)
     try:
         csv_path, download_name = get_job_csv_download(job_id, job_service)
     except KeyError as exc:
@@ -323,10 +330,12 @@ async def download_job_csv(job_id: str):
 
 @router.get("/jobs/{job_id}/exports/csv")
 async def download_job_operational_export(
+    request: Request,
     job_id: str,
     kind: OperationalExportKind,
     problem_code: str | None = None,
 ) -> Response:
+    _get_authorized_job(request, job_id)
     try:
         csv_content, download_name = get_job_operational_export(
             job_id,
@@ -347,10 +356,12 @@ async def download_job_operational_export(
 
 @router.patch("/jobs/{job_id}/rows/{row_index}", response_model=RowUpdateResponse)
 async def update_job_row(
+    request: Request,
     job_id: str,
     row_index: int,
     payload: RowUpdateRequest,
 ) -> RowUpdateResponse:
+    _get_authorized_job(request, job_id)
     try:
         updated_row = update_job_csv_row(
             job_id,
@@ -373,7 +384,8 @@ async def update_job_row(
 
 
 @router.get("/jobs/{job_id}/rows/{row_index}", response_model=RowReadResponse)
-async def get_job_row(job_id: str, row_index: int) -> RowReadResponse:
+async def get_job_row(request: Request, job_id: str, row_index: int) -> RowReadResponse:
+    _get_authorized_job(request, job_id)
     try:
         row, resolved_columns = read_job_csv_row(
             job_id,
@@ -400,9 +412,11 @@ async def get_job_row(job_id: str, row_index: int) -> RowReadResponse:
     response_model=DuplicateResolutionResponse,
 )
 async def resolve_duplicate_rows(
+    request: Request,
     job_id: str,
     payload: DuplicateResolutionRequest,
 ) -> DuplicateResolutionResponse:
+    _get_authorized_job(request, job_id)
     normalized_indices = sorted(set(payload.row_indices))
     if payload.keep_row_index not in normalized_indices:
         raise HTTPException(
@@ -436,9 +450,11 @@ async def resolve_duplicate_rows(
 
 @router.post("/jobs/{job_id}/reprocess", response_model=UploadResponse)
 async def reprocess_job(
+    request: Request,
     job_id: str,
     background_tasks: BackgroundTasks = BackgroundTasks(),  # noqa: B008
 ) -> UploadResponse:
+    _get_authorized_job(request, job_id)
     try:
         new_job = create_reprocess_job(job_id, job_service)
     except KeyError as exc:

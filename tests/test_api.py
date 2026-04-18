@@ -11,9 +11,16 @@ from app.services.validation_service import run_validation_job
 
 client = TestClient(app)
 
+DEFAULT_API_KEY = "default-local-test-key"
+REDESIM_API_KEY = "redesim-local-test-key"
+
 
 def setup_function():
     job_service._jobs.clear()
+
+
+def auth_headers(api_key: str = DEFAULT_API_KEY) -> dict[str, str]:
+    return {"X-API-Key": api_key}
 
 
 CSV_CONTENT = (
@@ -64,7 +71,7 @@ def test_frontend_page_renders_friendly_form():
 
 
 def test_list_tenants_returns_display_names():
-    response = client.get("/tenants")
+    response = client.get("/tenants", headers=auth_headers())
     assert response.status_code == 200
 
     payload = response.json()
@@ -72,12 +79,28 @@ def test_list_tenants_returns_display_names():
     assert payload[0]["tenant_id"] == "default"
     assert payload[0]["display_name"] == "Default Tenant"
     assert payload[0]["is_default"] is True
-    assert any(tenant["tenant_id"] == "redesim" for tenant in payload)
+    assert len(payload) == 1
+
+
+def test_protected_routes_require_api_key():
+    response = client.get("/jobs")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Missing X-API-Key header"
+
+
+def test_invalid_api_key_is_rejected():
+    response = client.get("/jobs", headers=auth_headers("invalid-api-key"))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key"
 
 
 def test_upload_and_validate_creates_job():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default", files=files)
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
     data = response.json()
     assert "job_id" in data
@@ -88,15 +111,26 @@ def test_upload_and_validate_creates_job():
 
 def test_upload_default_tenant():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate", files=files)
+    response = client.post("/validate", files=files, headers=auth_headers())
     assert response.status_code == 200
     assert response.json()["tenant_id"] == "default"
     assert response.json()["validation_scope"] == "zero_items"
 
 
+def test_upload_uses_tenant_from_api_key_when_hint_missing():
+    files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
+    response = client.post("/validate", files=files, headers=auth_headers(REDESIM_API_KEY))
+    assert response.status_code == 200
+    assert response.json()["tenant_id"] == "redesim"
+
+
 def test_upload_can_request_all_items_scope():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    response = client.post(
+        "/validate?tenant_id=default&validation_scope=all_items",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
     assert response.json()["validation_scope"] == "all_items"
 
@@ -106,6 +140,7 @@ def test_upload_can_request_duplicate_items_scope():
     response = client.post(
         "/validate?tenant_id=default&validation_scope=duplicate_items",
         files=files,
+        headers=auth_headers(),
     )
     assert response.status_code == 200
     assert response.json()["validation_scope"] == "duplicate_items"
@@ -113,14 +148,29 @@ def test_upload_can_request_duplicate_items_scope():
 
 def test_upload_invalid_tenant():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=nonexistent", files=files)
-    assert response.status_code == 404
-    assert "Tenant not found" in response.json()["detail"]
+    response = client.post(
+        "/validate?tenant_id=nonexistent",
+        files=files,
+        headers=auth_headers(),
+    )
+    assert response.status_code == 403
+    assert "does not grant access" in response.json()["detail"]
+
+
+def test_validate_rejects_tenant_conflict_with_api_key():
+    files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    response = client.post(
+        "/validate?tenant_id=redesim",
+        files=files,
+        headers=auth_headers(),
+    )
+    assert response.status_code == 403
+    assert "redesim" in response.json()["detail"]
 
 
 def test_get_job_status():
     job = job_service.create_job(tenant_id="default")
-    response = client.get(f"/jobs/{job.job_id}")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["job_id"] == job.job_id
@@ -147,12 +197,13 @@ def test_list_jobs_can_filter_active_only():
     queued_job = job_service.create_job(tenant_id="default", file_name="queued.csv")
     running_job = job_service.create_job(tenant_id="default", file_name="running.csv")
     completed_job = job_service.create_job(tenant_id="default", file_name="done.csv")
+    job_service.create_job(tenant_id="redesim", file_name="other-tenant.csv")
 
     running_job.mark_running()
     completed_job.mark_running()
     completed_job.mark_completed(total_rows=1)
 
-    response = client.get("/jobs?active_only=true")
+    response = client.get("/jobs?active_only=true", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
 
@@ -163,10 +214,17 @@ def test_list_jobs_can_filter_active_only():
     assert all(job["status"] in {"queued", "running"} for job in payload)
 
 
+def test_get_job_status_rejects_other_tenant_job():
+    job = job_service.create_job(tenant_id="redesim")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
+    assert response.status_code == 403
+    assert "redesim" in response.json()["detail"]
+
+
 def test_cancel_job_marks_queued_job_as_canceled():
     job = job_service.create_job(tenant_id="default", file_name="lote.csv")
 
-    response = client.post(f"/jobs/{job.job_id}/cancel")
+    response = client.post(f"/jobs/{job.job_id}/cancel", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
 
@@ -179,7 +237,7 @@ def test_cancel_job_marks_running_job_as_cancel_requested():
     job = job_service.create_job(tenant_id="default", file_name="lote.csv")
     job.mark_running()
 
-    response = client.post(f"/jobs/{job.job_id}/cancel")
+    response = client.post(f"/jobs/{job.job_id}/cancel", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
 
@@ -193,14 +251,14 @@ def test_cancel_job_rejects_completed_job():
     job.mark_running()
     job.mark_completed(total_rows=1)
 
-    response = client.post(f"/jobs/{job.job_id}/cancel")
+    response = client.post(f"/jobs/{job.job_id}/cancel", headers=auth_headers())
     assert response.status_code == 400
     assert "queued or running" in response.json()["detail"]
 
 
 def test_get_job_status_includes_file_name_metadata():
     job = job_service.create_job(tenant_id="default", file_name="lote.csv")
-    response = client.get(f"/jobs/{job.job_id}")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["file_name"] == "lote.csv"
@@ -233,7 +291,7 @@ def test_get_job_status_includes_partial_preview_payload():
         status_detail="4 de 12 linhas já foram validadas.",
     )
 
-    response = client.get(f"/jobs/{job.job_id}")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["processed_rows"] == 4
@@ -248,13 +306,13 @@ def test_get_job_status_includes_partial_preview_payload():
 
 
 def test_get_job_not_found():
-    response = client.get("/jobs/nonexistent")
+    response = client.get("/jobs/nonexistent", headers=auth_headers())
     assert response.status_code == 404
 
 
 def test_download_result_not_completed():
     job = job_service.create_job(tenant_id="default")
-    response = client.get(f"/jobs/{job.job_id}/result")
+    response = client.get(f"/jobs/{job.job_id}/result", headers=auth_headers())
     assert response.status_code == 400
     assert "not completed" in response.json()["detail"]
 
@@ -269,7 +327,7 @@ def test_download_result_completed():
 
     job.mark_completed(result_path=result_path, total_rows=1)
 
-    response = client.get(f"/jobs/{job.job_id}/result")
+    response = client.get(f"/jobs/{job.job_id}/result", headers=auth_headers())
     assert response.status_code == 200
     assert response.json()["summary"]["total_rows"] == 1
 
@@ -278,7 +336,11 @@ def test_download_result_completed():
 
 def test_validation_result_includes_item_and_descricao_metadata():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default", files=files)
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
 
     job_id = response.json()["job_id"]
@@ -289,7 +351,7 @@ def test_validation_result_includes_item_and_descricao_metadata():
         assert job.report_path is not None
         assert job.file_path is not None
 
-        result_response = client.get(f"/jobs/{job_id}/result")
+        result_response = client.get(f"/jobs/{job_id}/result", headers=auth_headers())
         assert result_response.status_code == 200
 
         payload = result_response.json()
@@ -314,14 +376,18 @@ def test_validation_result_includes_item_and_descricao_metadata():
 
 def test_validation_result_can_include_all_items_scope():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    response = client.post(
+        "/validate?tenant_id=default&validation_scope=all_items",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
 
     job_id = response.json()["job_id"]
     job = job_service.get_job(job_id)
     assert job is not None
     try:
-        result_response = client.get(f"/jobs/{job_id}/result")
+        result_response = client.get(f"/jobs/{job_id}/result", headers=auth_headers())
         assert result_response.status_code == 200
 
         payload = result_response.json()
@@ -348,6 +414,7 @@ def test_validation_result_can_include_duplicate_items_scope():
     response = client.post(
         "/validate?tenant_id=default&validation_scope=duplicate_items",
         files=files,
+        headers=auth_headers(),
     )
     assert response.status_code == 200
 
@@ -355,7 +422,7 @@ def test_validation_result_can_include_duplicate_items_scope():
     job = job_service.get_job(job_id)
     assert job is not None
     try:
-        result_response = client.get(f"/jobs/{job_id}/result")
+        result_response = client.get(f"/jobs/{job_id}/result", headers=auth_headers())
         assert result_response.status_code == 200
 
         payload = result_response.json()
@@ -375,7 +442,11 @@ def test_validation_result_can_include_duplicate_items_scope():
 
 def test_redesim_tenant_uses_configured_descricao_column_and_rules():
     files = {"file": ("redesim.csv", BytesIO(REDESIM_CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=redesim", files=files)
+    response = client.post(
+        "/validate?tenant_id=redesim",
+        files=files,
+        headers=auth_headers(REDESIM_API_KEY),
+    )
     assert response.status_code == 200
 
     job_id = response.json()["job_id"]
@@ -383,7 +454,10 @@ def test_redesim_tenant_uses_configured_descricao_column_and_rules():
     assert job is not None
 
     try:
-        result_response = client.get(f"/jobs/{job_id}/result")
+        result_response = client.get(
+            f"/jobs/{job_id}/result",
+            headers=auth_headers(REDESIM_API_KEY),
+        )
         assert result_response.status_code == 200
 
         payload = result_response.json()
@@ -401,7 +475,7 @@ def test_redesim_tenant_uses_configured_descricao_column_and_rules():
 
 def test_download_report_not_completed():
     job = job_service.create_job(tenant_id="default")
-    response = client.get(f"/jobs/{job.job_id}/report")
+    response = client.get(f"/jobs/{job.job_id}/report", headers=auth_headers())
     assert response.status_code == 400
 
 
@@ -410,7 +484,7 @@ def test_download_report_file_missing():
     job.mark_running()
     job.mark_completed(report_path="/nonexistent/report.pdf")
 
-    response = client.get(f"/jobs/{job.job_id}/report")
+    response = client.get(f"/jobs/{job.job_id}/report", headers=auth_headers())
     assert response.status_code == 404
     assert "Report file not found" in response.json()["detail"]
 
@@ -425,7 +499,7 @@ def test_download_report_completed():
 
     job.mark_completed(report_path=report_path)
 
-    response = client.get(f"/jobs/{job.job_id}/report")
+    response = client.get(f"/jobs/{job.job_id}/report", headers=auth_headers())
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
 
@@ -445,7 +519,7 @@ def test_download_job_csv_returns_current_corrected_file():
 
     job.file_path = csv_path
 
-    response = client.get(f"/jobs/{job.job_id}/csv")
+    response = client.get(f"/jobs/{job.job_id}/csv", headers=auth_headers())
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert 'filename="inventario_corrigido.csv"' in response.headers["content-disposition"]
@@ -458,7 +532,7 @@ def test_download_job_csv_file_missing():
     job = job_service.create_job(tenant_id="default", file_name="inventario.csv")
     job.file_path = "/nonexistent/inventario.csv"
 
-    response = client.get(f"/jobs/{job.job_id}/csv")
+    response = client.get(f"/jobs/{job.job_id}/csv", headers=auth_headers())
     assert response.status_code == 404
     assert "CSV file not found" in response.json()["detail"]
 
@@ -476,7 +550,11 @@ def test_download_duplicates_export_csv_for_completed_job():
             "text/csv",
         )
     }
-    response = client.post("/validate?tenant_id=default&validation_scope=all_items", files=files)
+    response = client.post(
+        "/validate?tenant_id=default&validation_scope=all_items",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
 
     job_id = response.json()["job_id"]
@@ -484,7 +562,10 @@ def test_download_duplicates_export_csv_for_completed_job():
     assert job is not None
 
     try:
-        export_response = client.get(f"/jobs/{job_id}/exports/csv?kind=duplicates")
+        export_response = client.get(
+            f"/jobs/{job_id}/exports/csv?kind=duplicates",
+            headers=auth_headers(),
+        )
         assert export_response.status_code == 200
         assert export_response.headers["content-type"].startswith("text/csv")
         assert 'filename="duplicados_duplicados.csv"' in (
@@ -503,7 +584,11 @@ def test_download_duplicates_export_csv_for_completed_job():
 
 def test_download_problem_group_export_csv_for_completed_job():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default", files=files)
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
     assert response.status_code == 200
 
     job_id = response.json()["job_id"]
@@ -512,7 +597,8 @@ def test_download_problem_group_export_csv_for_completed_job():
 
     try:
         export_response = client.get(
-            f"/jobs/{job_id}/exports/csv?kind=problem_group&problem_code=ZERO_ITEM_COMPLEMENTO_EMPTY"
+            f"/jobs/{job_id}/exports/csv?kind=problem_group&problem_code=ZERO_ITEM_COMPLEMENTO_EMPTY",
+            headers=auth_headers(),
         )
         assert export_response.status_code == 200
         assert export_response.headers["content-type"].startswith("text/csv")
@@ -532,23 +618,27 @@ def test_download_problem_group_export_csv_for_completed_job():
 
 
 def test_download_result_not_found():
-    response = client.get("/jobs/nonexistent/result")
+    response = client.get("/jobs/nonexistent/result", headers=auth_headers())
     assert response.status_code == 404
 
 
 def test_download_report_not_found():
-    response = client.get("/jobs/nonexistent/report")
+    response = client.get("/jobs/nonexistent/report", headers=auth_headers())
     assert response.status_code == 404
 
 
 def test_download_job_csv_not_found():
-    response = client.get("/jobs/nonexistent/csv")
+    response = client.get("/jobs/nonexistent/csv", headers=auth_headers())
     assert response.status_code == 404
 
 
 def test_upload_saves_file():
     files = {"file": ("inventory.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
-    response = client.post("/validate?tenant_id=default", files=files)
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
     data = response.json()
     job = job_service.get_job(data["job_id"])
     assert job is not None
@@ -569,7 +659,7 @@ def test_job_status_shows_counters_after_completion():
         total_issues=5,
     )
 
-    response = client.get(f"/jobs/{job.job_id}")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
     data = response.json()
     assert data["total_rows"] == 10
     assert data["source_total_rows"] == 15
@@ -584,7 +674,7 @@ def test_job_status_shows_error_after_failure():
     job.mark_running()
     job.mark_failed("Something went wrong")
 
-    response = client.get(f"/jobs/{job.job_id}")
+    response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
     data = response.json()
     assert data["status"] == "failed"
     assert data["error_message"] == "Something went wrong"
@@ -609,6 +699,7 @@ def test_update_job_row_updates_csv():
     response = client.patch(
         f"/jobs/{job.job_id}/rows/0",
         json={"updates": {"descricao": "Mesa executiva"}},
+        headers=auth_headers(),
     )
     assert response.status_code == 200
     payload = response.json()
@@ -635,7 +726,7 @@ def test_get_job_row_returns_current_value_and_mapping():
 
     job.file_path = csv_path
 
-    response = client.get(f"/jobs/{job.job_id}/rows/0")
+    response = client.get(f"/jobs/{job.job_id}/rows/0", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["row"]["Descrição"] == "Mesa"
@@ -668,6 +759,7 @@ def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fiel
     response = client.post(
         f"/jobs/{job.job_id}/duplicates/resolve",
         json={"row_indices": [0, 1, 2], "keep_row_index": 1},
+        headers=auth_headers(),
     )
     assert response.status_code == 200
     payload = response.json()
@@ -694,7 +786,7 @@ def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fiel
     assert "ModeloAnterior" not in updated_csv
     assert "CCAnterior" not in updated_csv
 
-    result_response = client.get(f"/jobs/{job.job_id}/result")
+    result_response = client.get(f"/jobs/{job.job_id}/result", headers=auth_headers())
     assert result_response.status_code == 200
     result_payload = result_response.json()
     assert result_payload["summary"]["total_rows"] == 1
@@ -738,6 +830,7 @@ def test_resolve_duplicate_rows_same_name_skips_media_and_datetime_columns():
     response = client.post(
         f"/jobs/{job.job_id}/duplicates/resolve",
         json={"row_indices": [0, 1, 2], "keep_row_index": 2},
+        headers=auth_headers(),
     )
     assert response.status_code == 200
     payload = response.json()
@@ -762,7 +855,7 @@ def test_resolve_duplicate_rows_same_name_skips_media_and_datetime_columns():
     assert "2026-01-02T09:00:00" not in updated_csv
     assert ",,,Carla" in updated_csv
 
-    result_response = client.get(f"/jobs/{job.job_id}/rows/0")
+    result_response = client.get(f"/jobs/{job.job_id}/rows/0", headers=auth_headers())
     assert result_response.status_code == 200
     row_payload = result_response.json()["row"]
     assert row_payload["foto_complementar_memento"] == ""
@@ -798,6 +891,7 @@ def test_resolve_duplicate_rows_requires_completed_job_for_in_place_refresh():
     response = client.post(
         f"/jobs/{job.job_id}/duplicates/resolve",
         json={"row_indices": [0, 1], "keep_row_index": 1},
+        headers=auth_headers(),
     )
     assert response.status_code == 400
     assert "completed jobs" in response.json()["detail"]
@@ -827,6 +921,7 @@ def test_resolve_duplicate_rows_rejects_keep_index_outside_group():
     response = client.post(
         f"/jobs/{job.job_id}/duplicates/resolve",
         json={"row_indices": [0, 1], "keep_row_index": 3},
+        headers=auth_headers(),
     )
     assert response.status_code == 400
     assert "keep_row_index" in response.json()["detail"]
@@ -846,7 +941,7 @@ def test_reprocess_job_creates_new_job_from_corrected_csv():
 
     job.file_path = csv_path
 
-    response = client.post(f"/jobs/{job.job_id}/reprocess")
+    response = client.post(f"/jobs/{job.job_id}/reprocess", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["job_id"] != job.job_id
@@ -883,7 +978,7 @@ def test_reprocess_job_preserves_validation_scope():
 
     job.file_path = csv_path
 
-    response = client.post(f"/jobs/{job.job_id}/reprocess")
+    response = client.post(f"/jobs/{job.job_id}/reprocess", headers=auth_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["validation_scope"] == "all_items"
