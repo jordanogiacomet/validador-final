@@ -1,19 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildResultFilterGroups,
   buildScopeSummaryCopy,
   describeIssue,
   filterDuplicates,
   filterDuplicatesForResultSearch,
+  filterProblemGroupsForResultView,
   filterProblemGroupsForResultSearch,
   formatStatusChip,
   getBulkConsolidatableSameNameDuplicates,
   getDuplicateFilterCounts,
   getValidationScopeLabel,
+  hasActiveResultFilters,
   hasDuplicateDescriptionConflict,
   normalizeValidationScope,
   normalizeSearchText,
+  resetResultFilterState,
   resetResultSearchState,
+  toggleResultFilter,
 } from "@/lib/presentation";
 import type { DuplicateGroup, ProblemOccurrence } from "@/lib/types";
 
@@ -154,6 +159,167 @@ describe("presentation helpers", () => {
       all: 1,
       normal: 0,
       conflict: 1,
+    });
+  });
+
+  it("combines severity, rule, and category result filters with AND semantics", () => {
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      CATEGORY_MONITOR_COMPLEMENTO_REQUIRED: [
+        {
+          row_index: 0,
+          item: "1100",
+          descricao: "Monitor Dell",
+          severity: "warning",
+          message: "Espécie 'MONITOR': preencher Complemento",
+          field: "complemento",
+        },
+      ],
+      CATEGORY_MONITOR_INCHES_PATTERN_MISSING: [
+        {
+          row_index: 1,
+          item: "2200",
+          descricao: "Monitor LG",
+          severity: "error",
+          message: "Espécie 'MONITOR': informar polegadas em Complemento",
+          field: "complemento",
+        },
+      ],
+      ZERO_ITEM_MARCA_MISSING: [
+        {
+          row_index: 2,
+          item: "3300",
+          descricao: "Cadeira",
+          severity: "warning",
+          message: "Marca ausente",
+          field: "marca",
+        },
+      ],
+    };
+
+    expect(
+      filterProblemGroupsForResultView(groupedProblems, "", {
+        severity: "warning",
+        rule: "CATEGORY_MONITOR_COMPLEMENTO_REQUIRED",
+        category: "monitor",
+      }),
+    ).toEqual({
+      CATEGORY_MONITOR_COMPLEMENTO_REQUIRED: [
+        groupedProblems.CATEGORY_MONITOR_COMPLEMENTO_REQUIRED[0],
+      ],
+    });
+
+    expect(
+      filterProblemGroupsForResultView(groupedProblems, "", {
+        severity: "error",
+        rule: "CATEGORY_MONITOR_COMPLEMENTO_REQUIRED",
+        category: "monitor",
+      }),
+    ).toEqual({});
+  });
+
+  it("builds coherent result filter chip counts from the other active filters", () => {
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      CATEGORY_MONITOR_COMPLEMENTO_REQUIRED: [
+        {
+          row_index: 0,
+          item: "1100",
+          descricao: "Monitor Dell",
+          severity: "warning",
+          message: "Espécie 'MONITOR': preencher Complemento",
+          field: "complemento",
+        },
+      ],
+      CATEGORY_MONITOR_INCHES_PATTERN_MISSING: [
+        {
+          row_index: 1,
+          item: "2200",
+          descricao: "Monitor LG",
+          severity: "error",
+          message: "Espécie 'MONITOR': informar polegadas em Complemento",
+          field: "complemento",
+        },
+      ],
+      CATEGORY_TV_INCHES_PATTERN_MISSING: [
+        {
+          row_index: 2,
+          item: "3300",
+          descricao: "TV Samsung",
+          severity: "warning",
+          message: "Espécie 'TV': informar polegadas em Complemento",
+          field: "complemento",
+        },
+      ],
+    };
+
+    const filterGroups = buildResultFilterGroups(groupedProblems, "", {
+      severity: "warning",
+      rule: null,
+      category: "monitor",
+    });
+
+    expect(filterGroups.find((group) => group.dimension === "severity")?.options).toEqual([
+      { value: "error", label: "Erros", count: 1, active: false, kind: "error" },
+      { value: "warning", label: "Avisos", count: 1, active: true, kind: "warning" },
+    ]);
+    expect(filterGroups.find((group) => group.dimension === "rule")?.options).toEqual([
+      {
+        value: "CATEGORY_MONITOR_COMPLEMENTO_REQUIRED",
+        label: "MONITOR: preencher Complemento",
+        count: 1,
+        active: false,
+      },
+    ]);
+    expect(filterGroups.find((group) => group.dimension === "category")?.options).toEqual([
+      { value: "monitor", label: "MONITOR", count: 1, active: true },
+      { value: "tv", label: "TV", count: 1, active: false },
+    ]);
+  });
+
+  it("omits category filters when the result has no category-backed issues", () => {
+    const groupedProblems: Record<string, ProblemOccurrence[]> = {
+      ZERO_ITEM_MARCA_MISSING: [
+        {
+          row_index: 0,
+          item: "1100",
+          descricao: "Mesa",
+          severity: "warning",
+          message: "Marca ausente",
+          field: "marca",
+        },
+      ],
+    };
+
+    expect(
+      buildResultFilterGroups(groupedProblems, "", resetResultFilterState()).some(
+        (group) => group.dimension === "category",
+      ),
+    ).toBe(false);
+  });
+
+  it("resets and toggles result filter state", () => {
+    const blankFilters = resetResultFilterState();
+
+    expect(hasActiveResultFilters(blankFilters)).toBe(false);
+    expect(toggleResultFilter(blankFilters, "severity", "warning")).toEqual({
+      severity: "warning",
+      rule: null,
+      category: null,
+    });
+    expect(
+      toggleResultFilter(
+        { severity: "warning", rule: "ZERO_ITEM_MARCA_MISSING", category: "monitor" },
+        "severity",
+        "warning",
+      ),
+    ).toEqual({
+      severity: null,
+      rule: "ZERO_ITEM_MARCA_MISSING",
+      category: "monitor",
+    });
+    expect(resetResultFilterState()).toEqual({
+      severity: null,
+      rule: null,
+      category: null,
     });
   });
 

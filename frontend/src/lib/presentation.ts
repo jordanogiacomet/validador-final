@@ -10,6 +10,28 @@ import type {
 } from "@/lib/types";
 
 export type DuplicateDisplayFilter = "all" | "normal" | "conflict";
+export type ResultFilterDimension = "severity" | "rule" | "category";
+export type ResultSeverityFilter = ProblemOccurrence["severity"];
+
+export interface ResultFilterState {
+  severity: ResultSeverityFilter | null;
+  rule: string | null;
+  category: string | null;
+}
+
+export interface ResultFilterOption {
+  value: string;
+  label: string;
+  count: number;
+  active: boolean;
+  kind?: ResultSeverityFilter;
+}
+
+export interface ResultFilterGroup {
+  dimension: ResultFilterDimension;
+  label: string;
+  options: ResultFilterOption[];
+}
 
 export interface ResultSearchState {
   jobId: string | null;
@@ -22,6 +44,17 @@ export interface DuplicateFilterCounts {
   normal: number;
   conflict: number;
 }
+
+const EMPTY_RESULT_FILTERS: ResultFilterState = {
+  severity: null,
+  rule: null,
+  category: null,
+};
+
+const RESULT_SEVERITY_LABELS: Record<ResultSeverityFilter, string> = {
+  error: "Erros",
+  warning: "Avisos",
+};
 
 export const PROCESS_STEPS = [
   {
@@ -197,6 +230,30 @@ export function resetResultSearchState(jobId: string | null): ResultSearchState 
   };
 }
 
+export function resetResultFilterState(): ResultFilterState {
+  return { ...EMPTY_RESULT_FILTERS };
+}
+
+export function hasActiveResultFilters(filters: ResultFilterState): boolean {
+  return Boolean(filters.severity || filters.rule || filters.category);
+}
+
+export function getActiveResultFilterCount(filters: ResultFilterState): number {
+  return [filters.severity, filters.rule, filters.category].filter(Boolean).length;
+}
+
+export function toggleResultFilter(
+  filters: ResultFilterState,
+  dimension: ResultFilterDimension,
+  value: string,
+): ResultFilterState {
+  const currentValue = filters[dimension];
+  return {
+    ...filters,
+    [dimension]: currentValue === value ? null : value,
+  };
+}
+
 export function getValidatedTotalRows(summary: Partial<SummaryPayload>): number {
   return Number(summary.validated_rows ?? summary.total_rows ?? 0);
 }
@@ -315,6 +372,104 @@ export function getDuplicateFilterCounts(
   };
 }
 
+interface ProblemOccurrenceEntry {
+  code: string;
+  occurrence: ProblemOccurrence;
+}
+
+function flattenProblemOccurrences(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+): ProblemOccurrenceEntry[] {
+  return Object.entries(groupedProblems).flatMap(([code, occurrences]) =>
+    occurrences.map((occurrence) => ({ code, occurrence })),
+  );
+}
+
+function getIssueCategoryFilterValue(code: string): string | null {
+  const categoryRequired = parseCategoryRequiredCode(code);
+  if (categoryRequired) {
+    return normalizeSearchText(categoryRequired.categoryLabel).replaceAll(" ", "_");
+  }
+
+  const categoryCritical = parseCategoryCriticalCode(code);
+  if (categoryCritical) {
+    return normalizeSearchText(categoryCritical.categoryLabel).replaceAll(" ", "_");
+  }
+
+  return null;
+}
+
+function getIssueCategoryFilterLabel(code: string): string | null {
+  const categoryRequired = parseCategoryRequiredCode(code);
+  if (categoryRequired) {
+    return categoryRequired.categoryLabel;
+  }
+
+  const categoryCritical = parseCategoryCriticalCode(code);
+  if (categoryCritical) {
+    return categoryCritical.categoryLabel;
+  }
+
+  return null;
+}
+
+function occurrenceMatchesResultFilters(
+  entry: ProblemOccurrenceEntry,
+  filters: ResultFilterState,
+  ignoredDimension?: ResultFilterDimension,
+): boolean {
+  if (
+    ignoredDimension !== "severity" &&
+    filters.severity &&
+    entry.occurrence.severity !== filters.severity
+  ) {
+    return false;
+  }
+
+  if (ignoredDimension !== "rule" && filters.rule && entry.code !== filters.rule) {
+    return false;
+  }
+
+  if (
+    ignoredDimension !== "category" &&
+    filters.category &&
+    getIssueCategoryFilterValue(entry.code) !== filters.category
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function entryMatchesResultFilterDimension(
+  entry: ProblemOccurrenceEntry,
+  dimension: ResultFilterDimension,
+  value: string,
+): boolean {
+  if (dimension === "severity") {
+    return entry.occurrence.severity === value;
+  }
+
+  if (dimension === "rule") {
+    return entry.code === value;
+  }
+
+  return getIssueCategoryFilterValue(entry.code) === value;
+}
+
+function countEntriesForResultFilter(
+  entries: ProblemOccurrenceEntry[],
+  filters: ResultFilterState,
+  dimension: ResultFilterDimension,
+  value: string,
+): number {
+  return entries.filter(
+    (entry) =>
+      occurrenceMatchesResultFilters(entry, filters, dimension) &&
+      entryMatchesResultFilterDimension(entry, dimension, value),
+  ).length;
+}
+
 export function filterProblemGroupsForResultSearch(
   groupedProblems: Record<string, ProblemOccurrence[]>,
   query: string | null | undefined,
@@ -331,6 +486,100 @@ export function filterProblemGroupsForResultSearch(
       ])
       .filter(([, occurrences]) => occurrences.length > 0),
   );
+}
+
+export function filterProblemGroupsForResultFilters(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+  filters: ResultFilterState,
+): Record<string, ProblemOccurrence[]> {
+  if (!hasActiveResultFilters(filters)) {
+    return groupedProblems;
+  }
+
+  return Object.fromEntries(
+    Object.entries(groupedProblems)
+      .map(([code, occurrences]) => [
+        code,
+        occurrences.filter((occurrence) =>
+          occurrenceMatchesResultFilters({ code, occurrence }, filters),
+        ),
+      ])
+      .filter(([, occurrences]) => occurrences.length > 0),
+  );
+}
+
+export function filterProblemGroupsForResultView(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+  query: string | null | undefined,
+  filters: ResultFilterState = EMPTY_RESULT_FILTERS,
+): Record<string, ProblemOccurrence[]> {
+  return filterProblemGroupsForResultFilters(
+    filterProblemGroupsForResultSearch(groupedProblems, query),
+    filters,
+  );
+}
+
+export function buildResultFilterGroups(
+  groupedProblems: Record<string, ProblemOccurrence[]>,
+  query: string | null | undefined,
+  filters: ResultFilterState = EMPTY_RESULT_FILTERS,
+): ResultFilterGroup[] {
+  const searchFilteredEntries = flattenProblemOccurrences(groupedProblems).filter((entry) =>
+    problemOccurrenceMatchesResultSearch(entry.occurrence, query, entry.code),
+  );
+
+  const severityOptions = (["error", "warning"] as ResultSeverityFilter[])
+    .filter((severity) =>
+      searchFilteredEntries.some((entry) => entry.occurrence.severity === severity),
+    )
+    .map((severity) => ({
+      value: severity,
+      label: RESULT_SEVERITY_LABELS[severity],
+      count: countEntriesForResultFilter(searchFilteredEntries, filters, "severity", severity),
+      active: filters.severity === severity,
+      kind: severity,
+    }))
+    .filter((option) => option.count > 0 || option.active);
+
+  const ruleOptions = [...new Set(searchFilteredEntries.map((entry) => entry.code))]
+    .sort((left, right) => left.localeCompare(right))
+    .map((code) => {
+      const firstEntry = searchFilteredEntries.find((entry) => entry.code === code);
+      return {
+        value: code,
+        label: describeIssue(code, firstEntry?.occurrence.message).title,
+        count: countEntriesForResultFilter(searchFilteredEntries, filters, "rule", code),
+        active: filters.rule === code,
+      };
+    })
+    .filter((option) => option.count > 0 || option.active);
+
+  const categoryLabels = new Map<string, string>();
+  for (const entry of searchFilteredEntries) {
+    const value = getIssueCategoryFilterValue(entry.code);
+    const label = getIssueCategoryFilterLabel(entry.code);
+    if (value && label) {
+      categoryLabels.set(value, label);
+    }
+  }
+
+  const categoryOptions = [...categoryLabels.entries()]
+    .sort((left, right) => left[1].localeCompare(right[1]))
+    .map(([value, label]) => ({
+      value,
+      label,
+      count: countEntriesForResultFilter(searchFilteredEntries, filters, "category", value),
+      active: filters.category === value,
+    }))
+    .filter((option) => option.count > 0 || option.active);
+
+  const groups: ResultFilterGroup[] = [
+    { dimension: "severity", label: "Prioridade", options: severityOptions },
+    { dimension: "rule", label: "Regra", options: ruleOptions },
+    { dimension: "category", label: "Categoria", options: categoryOptions },
+  ];
+
+  return groups.filter((group) => group.options.length > 0);
 }
 
 export function getBulkConsolidatableSameNameDuplicates(

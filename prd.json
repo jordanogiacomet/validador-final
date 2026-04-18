@@ -533,8 +533,8 @@
         "Checks de frontend (typecheck, test, lint) passam"
       ],
       "priority": 31,
-      "passes": false,
-      "notes": "Manter o número de dimensões limitado para evitar densidade visual excessiva. Reutilizar o padrão dos filtros de duplicata."
+      "passes": true,
+      "notes": "Implementado no frontend com chips combináveis por prioridade, regra e categoria, usando `presentation.ts` como fonte de verdade sobre o payload existente. Categorias são derivadas dos códigos `CATEGORY_*`, filtros resetam ao trocar de job, e os checks de frontend/backend passaram."
     },
     {
       "id": "US-032",

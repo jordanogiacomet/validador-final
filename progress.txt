@@ -32,6 +32,7 @@ Last Updated: 2026-04-18 12:00 -03
 - Frontend media parsing should stay frontend-only over raw row payloads: preserve all browser-renderable sources in order (HTTP/HTTPS, `data:image`, raw base64) and ignore local mobile-app paths like `/data/user/...`.
 - Duplicate-result severity UI should reuse a shared conflict helper so red cards and duplicate filters stay aligned on the same rule.
 - Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
+- Frontend category result filters derive available categories from `CATEGORY_*` grouped problem codes unless the backend explicitly adds category metadata to the result payload.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
 - Structured logging flows through `app/core/logging.py`: use `get_logger("layer_name")` + `log_event(logger, "<layer>.<event>", tenant_id=..., job_id=..., duration_ms=..., error=...)` so every emission shares the canonical fields and optionally picks up the current request_id from the contextvar.
@@ -625,4 +626,26 @@ Expected architectural direction:
   - Result workspace search can stay frontend-only because duplicate groups and grouped problem occurrences already carry enough text metadata for operational filtering
   - Keep search normalization in shared presentation helpers so counts, duplicate cards, and problem rows use the same matching semantics
   - Debounced search state should be cleared on job changes together with other local workspace filters to avoid stale filtered views
+---
+
+## 2026-04-18 12:10 -03 - US-031
+- Added combinable result filters in the operational frontend for priority/severity, validation rule, and item category
+- Kept filter derivation and AND semantics in `frontend/src/lib/presentation.ts`; `ResultWorkspace` now owns only local state, reset, and rendering
+- Category chips are derived from existing `CATEGORY_*` grouped problem codes, preserving the current backend/API payload
+- Filter chips show counts recalculated against the other active filters and disappear for dimensions with no data
+- Reset result filters when `currentJobId` changes so stale result views do not carry across jobs
+- Added focused frontend coverage for filter combination, coherent counts, no-category payloads, and reset/toggle behavior
+- Updated root `AGENTS.md` with the reusable frontend category-filter convention
+- Files changed: `frontend/src/lib/presentation.ts`, `frontend/src/components/result-workspace.tsx`, `frontend/src/app/globals.css`, `frontend/src/lib/__tests__/presentation.test.ts`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+  - `ruff check app tests`
+  - `pytest` (341 tests)
+- Browser verification: no browser-testing connector was available in this session; manual UI verification is still recommended before deployment.
+- **Learnings for future iterations:**
+  - Keep result filters as facet-style helpers: each chip count should apply the other active filter dimensions so operators can see what a click would expose
+  - The current result payload does not expose a row category field, so category filtering should stay conservative and use only category-backed issue codes for now
+  - Reset search, duplicate filters, and result filters together on job changes; splitting those resets makes stale filtered views easy to reintroduce
 ---

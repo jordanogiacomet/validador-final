@@ -155,6 +155,7 @@ LLM response cache TTL belongs in `tenant.llm.cache_ttl_seconds`; keep cache key
 LLM fallback model selection belongs in `tenant.llm.fallback_model`; retries should stay narrow to transient failures such as timeouts, HTTP 429, and HTTP 5xx, and failure issues should preserve the attempted model sequence
 Frontend Guidance
 Keep operational result filtering/search behavior in `frontend/src/lib/presentation.ts` helpers over the existing result payload, then let workspace components handle only state and rendering.
+When filtering result categories in the frontend, derive available categories from `CATEGORY_*` issue codes in the existing grouped problem payload unless the backend contract explicitly grows a category field.
 Reset local result filters/search when `currentJobId` changes so operators do not carry stale views between jobs.
 Improvement Workflow
 

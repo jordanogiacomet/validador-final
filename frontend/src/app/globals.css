@@ -689,6 +689,94 @@ thead th {
   line-height: 1.5;
 }
 
+.result-filter-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.result-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.result-filter-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.result-filter-group {
+  display: grid;
+  gap: 10px;
+}
+
+.result-filter-group small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.result-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.result-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(24, 33, 43, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.result-filter-chip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.result-filter-chip strong {
+  flex-shrink: 0;
+  min-width: 28px;
+  text-align: right;
+  font-size: 0.95rem;
+}
+
+.result-filter-chip.active {
+  border-color: rgba(21, 78, 74, 0.24);
+  background: rgba(21, 78, 74, 0.12);
+  color: var(--accent);
+}
+
+.result-filter-chip.error.active {
+  border-color: rgba(180, 35, 24, 0.24);
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.result-filter-chip.warning.active {
+  border-color: rgba(154, 91, 0, 0.24);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
 .export-actions,
 .duplicates-grid,
 .nav-chips,
