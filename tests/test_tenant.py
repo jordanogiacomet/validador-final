@@ -1,7 +1,9 @@
 import pytest
 
 from app.core.tenant_config import (
+    DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
     APIKeyConfig,
+    AuthConfig,
     CategoryConfig,
     CSVConfig,
     LLMConfig,
@@ -37,6 +39,7 @@ class TestTenantConfig:
         assert config.llm.enabled is False
         assert config.llm.fallback_model is None
         assert config.llm.cache_ttl_seconds == 0
+        assert config.auth.issued_api_key_ttl_seconds == DEFAULT_ISSUED_API_KEY_TTL_SECONDS
         assert config.api_keys == []
         assert config.operators == []
 
@@ -129,6 +132,14 @@ class TestTenantConfig:
         assert config.operators[0].username == "operator"
         assert config.operators[0].disabled is False
 
+    def test_config_with_auth_policy(self) -> None:
+        config = TenantConfig(
+            tenant_id="t",
+            display_name="T",
+            auth=AuthConfig(issued_api_key_ttl_seconds=1800),
+        )
+        assert config.auth.issued_api_key_ttl_seconds == 1800
+
     def test_config_with_suspicious_patterns(self) -> None:
         config = TenantConfig(
             tenant_id="t",
@@ -151,6 +162,7 @@ class TestTenantLoader:
         assert config.suspicious_patterns.literal_patterns == []
         assert config.api_keys[0].key_id == "default-local"
         assert config.operators[0].operator_id == "default-local-operator"
+        assert config.auth.issued_api_key_ttl_seconds == 28800
 
     def test_load_default_by_id(self) -> None:
         config = load_tenant_config("default")
@@ -169,6 +181,7 @@ class TestTenantLoader:
         assert config.llm.enabled is True
         assert config.llm.fallback_model is None
         assert config.llm.cache_ttl_seconds == 86400
+        assert config.auth.issued_api_key_ttl_seconds == DEFAULT_ISSUED_API_KEY_TTL_SECONDS
         assert config.thresholds["short_complement_max_words"] == 5
 
     def test_load_redesim(self) -> None:

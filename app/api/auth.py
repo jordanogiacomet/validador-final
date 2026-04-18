@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from app.core.tenant_loader import resolve_tenant_api_key
-from app.services.auth_service import AuthService
+from app.services.auth_service import AuthService, IssuedAPIKeyStatus
 
 API_KEY_HEADER = "X-API-Key"
 _AUTH_STATE_KEY = "tenant_auth"
@@ -64,19 +64,28 @@ async def api_key_auth_middleware(
         return _auth_error(401, f"Missing {API_KEY_HEADER} header")
 
     try:
-        issued_key = auth_service.resolve_api_key(api_key)
-        match = resolve_tenant_api_key(api_key) if issued_key is None else None
+        issued_key = auth_service.inspect_issued_api_key(api_key)
+        if issued_key.status is IssuedAPIKeyStatus.MISSING:
+            match = resolve_tenant_api_key(api_key)
+        else:
+            match = None
     except ValueError as exc:
         return _auth_error(500, str(exc))
 
-    if issued_key is None and match is None:
+    if issued_key.status is IssuedAPIKeyStatus.REVOKED:
+        return _auth_error(401, issued_key.detail)
+
+    if issued_key.status is IssuedAPIKeyStatus.EXPIRED:
+        return _auth_error(401, issued_key.detail)
+
+    if issued_key.status is IssuedAPIKeyStatus.MISSING and match is None:
         return _auth_error(401, "Invalid API key")
 
-    if issued_key is not None:
+    if issued_key.resolved_api_key is not None:
         authenticated_tenant = AuthenticatedTenant(
-            tenant_id=issued_key.tenant_id,
-            api_key_id=issued_key.api_key_id,
-            operator_id=issued_key.operator_id,
+            tenant_id=issued_key.resolved_api_key.tenant_id,
+            api_key_id=issued_key.resolved_api_key.api_key_id,
+            operator_id=issued_key.resolved_api_key.operator_id,
         )
     else:
         authenticated_tenant = AuthenticatedTenant(

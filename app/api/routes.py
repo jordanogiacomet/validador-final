@@ -59,6 +59,7 @@ def _build_job_service() -> JobService:
 
 
 audit_service = _build_audit_service()
+auth_service.set_audit_service(audit_service)
 job_service = _build_job_service()
 
 
@@ -86,6 +87,7 @@ class LoginResponse(BaseModel):
     operator_id: str
     api_key_id: str
     x_api_key: str
+    expires_at: datetime
     header_name: str = API_KEY_HEADER
 
 
@@ -188,6 +190,12 @@ class AuditEventResponse(BaseModel):
     api_key_id: str | None = None
     created_at: datetime
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class APIKeyRevocationResponse(BaseModel):
+    tenant_id: str
+    api_key_id: str
+    revoked_at: datetime
 
 
 def _get_job_validation_scope_value(job) -> ValidationScope:
@@ -298,6 +306,30 @@ async def login(payload: LoginRequest) -> LoginResponse:
         operator_id=issued_key.record.operator_id,
         api_key_id=issued_key.record.key_id,
         x_api_key=issued_key.raw_api_key,
+        expires_at=issued_key.record.expires_at or issued_key.record.created_at,
+    )
+
+
+@router.post("/api-keys/revoke", response_model=APIKeyRevocationResponse)
+async def revoke_api_key(
+    request: Request,
+    api_key_id: str | None = Query(default=None, min_length=1),
+) -> APIKeyRevocationResponse:
+    auth = get_authenticated_tenant(request)
+    target_api_key_id = api_key_id or auth.api_key_id
+    try:
+        record = auth_service.revoke_api_key(
+            tenant_id=auth.tenant_id,
+            api_key_id=target_api_key_id,
+            revoked_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return APIKeyRevocationResponse(
+        tenant_id=record.tenant_id,
+        api_key_id=record.key_id,
+        revoked_at=record.revoked_at or record.created_at,
     )
 
 

@@ -54,6 +54,16 @@ class APIKeyConfig(BaseModel):
     value: str = Field(min_length=1)
 
 
+DEFAULT_ISSUED_API_KEY_TTL_SECONDS = 8 * 60 * 60
+
+
+class AuthConfig(BaseModel):
+    issued_api_key_ttl_seconds: int = Field(
+        default=DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
+        ge=1,
+    )
+
+
 class OperatorConfig(BaseModel):
     operator_id: str
     username: str = Field(min_length=1)
@@ -75,6 +85,7 @@ class TenantConfig(BaseModel):
     )
     csv: CSVConfig = Field(default_factory=CSVConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     api_keys: list[APIKeyConfig] = Field(default_factory=list)
     operators: list[OperatorConfig] = Field(default_factory=list)
 

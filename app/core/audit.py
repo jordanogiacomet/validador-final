@@ -10,6 +10,9 @@ class AuditEventType(StrEnum):
     JOB_CREATED = "job_created"
     JOB_COMPLETED = "job_completed"
     DUPLICATES_RESOLVED = "duplicates_resolved"
+    API_KEY_ISSUED = "api_key_issued"
+    API_KEY_EXPIRED = "api_key_expired"
+    API_KEY_REVOKED = "api_key_revoked"
 
 
 class AuditEvent(BaseModel):

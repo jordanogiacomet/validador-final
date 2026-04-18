@@ -40,6 +40,9 @@ llm:
   fallback_model:
   cache_ttl_seconds: 0
 
+auth:
+  issued_api_key_ttl_seconds: 28800
+
 api_keys:
   - key_id: default-local
     value: default-local-test-key

@@ -5,16 +5,26 @@ import hmac
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.core.tenant_config import OperatorConfig, TenantConfig
+from app.core.audit import AuditEventType
+from app.core.tenant_config import (
+    DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
+    OperatorConfig,
+    TenantConfig,
+)
 from app.core.tenant_loader import list_tenants, load_tenant_config
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
+
+if TYPE_CHECKING:
+    from app.services.audit_service import AuditService
 
 
 class AuthServiceError(Exception):
@@ -31,7 +41,10 @@ class IssuedAPIKeyRecord(BaseModel):
     username: str
     key_hash: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    issued_ttl_seconds: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
     revoked_at: datetime | None = None
+    expired_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +58,20 @@ class ResolvedAPIKey:
     tenant_id: str
     api_key_id: str
     operator_id: str | None = None
+
+
+class IssuedAPIKeyStatus(StrEnum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+    MISSING = "missing"
+
+
+@dataclass(frozen=True)
+class IssuedAPIKeyResolution:
+    status: IssuedAPIKeyStatus
+    resolved_api_key: ResolvedAPIKey | None = None
+    detail: str = "Invalid API key"
 
 
 def hash_api_key(raw_api_key: str) -> str:
@@ -71,14 +98,22 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 class AuthService:
-    def __init__(self, storage_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        storage_path: Path | str | None = None,
+        audit_service: AuditService | None = None,
+    ) -> None:
         self._storage_path = Path(storage_path) if storage_path is not None else None
+        self._audit_service = audit_service
         self._records: dict[str, IssuedAPIKeyRecord] = {}
         self._load_records()
 
     @property
     def storage_path(self) -> Path | None:
         return self._storage_path
+
+    def set_audit_service(self, audit_service: AuditService | None) -> None:
+        self._audit_service = audit_service
 
     def issue_api_key(
         self,
@@ -106,29 +141,114 @@ class AuthService:
         if not verify_password(password, operator.password_hash):
             raise AuthServiceError(401, "Invalid credentials")
 
+        issued_ttl_seconds = tenant.auth.issued_api_key_ttl_seconds
+        created_at = datetime.now(UTC)
         raw_api_key = f"vapi_{secrets.token_urlsafe(32)}"
         record = IssuedAPIKeyRecord(
             tenant_id=tenant.tenant_id,
             operator_id=operator.operator_id,
             username=operator.username,
             key_hash=hash_api_key(raw_api_key),
+            created_at=created_at,
+            issued_ttl_seconds=issued_ttl_seconds,
+            expires_at=created_at + timedelta(seconds=issued_ttl_seconds),
         )
         self._records[record.key_id] = record
         self._persist_records()
+        self._record_audit_event(
+            AuditEventType.API_KEY_ISSUED,
+            record,
+            details={
+                "operator_id": record.operator_id,
+                "username": record.username,
+                "issued_ttl_seconds": issued_ttl_seconds,
+                "expires_at": record.expires_at.isoformat()
+                if record.expires_at is not None
+                else None,
+            },
+        )
         return IssuedAPIKey(raw_api_key=raw_api_key, record=record)
 
     def resolve_api_key(self, raw_api_key: str) -> ResolvedAPIKey | None:
+        resolution = self.inspect_issued_api_key(raw_api_key)
+        return resolution.resolved_api_key
+
+    def inspect_issued_api_key(
+        self,
+        raw_api_key: str,
+        *,
+        now: datetime | None = None,
+    ) -> IssuedAPIKeyResolution:
         api_key_hash = hash_api_key(raw_api_key.strip())
-        for record in self._records.values():
-            if record.revoked_at is not None:
-                continue
-            if hmac.compare_digest(record.key_hash, api_key_hash):
-                return ResolvedAPIKey(
-                    tenant_id=record.tenant_id,
-                    api_key_id=record.key_id,
-                    operator_id=record.operator_id,
-                )
-        return None
+        record = self._find_record_by_hash(api_key_hash)
+        if record is None:
+            return IssuedAPIKeyResolution(status=IssuedAPIKeyStatus.MISSING)
+
+        if self._backfill_record_expiration(record):
+            self._persist_records()
+
+        if record.revoked_at is not None:
+            return IssuedAPIKeyResolution(
+                status=IssuedAPIKeyStatus.REVOKED,
+                detail="Revoked API key",
+            )
+
+        current_time = now or datetime.now(UTC)
+        if record.expires_at is not None and current_time >= record.expires_at:
+            self._mark_record_expired(record, current_time)
+            return IssuedAPIKeyResolution(
+                status=IssuedAPIKeyStatus.EXPIRED,
+                detail="Expired API key",
+            )
+
+        return IssuedAPIKeyResolution(
+            status=IssuedAPIKeyStatus.ACTIVE,
+            resolved_api_key=ResolvedAPIKey(
+                tenant_id=record.tenant_id,
+                api_key_id=record.key_id,
+                operator_id=record.operator_id,
+            ),
+            detail="Active API key",
+        )
+
+    def revoke_api_key(
+        self,
+        *,
+        tenant_id: str,
+        api_key_id: str,
+        revoked_by_api_key_id: str | None = None,
+        now: datetime | None = None,
+    ) -> IssuedAPIKeyRecord:
+        record = self._records.get(api_key_id)
+        if record is None or record.tenant_id != tenant_id:
+            raise AuthServiceError(404, "Issued API key not found")
+
+        persist_required = self._backfill_record_expiration(record)
+        new_revocation = False
+        if record.revoked_at is None:
+            record.revoked_at = now or datetime.now(UTC)
+            persist_required = True
+            new_revocation = True
+
+        if persist_required:
+            self._persist_records()
+
+        if new_revocation and record.revoked_at is not None:
+            self._record_audit_event(
+                AuditEventType.API_KEY_REVOKED,
+                record,
+                details={
+                    "revoked_at": record.revoked_at.isoformat(),
+                    "revoked_by_api_key_id": revoked_by_api_key_id,
+                    "actor": (
+                        "self"
+                        if revoked_by_api_key_id == api_key_id
+                        else "tenant_operator"
+                    ),
+                },
+            )
+
+        return record
 
     def clear(self) -> None:
         self._records.clear()
@@ -178,9 +298,14 @@ class AuthService:
             raise ValueError("Auth key storage payload must be a list")
 
         self._records = {}
+        updated = False
         for item in payload:
             record = IssuedAPIKeyRecord.model_validate(item)
+            updated = self._backfill_record_expiration(record) or updated
             self._records[record.key_id] = record
+
+        if updated:
+            self._persist_records()
 
     def _persist_records(self) -> None:
         if self._storage_path is None:
@@ -197,3 +322,75 @@ class AuthService:
             encoding="utf-8",
         )
         temp_path.replace(self._storage_path)
+
+    def _find_record_by_hash(self, api_key_hash: str) -> IssuedAPIKeyRecord | None:
+        return next(
+            (
+                record
+                for record in self._records.values()
+                if hmac.compare_digest(record.key_hash, api_key_hash)
+            ),
+            None,
+        )
+
+    def _backfill_record_expiration(self, record: IssuedAPIKeyRecord) -> bool:
+        ttl_seconds = record.issued_ttl_seconds or self._get_tenant_ttl_seconds(
+            record.tenant_id
+        )
+        expires_at = record.expires_at or (
+            record.created_at + timedelta(seconds=ttl_seconds)
+        )
+
+        updated = False
+        if record.issued_ttl_seconds != ttl_seconds:
+            record.issued_ttl_seconds = ttl_seconds
+            updated = True
+        if record.expires_at != expires_at:
+            record.expires_at = expires_at
+            updated = True
+        return updated
+
+    def _get_tenant_ttl_seconds(self, tenant_id: str) -> int:
+        try:
+            tenant = load_tenant_config(tenant_id)
+        except FileNotFoundError:
+            return DEFAULT_ISSUED_API_KEY_TTL_SECONDS
+        return tenant.auth.issued_api_key_ttl_seconds
+
+    def _mark_record_expired(
+        self,
+        record: IssuedAPIKeyRecord,
+        current_time: datetime,
+    ) -> None:
+        if record.expired_at is not None:
+            return
+
+        record.expired_at = current_time
+        self._persist_records()
+        self._record_audit_event(
+            AuditEventType.API_KEY_EXPIRED,
+            record,
+            details={
+                "expired_at": current_time.isoformat(),
+                "expires_at": record.expires_at.isoformat()
+                if record.expires_at is not None
+                else None,
+            },
+        )
+
+    def _record_audit_event(
+        self,
+        event_type: AuditEventType,
+        record: IssuedAPIKeyRecord,
+        *,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record_event(
+            event_type,
+            tenant_id=record.tenant_id,
+            api_key_id=record.key_id,
+            details=details,
+        )

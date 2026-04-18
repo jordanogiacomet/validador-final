@@ -618,8 +618,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 36,
-      "passes": false,
-      "notes": "Sem ciclo de vida da key, o fluxo de login vira apenas um emissor de chave permanente, o que enfraquece a segurança e a governança."
+      "passes": true,
+      "notes": "Implementado com TTL tenant-configurável em `tenant.auth.issued_api_key_ttl_seconds`, revogação via `POST /api-keys/revoke`, eventos `api_key_issued`/`api_key_expired`/`api_key_revoked` no audit log e middleware retornando 401 consistente para chaves expiradas ou revogadas."
     }
   ],
   "nonFunctionalRequirements": {

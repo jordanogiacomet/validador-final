@@ -1,5 +1,6 @@
 import json
 import tempfile
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -168,16 +169,68 @@ def test_login_emits_tenant_scoped_api_key():
     assert payload["operator_id"] == "default-local-operator"
     assert payload["api_key_id"].startswith("issued-")
     assert payload["x_api_key"].startswith("vapi_")
+    assert payload["expires_at"]
     assert payload["header_name"] == "X-API-Key"
 
     stored_key = auth_service.list_records()[0]
     assert stored_key.tenant_id == "default"
     assert stored_key.operator_id == "default-local-operator"
     assert stored_key.key_hash != payload["x_api_key"]
+    assert stored_key.expires_at is not None
 
     response = client.get("/tenants", headers=headers)
     assert response.status_code == 200
     assert response.json()[0]["tenant_id"] == "default"
+
+
+def test_login_records_api_key_issue_in_audit_log():
+    headers, payload = login_headers()
+
+    response = client.get("/audit", headers=headers)
+    assert response.status_code == 200
+
+    audit_payload = response.json()
+    assert audit_payload[0]["event_type"] == "api_key_issued"
+    assert audit_payload[0]["api_key_id"] == payload["api_key_id"]
+    assert audit_payload[0]["details"]["issued_ttl_seconds"] == 28800
+
+
+def test_revoke_current_issued_api_key_records_audit_event_and_blocks_access():
+    headers, payload = login_headers()
+
+    response = client.post("/api-keys/revoke", headers=headers)
+    assert response.status_code == 200
+    revoke_payload = response.json()
+    assert revoke_payload["tenant_id"] == "default"
+    assert revoke_payload["api_key_id"] == payload["api_key_id"]
+    assert revoke_payload["revoked_at"]
+
+    denied = client.get("/tenants", headers=headers)
+    assert denied.status_code == 401
+    assert denied.json()["detail"] == "Revoked API key"
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.API_KEY_REVOKED,
+        AuditEventType.API_KEY_ISSUED,
+    ]
+
+
+def test_expired_issued_api_key_returns_401_and_records_audit_event():
+    headers, payload = login_headers()
+    record = auth_service.list_records()[0]
+    record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    response = client.get("/tenants", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Expired API key"
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.API_KEY_EXPIRED,
+        AuditEventType.API_KEY_ISSUED,
+    ]
+    assert events[0].api_key_id == payload["api_key_id"]
 
 
 def test_login_rejects_invalid_credentials():

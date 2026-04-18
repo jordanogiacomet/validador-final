@@ -137,6 +137,7 @@ API code should not contain validation business rules
 API code should not know tenant-specific rule details beyond selecting the tenant or config
 Tenant-scoped API auth should derive tenant context from the API key; request `tenant_id` values are hints and must be rejected on mismatch
 Login-issued API keys should be issued and resolved through `app/services/auth_service.py`; tenant operator credentials belong in `TenantConfig.operators` as password hashes, and issued key persistence must store only key hashes
+Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` should emit audit events on issue/expire/revoke and the middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`
 When persisting auth-related operational metadata, store the configured `api_key_id` and never the raw `X-API-Key` secret
 Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep operational probes like `/health` public
 Observability Guidance
