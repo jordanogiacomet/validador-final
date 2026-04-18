@@ -1456,3 +1456,87 @@ def test_reprocess_job_can_override_llm_force_refresh():
         Path(new_job.result_path).unlink(missing_ok=True)
     if new_job.report_path:
         Path(new_job.report_path).unlink(missing_ok=True)
+
+
+def test_reprocess_job_persists_and_exposes_lineage_and_audit():
+    job = job_service.create_job(tenant_id="default", file_name="corrigido.csv")
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa executiva,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe,Obs\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    job.file_path = csv_path
+
+    response = client.post(f"/jobs/{job.job_id}/reprocess", headers=auth_headers())
+    assert response.status_code == 200
+    new_job_id = response.json()["job_id"]
+
+    new_status = client.get(f"/jobs/{new_job_id}", headers=auth_headers())
+    assert new_status.status_code == 200
+    assert new_status.json()["parent_job_id"] == job.job_id
+    assert new_status.json()["latest_retry_job_id"] is None
+
+    source_status = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
+    assert source_status.status_code == 200
+    assert source_status.json()["parent_job_id"] is None
+    assert source_status.json()["latest_retry_job_id"] == new_job_id
+
+    reprocess_events = [
+        event
+        for event in audit_service.list_events()
+        if event.event_type == AuditEventType.JOB_REPROCESSED
+    ]
+    assert len(reprocess_events) == 1
+    assert reprocess_events[0].job_id == job.job_id
+    assert reprocess_events[0].details["new_job_id"] == new_job_id
+    assert reprocess_events[0].details["parent_job_id"] == job.job_id
+
+    new_job_created = [
+        event
+        for event in audit_service.list_events()
+        if event.event_type == AuditEventType.JOB_CREATED and event.job_id == new_job_id
+    ]
+    assert new_job_created
+    assert new_job_created[0].details["parent_job_id"] == job.job_id
+
+    new_job = job_service.get_job(new_job_id)
+    Path(csv_path).unlink(missing_ok=True)
+    if new_job and new_job.file_path:
+        Path(new_job.file_path).unlink(missing_ok=True)
+    if new_job and new_job.result_path:
+        Path(new_job.result_path).unlink(missing_ok=True)
+    if new_job and new_job.report_path:
+        Path(new_job.report_path).unlink(missing_ok=True)
+
+
+def test_reprocess_lineage_respects_tenant_authorization():
+    other_tenant_job = job_service.create_job(
+        tenant_id="redesim",
+        file_name="outro.csv",
+    )
+    csv_content = (
+        "Item,Descrição,Marca,Modelo,Complemento,NS\n"
+        "001,MONITOR,Dell,P2419H,,SN1\n"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    other_tenant_job.file_path = csv_path
+
+    response = client.get(
+        f"/jobs/{other_tenant_job.job_id}",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 403
+
+    response = client.post(
+        f"/jobs/{other_tenant_job.job_id}/reprocess",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 403
+
+    Path(csv_path).unlink(missing_ok=True)

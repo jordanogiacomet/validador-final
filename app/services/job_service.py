@@ -39,6 +39,7 @@ class JobService:
         file_name: str | None = None,
         api_key_id: str | None = None,
         params: dict[str, str | int | float | bool | None] | None = None,
+        parent_job_id: str | None = None,
     ) -> JobRecord:
         job = JobRecord(
             tenant_id=tenant_id,
@@ -46,6 +47,7 @@ class JobService:
             file_name=file_name,
             api_key_id=api_key_id,
             params=params or {},
+            parent_job_id=parent_job_id,
         )
         self._jobs[job.job_id] = job
         self._persist_jobs()
@@ -55,6 +57,7 @@ class JobService:
             details={
                 "file_name": job.file_name,
                 "validation_scope": job.params.get("validation_scope"),
+                "parent_job_id": job.parent_job_id,
             },
         )
         record_job_status_transition(job.tenant_id, job.status.value)
@@ -265,6 +268,33 @@ class JobService:
         job = self._get_or_raise(job_id)
         self._persist_jobs()
         return job
+
+    def register_reprocess_link(
+        self,
+        *,
+        source_job_id: str,
+        new_job_id: str,
+    ) -> JobRecord:
+        source_job = self._get_or_raise(source_job_id)
+        new_job = self._get_or_raise(new_job_id)
+        if new_job.tenant_id != source_job.tenant_id:
+            raise ValueError(
+                "Reprocess link must keep the same tenant for source and new job"
+            )
+        source_job.latest_retry_job_id = new_job.job_id
+        source_job.updated_at = datetime.now(UTC)
+        if new_job.parent_job_id is None:
+            new_job.parent_job_id = source_job.job_id
+        self._persist_jobs()
+        self._record_audit_event(
+            AuditEventType.JOB_REPROCESSED,
+            source_job,
+            details={
+                "parent_job_id": source_job.job_id,
+                "new_job_id": new_job.job_id,
+            },
+        )
+        return source_job
 
     def _get_or_raise(self, job_id: str) -> JobRecord:
         job = self._jobs.get(job_id)

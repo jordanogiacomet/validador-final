@@ -54,6 +54,8 @@ Last Updated: 2026-04-18 13:05 -03
 - Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
 - Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
+- Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
+- Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 
 ---
 
@@ -774,4 +776,26 @@ Expected architectural direction:
   - Renewal must revoke and issue in the same `AuthService` call so the predecessor key becomes invalid atomically with the successor creation, keeping middleware and audit aligned
   - The `API_KEY_RENEWED` event should carry `successor_api_key_id` so downstream tooling can follow a session lineage without inspecting raw key hashes
   - Frontend session clock watching should rely on `Date.now` + a light `setInterval`; use `vi.spyOn(Date, 'now')` in tests instead of `vi.useFakeTimers`, which stalls React Testing Library's internal timers
+---
+
+## 2026-04-18 14:40 -03 - US-038
+- Added `parent_job_id` and `latest_retry_job_id` fields to `JobRecord` so reprocess lineage survives restarts via the JSON-backed job store.
+- Added `JobService.create_job(parent_job_id=...)` plus `register_reprocess_link(source_job_id, new_job_id)` so the source and successor lineage + `job_reprocessed` audit event stay centralized in one service call.
+- Added `AuditEventType.JOB_REPROCESSED` emitted on the source job with `parent_job_id` and `new_job_id` in `details`; `JOB_CREATED` details also carry the new job's `parent_job_id`.
+- `create_reprocess_job` now passes the source `job_id` as `parent_job_id` and calls `register_reprocess_link` once the copied CSV is in place so the successor is fully ready before the link is persisted.
+- Exposed `parent_job_id`/`latest_retry_job_id` on `JobStatusResponse` and `JobListItemResponse`; tenant-scoped access flows through the existing `_get_authorized_job` without a new endpoint.
+- Added minimal lineage banner to `ResultWorkspace` that discretely shows "Lote originado de …" and "Reprocessamento mais recente: …" with buttons wired to `openJob` in the operational workspace.
+- Added tests: `tests/test_job.py` for `register_reprocess_link` persistence + audit + cross-tenant rejection, `tests/test_api.py` for end-to-end lineage exposure, `JOB_REPROCESSED` audit emission and tenant-scoped authorization, and `frontend/src/components/result-workspace.test.tsx` covering hidden banner, parent link, and retry link paths.
+- Files changed: `app/core/job.py`, `app/core/audit.py`, `app/services/job_service.py`, `app/services/validation_service.py`, `app/api/routes.py`, `frontend/src/lib/types.ts`, `frontend/src/components/result-workspace.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/app/globals.css`, `tests/test_job.py`, `tests/test_api.py`, `frontend/src/components/result-workspace.test.tsx`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (375 tests)
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (52 tests)
+  - `cd frontend && npm run lint`
+- Browser verification: no browser-testing connector available in this session; manual UI verification of the lineage banner is recommended before deployment.
+- **Learnings for future iterations:**
+  - Lineage mutation and audit emission should be atomic inside `JobService` so reprocess orchestration code never forgets to persist the link; keep `register_reprocess_link` the single entry point.
+  - The reprocess flow already runs under tenant-scoped authorization (`_get_authorized_job`), so lineage fields piggyback on the existing job read paths without needing a new endpoint.
+  - Vitest component tests must explicitly `import React from "react"` in the component under test when tsconfig uses `jsx: preserve`; missed this initially and the first frontend run failed with "React is not defined".
 ---

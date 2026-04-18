@@ -382,8 +382,40 @@ p {
 .correction-card,
 .empty-card,
 .problem-card,
-.modal-card {
+.modal-card,
+.job-lineage-card {
   padding: 24px;
+}
+
+.job-lineage-card {
+  padding: 14px 24px;
+}
+
+.job-lineage-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.job-lineage-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+.job-lineage-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.job-lineage-text {
+  color: var(--muted);
 }
 
 .panel-kicker {

@@ -1,6 +1,8 @@
 import pytest
 
+from app.core.audit import AuditEventType
 from app.core.job import JobRecord, JobStatus
+from app.services.audit_service import AuditService
 from app.services.job_service import JobService
 
 
@@ -420,3 +422,54 @@ class TestJobService:
         assert reloaded_job is not None
         assert reloaded_job.file_path == "/uploads/current.csv"
         assert reloaded_job.file_name == "current.csv"
+
+    def test_register_reprocess_link_persists_lineage_and_audits(self, tmp_path):
+        storage_path = tmp_path / "jobs.json"
+        audit_service = AuditService()
+        service = JobService(
+            storage_path=storage_path,
+            audit_service=audit_service,
+        )
+
+        source = service.create_job(tenant_id="default", file_name="source.csv")
+        new_job = service.create_job(
+            tenant_id="default",
+            file_name="source.csv",
+            parent_job_id=source.job_id,
+        )
+
+        service.register_reprocess_link(
+            source_job_id=source.job_id,
+            new_job_id=new_job.job_id,
+        )
+
+        reloaded = JobService(storage_path=storage_path)
+        reloaded_source = reloaded.get_job(source.job_id)
+        reloaded_new = reloaded.get_job(new_job.job_id)
+
+        assert reloaded_source is not None
+        assert reloaded_new is not None
+        assert reloaded_source.latest_retry_job_id == new_job.job_id
+        assert reloaded_new.parent_job_id == source.job_id
+
+        reprocess_events = [
+            event
+            for event in audit_service.list_events()
+            if event.event_type == AuditEventType.JOB_REPROCESSED
+        ]
+        assert len(reprocess_events) == 1
+        assert reprocess_events[0].tenant_id == "default"
+        assert reprocess_events[0].job_id == source.job_id
+        assert reprocess_events[0].details["new_job_id"] == new_job.job_id
+        assert reprocess_events[0].details["parent_job_id"] == source.job_id
+
+    def test_register_reprocess_link_rejects_cross_tenant_link(self):
+        service = JobService()
+        source = service.create_job(tenant_id="default")
+        foreign = service.create_job(tenant_id="empresa_exemplo")
+
+        with pytest.raises(ValueError, match="same tenant"):
+            service.register_reprocess_link(
+                source_job_id=source.job_id,
+                new_job_id=foreign.job_id,
+            )

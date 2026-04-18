@@ -137,6 +137,8 @@ class JobStatusResponse(BaseModel):
     updated_at: datetime | None = None
     file_name: str | None = None
     cancel_requested: bool = False
+    parent_job_id: str | None = None
+    latest_retry_job_id: str | None = None
 
 
 class JobListItemResponse(BaseModel):
@@ -154,6 +156,8 @@ class JobListItemResponse(BaseModel):
     total_rows: int = 0
     source_total_rows: int = 0
     cancel_requested: bool = False
+    parent_job_id: str | None = None
+    latest_retry_job_id: str | None = None
 
 
 class RowUpdateRequest(BaseModel):
@@ -257,6 +261,8 @@ def _build_job_status_response(job) -> JobStatusResponse:
         updated_at=job.updated_at,
         file_name=job.file_name,
         cancel_requested=job.cancel_requested,
+        parent_job_id=job.parent_job_id,
+        latest_retry_job_id=job.latest_retry_job_id,
     )
 
 
@@ -276,6 +282,8 @@ def _build_job_list_item_response(job) -> JobListItemResponse:
         total_rows=job.total_rows,
         source_total_rows=job.source_total_rows,
         cancel_requested=job.cancel_requested,
+        parent_job_id=job.parent_job_id,
+        latest_retry_job_id=job.latest_retry_job_id,
     )
 
 

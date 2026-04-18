@@ -910,6 +910,7 @@ export function OperationalWorkspace() {
             onResolveDuplicate={handleResolveDuplicate}
             onResolveBulkSameNameDuplicates={handleResolveBulkSameNameDuplicates}
             onReprocess={handleReprocess}
+            onOpenRelatedJob={openJob}
           />
         </main>
       </div>

@@ -23,6 +23,8 @@ class JobRecord(BaseModel):
     file_name: str | None = None
     result_path: str | None = None
     report_path: str | None = None
+    parent_job_id: str | None = None
+    latest_retry_job_id: str | None = None
     total_rows: int = 0
     source_total_rows: int = 0
     rows_with_issues: int = 0

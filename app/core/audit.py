@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class AuditEventType(StrEnum):
     JOB_CREATED = "job_created"
     JOB_COMPLETED = "job_completed"
+    JOB_REPROCESSED = "job_reprocessed"
     DUPLICATES_RESOLVED = "duplicates_resolved"
     API_KEY_ISSUED = "api_key_issued"
     API_KEY_EXPIRED = "api_key_expired"

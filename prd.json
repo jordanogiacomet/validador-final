@@ -652,8 +652,8 @@
         "Ruff lint, pytest e checks de frontend passam"
       ],
       "priority": 38,
-      "passes": false,
-      "notes": "Melhoria sobre o fluxo de reprocessamento já existente para reduzir ambiguidade operacional sem alterar a engine de validação."
+      "passes": true,
+      "notes": "Implementado com `JobRecord.parent_job_id`/`latest_retry_job_id`, `JobService.register_reprocess_link` e novo evento de auditoria `job_reprocessed` emitido no job de origem com `new_job_id`. `create_reprocess_job` passa o `parent_job_id` ao criar o sucessor e registra o vínculo após copiar o CSV, mantendo a orquestração genérica. API expõe lineage em `JobStatusResponse`/`JobListItemResponse`; autorização tenant-scoped segue via `_get_authorized_job`. Frontend mostra banner discreto no `ResultWorkspace` com link para abrir o job relacionado via `openJob`."
     },
     {
       "id": "US-039",

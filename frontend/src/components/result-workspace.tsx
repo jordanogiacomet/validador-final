@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import {
   downloadApiFile,
@@ -58,6 +58,54 @@ interface ResultWorkspaceProps {
   onResolveDuplicate: (duplicate: DuplicateGroup) => void;
   onResolveBulkSameNameDuplicates: () => void;
   onReprocess: () => void;
+  onOpenRelatedJob?: (jobId: string) => void;
+}
+
+function JobLineageBanner({
+  job,
+  onOpenRelatedJob,
+}: {
+  job: JobStatusResponse | null;
+  onOpenRelatedJob?: (jobId: string) => void;
+}) {
+  const parentJobId = job?.parent_job_id ?? null;
+  const latestRetryJobId = job?.latest_retry_job_id ?? null;
+  if (!parentJobId && !latestRetryJobId) {
+    return null;
+  }
+
+  function renderRelatedJob(label: string, jobId: string) {
+    if (onOpenRelatedJob) {
+      return (
+        <button
+          type="button"
+          className="job-lineage-link"
+          onClick={() => onOpenRelatedJob(jobId)}
+        >
+          {label} {jobId}
+        </button>
+      );
+    }
+    return (
+      <span className="job-lineage-text">
+        {label} {jobId}
+      </span>
+    );
+  }
+
+  return (
+    <section className="panel job-lineage-card" aria-label="Histórico de reprocessamento">
+      <div className="panel-kicker">Reprocessamento</div>
+      <div className="job-lineage-row">
+        {parentJobId
+          ? renderRelatedJob("Lote originado de", parentJobId)
+          : null}
+        {latestRetryJobId
+          ? renderRelatedJob("Reprocessamento mais recente:", latestRetryJobId)
+          : null}
+      </div>
+    </section>
+  );
 }
 
 const DUPLICATE_FILTER_LABELS: Record<DuplicateDisplayFilter, string> = {
@@ -238,6 +286,7 @@ export function ResultWorkspace({
   onResolveDuplicate,
   onResolveBulkSameNameDuplicates,
   onReprocess,
+  onOpenRelatedJob,
 }: ResultWorkspaceProps) {
   const [duplicateFilter, setDuplicateFilter] = useState<DuplicateDisplayFilter>("all");
   const [showReviewOnly, setShowReviewOnly] = useState(false);
@@ -337,6 +386,8 @@ export function ResultWorkspace({
 
   return (
     <>
+      <JobLineageBanner job={job} onOpenRelatedJob={onOpenRelatedJob} />
+
       <SummarySection
         summary={summary}
         validationScope={validationScope}

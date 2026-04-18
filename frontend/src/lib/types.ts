@@ -134,6 +134,8 @@ export interface JobStatusResponse {
   updated_at: string | null;
   file_name: string | null;
   cancel_requested: boolean;
+  parent_job_id?: string | null;
+  latest_retry_job_id?: string | null;
 }
 
 export interface JobListItemResponse {
@@ -151,6 +153,8 @@ export interface JobListItemResponse {
   total_rows: number;
   source_total_rows: number;
   cancel_requested: boolean;
+  parent_job_id?: string | null;
+  latest_retry_job_id?: string | null;
 }
 
 export interface RowReadResponse {

@@ -990,6 +990,7 @@ def create_reprocess_job(
         file_name=source_file_name,
         api_key_id=api_key_id,
         params=params,
+        parent_job_id=source_job.job_id,
     )
     destination_path = build_job_upload_path(
         new_job.tenant_id,
@@ -1002,6 +1003,10 @@ def create_reprocess_job(
     new_job.file_path = str(destination_path)
     new_job.file_name = source_file_name
     job_service.save_job(new_job.job_id)
+    job_service.register_reprocess_link(
+        source_job_id=source_job.job_id,
+        new_job_id=new_job.job_id,
+    )
     return new_job
 
 
