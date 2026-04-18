@@ -405,3 +405,17 @@ Expected architectural direction:
   - Reusing the existing duplicate-resolution endpoint is safe for bulk actions as long as eligible groups are processed from the end of the CSV toward the beginning
   - Keeping the eligibility rule in a shared presentation helper avoids subtle drift between the button visibility, the count shown in the UI, and the actual groups sent to the API
 ---
+
+## 2026-04-18 - US-011
+- Closed the remaining acceptance gap in US-011 ("Test flag derivation from Placa Anterior") by adding a focused test module for canonical-field flag derivation
+- Added `tests/test_canonical_fields.py` with unit coverage for `derive_flags()` across present/None/empty/whitespace placa values, mutual-exclusivity of the derived flags, and `normalize_row()` flag propagation including tenant column mapping
+- Confirmed the other US-011 criteria were already covered: tenant loading (`tests/test_tenant.py`), duplicate Item validation (`tests/test_integrity_rules.py`), zero-item rules (`tests/test_zero_item_quality.py`), category critical checks (`tests/test_category_rules.py`), job creation and state transitions (`tests/test_job.py`)
+- Files changed: `tests/test_canonical_fields.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (263 tests)
+- **Learnings for future iterations:**
+  - `derive_flags()` was only exercised indirectly through `normalize_row()` — acceptance criteria that name a specific helper deserve a direct unit test even when broader coverage exists
+  - Treat "flags are mutually exclusive" as a property-style assertion to catch regressions if the placa-presence semantics ever shift
+  - US-011 is behavior-focused coverage, not new functionality: it locks in existing domain semantics against future tenant-specific changes
+---

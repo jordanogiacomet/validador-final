@@ -201,8 +201,8 @@
         "Typecheck passes"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": "Tests should focus on behavior and regression safety."
+      "passes": true,
+      "notes": "Focused tests cover tenant loading, flag derivation from Placa Anterior, duplicate Item validation, zero-item rules, category critical checks, and job state transitions. Ruff lint and the full pytest suite pass."
     },
     {
       "id": "US-012",
