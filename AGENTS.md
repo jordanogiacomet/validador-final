@@ -201,6 +201,8 @@ If there are still stories with passes: false, end your response normally (anoth
 - Password-recovery flows should remain token-based through `AuthService`: admins can issue reset tokens, public completion consumes hashed single-use tokens, and raw reset tokens must never be persisted.
 - Role/permission decisions belong in `AuthService`; routes should pass authenticated tenant/operator/API-key context plus the target tenant and use the service-returned canonical tenant for admin actions.
 - Managed-user auth state belongs in persisted operator records (`must_change_password`), and invitation tokens must stay hashed-only in the operational store and audit trail; never persist raw invite tokens.
+- Administrative audit visibility also belongs in `AuthService`: keep `/audit` as the shared endpoint/log, let `platform_admin` read globally, `tenant_admin` read only the own-tenant admin scope, and keep operator/legacy-key access limited to the non-administrative operational subset.
+- Audit payload conventions live centrally in `app/core/audit.py`: reuse structured `details` keys such as `actor_operator_id`, `target_operator_id`, and `result`, and rely on centralized sanitization there instead of redacting secrets ad hoc in each service/route.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows

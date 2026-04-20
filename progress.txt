@@ -83,6 +83,7 @@ Last Updated: 2026-04-20 17:32 -02
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 - Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
+- Administrative audit should stay in the shared `AuditService`: classify admin-sensitive events in `app/core/audit.py`, store structured `details` like `actor_operator_id`, `target_operator_id`, and `result` for filters, and enforce global-vs-tenant audit visibility through `AuthService` instead of creating a second audit store.
 
 ---
 
@@ -1125,7 +1126,21 @@ Expected architectural direction:
   - `cd frontend && npm run test`
 - Browser verification: no browser-testing connector was available in this session; manual UI verification of the administrative console is still recommended before publishing it.
 - **Learnings for future iterations:**
-  - Painéis administrativos no frontend devem permanecer opcionais e separados do fluxo operacional principal; administradores ainda precisam cair primeiro na área de validação.
-  - Controles globais de tenant devem ser escondidos no frontend a partir de `session.role`, mas a autorização final continua no backend; trate `403` como feedback inline, não como logout.
-  - Novos fetches administrativos do frontend devem continuar centralizados em `frontend/src/lib/api.ts`, enquanto a visibilidade por papel fica na shell autenticada e nos testes específicos do componente.
+- Painéis administrativos no frontend devem permanecer opcionais e separados do fluxo operacional principal; administradores ainda precisam cair primeiro na área de validação.
+- Controles globais de tenant devem ser escondidos no frontend a partir de `session.role`, mas a autorização final continua no backend; trate `403` como feedback inline, não como logout.
+- Novos fetches administrativos do frontend devem continuar centralizados em `frontend/src/lib/api.ts`, enquanto a visibilidade por papel fica na shell autenticada e nos testes específicos do componente.
+---
+## 2026-04-20 17:57 -02 - US-053
+- Estendida a auditoria existente para cobrir ações administrativas sensíveis sem criar storage paralelo: novo evento explícito de login administrativo, metadados estruturados de ator/alvo/resultado, classificação de eventos administrativos e sanitização centralizada de payloads sensíveis.
+- Adicionados filtros server-side em `/audit` por tenant, ator, alvo, tipo e período; a autorização de leitura agora passa pelo `AuthService`, com leitura global só para `platform_admin`, leitura administrativa tenant-scoped para `tenant_admin` e visão operacional sem eventos administrativos para operadores/chaves legadas.
+- Adicionados testes focados cobrindo persistência com redaction, filtros do `AuditService`, evento de login administrativo, autorização de leitura da auditoria e compatibilidade do endpoint com os fluxos já existentes.
+- Files changed: `app/core/audit.py`, `app/services/audit_service.py`, `app/services/auth_service.py`, `app/services/tenant_admin_service.py`, `app/api/routes.py`, `tests/test_audit.py`, `tests/test_auth_service.py`, `tests/test_api.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest tests/test_audit.py tests/test_auth_service.py tests/test_api.py -q`
+  - `pytest -q`
+- **Learnings for future iterations:**
+  - Auditoria administrativa e operacional continuam no mesmo log; a separação deve ser por classificação/escopo de leitura, não por armazenamento duplicado.
+  - Filtros de auditoria por ator/alvo ficam estáveis quando os serviços gravam chaves estruturadas (`actor_operator_id`, `target_operator_id`, `result`) em `details`.
+  - Sanitização sensível é mais segura quando centralizada no próprio `AuditService`/`app/core/audit.py`; não dependa de cada fluxo lembrar de remover senha, token bruto ou hash manualmente.
 ---

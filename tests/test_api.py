@@ -202,6 +202,137 @@ def test_list_audit_events_rejects_other_tenant_hint():
     assert "redesim" in response.json()["detail"]
 
 
+def test_platform_admin_can_read_global_audit_with_filters():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="admin.global.audit",
+        password="AdminGlobal@2026",
+        role=OperatorRole.PLATFORM_ADMIN,
+    )
+    headers, login_payload = login_headers(
+        username="admin.global.audit",
+        password="AdminGlobal@2026",
+    )
+    audit_service.record_event(
+        AuditEventType.OPERATOR_CREATED,
+        tenant_id="redesim",
+        details={
+            "actor_operator_id": login_payload["operator_id"],
+            "target_operator_id": "operator-redesim",
+            "result": "success",
+        },
+    )
+    audit_service.record_event(
+        AuditEventType.JOB_CREATED,
+        tenant_id="default",
+        job_id="job-default",
+    )
+
+    response = client.get(
+        "/audit",
+        headers=headers,
+        params={
+            "actor_operator_id": login_payload["operator_id"],
+            "event_type": "operator_created",
+            "created_from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            "created_to": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["tenant_id"] == "redesim"
+    assert payload[0]["event_type"] == "operator_created"
+    assert payload[0]["details"]["target_operator_id"] == "operator-redesim"
+
+
+def test_tenant_admin_reads_only_own_tenant_audit_scope():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="admin.tenant.audit",
+        password="AdminTenant@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+    headers, login_payload = login_headers(
+        username="admin.tenant.audit",
+        password="AdminTenant@2026",
+    )
+    audit_service.record_event(
+        AuditEventType.OPERATOR_CREATED,
+        tenant_id="default",
+        details={
+            "actor_operator_id": login_payload["operator_id"],
+            "target_operator_id": "operator-default",
+            "result": "success",
+        },
+    )
+    audit_service.record_event(
+        AuditEventType.OPERATOR_CREATED,
+        tenant_id="redesim",
+        details={
+            "actor_operator_id": "operator-outro-tenant",
+            "target_operator_id": "operator-redesim",
+            "result": "success",
+        },
+    )
+
+    own_scope_response = client.get(
+        "/audit",
+        headers=headers,
+        params={"event_type": "operator_created"},
+    )
+    assert own_scope_response.status_code == 200
+    own_scope_payload = own_scope_response.json()
+    assert own_scope_payload
+    assert all(event["tenant_id"] == "default" for event in own_scope_payload)
+
+    forbidden_response = client.get(
+        "/audit",
+        headers=headers,
+        params={"tenant_id": "redesim"},
+    )
+    assert forbidden_response.status_code == 403
+    assert forbidden_response.json()["detail"] == (
+        "API key does not grant access to tenant 'redesim'"
+    )
+
+
+def test_operator_audit_view_keeps_operational_events_and_hides_admin_events():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="operador.audit",
+        password="OperadorAudit@2026",
+        role=OperatorRole.OPERATOR,
+    )
+    headers, login_payload = login_headers(
+        username="operador.audit",
+        password="OperadorAudit@2026",
+    )
+    admin_event = audit_service.record_event(
+        AuditEventType.OPERATOR_CREATED,
+        tenant_id="default",
+        details={
+            "actor_operator_id": login_payload["operator_id"],
+            "target_operator_id": "operator-alvo",
+            "result": "success",
+        },
+    )
+    job_event = audit_service.record_event(
+        AuditEventType.JOB_CREATED,
+        tenant_id="default",
+        job_id="job-operacional",
+    )
+
+    response = client.get("/audit?tenant_id=default", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    returned_event_ids = {event["event_id"] for event in payload}
+    assert job_event.event_id in returned_event_ids
+    assert admin_event.event_id not in returned_event_ids
+
+
 def test_protected_routes_require_api_key():
     response = client.get("/jobs")
     assert response.status_code == 401
@@ -361,7 +492,11 @@ def test_login_emits_tenant_scoped_api_key():
 def test_login_records_api_key_issue_in_audit_log():
     headers, payload = login_headers()
 
-    response = client.get("/audit", headers=headers)
+    response = client.get(
+        "/audit",
+        headers=headers,
+        params={"event_type": "api_key_issued"},
+    )
     assert response.status_code == 200
 
     audit_payload = response.json()
@@ -385,8 +520,9 @@ def test_revoke_current_issued_api_key_records_audit_event_and_blocks_access():
     assert denied.json()["detail"] == "Revoked API key"
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
         AuditEventType.API_KEY_REVOKED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
 
@@ -414,8 +550,9 @@ def test_renew_issued_api_key_rotates_session_and_records_audit_event():
     assert allowed_new.status_code == 200
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
         AuditEventType.API_KEY_RENEWED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
     renewal_event = events[0]
@@ -443,8 +580,9 @@ def test_expired_issued_api_key_returns_401_and_records_audit_event():
     assert response.json()["detail"] == "Expired API key"
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
         AuditEventType.API_KEY_EXPIRED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
     assert events[0].api_key_id == payload["api_key_id"]
@@ -958,10 +1096,11 @@ def test_seed_password_rotation_endpoint_replaces_bootstrap_password():
     )
     assert new_login.status_code == 200
 
+    rotated_headers = auth_headers(new_login.json()["x_api_key"])
     audit_response = client.get(
         "/audit",
         params={"tenant_id": "default"},
-        headers=auth_headers(),
+        headers=rotated_headers,
     )
     assert audit_response.status_code == 200
     assert any(

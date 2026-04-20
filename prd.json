@@ -924,8 +924,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 53,
-      "passes": false,
-      "notes": "A auditoria administrativa deve reutilizar a infraestrutura existente de audit log, estendendo tipos de evento e filtros em vez de criar armazenamento paralelo."
+      "passes": true,
+      "notes": "Implementado estendendo o audit log existente com classificação de eventos administrativos, metadados estruturados de ator/alvo/resultado, filtros server-side por tenant/ator/alvo/tipo/período, sanitização centralizada de payload sensível e autorização de leitura via AuthService sem criar armazenamento paralelo."
     }
   ],
   "nonFunctionalRequirements": {

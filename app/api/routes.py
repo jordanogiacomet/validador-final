@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -14,7 +14,7 @@ from app.api.auth import (
     get_authenticated_tenant,
     resolve_request_tenant_id,
 )
-from app.core.audit import AuditEvent, AuditEventType
+from app.core.audit import AuditEvent, AuditEventType, AuditPrincipal
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
@@ -555,6 +555,43 @@ def _authorize_tenant_administration(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
 
+def _build_request_audit_actor(request: Request) -> AuditPrincipal | None:
+    auth = get_authenticated_tenant(request)
+    if auth.operator_id is None:
+        return None
+
+    operator = auth_service.get_operator(
+        tenant_id=auth.tenant_id,
+        operator_id=auth.operator_id,
+    )
+    if operator is None:
+        return None
+
+    return AuditPrincipal(
+        tenant_id=operator.tenant_id,
+        operator_id=operator.operator_id,
+        username=operator.username,
+        role=operator.role.value,
+    )
+
+
+def _authorize_audit_read(
+    request: Request,
+    *,
+    tenant_id: str | None,
+):
+    auth = get_authenticated_tenant(request)
+    try:
+        return auth_service.authorize_audit_read(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            requested_tenant_id=tenant_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
 @router.get("/", include_in_schema=False, response_model=None)
 async def frontend() -> Response:
     frontend_url = os.getenv("VALIDATOR_FRONTEND_URL", "").strip()
@@ -692,6 +729,7 @@ async def admin_create_tenant(
     payload: TenantAdminCreateRequest,
 ) -> TenantAdminResponse:
     auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
     _authorize_tenant_administration(
         request,
         action="tenants.create",
@@ -703,6 +741,7 @@ async def admin_create_tenant(
             display_name=payload.display_name,
             aliases=payload.aliases,
             api_key_id=auth.api_key_id,
+            actor=actor,
         )
     except TenantAdminServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -719,6 +758,7 @@ async def admin_update_tenant(
     payload: TenantAdminUpdateRequest,
 ) -> TenantAdminResponse:
     auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
     _authorize_tenant_administration(
         request,
         action="tenants.update",
@@ -730,6 +770,7 @@ async def admin_update_tenant(
             display_name=payload.display_name,
             aliases=payload.aliases,
             api_key_id=auth.api_key_id,
+            actor=actor,
         )
     except TenantAdminServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -745,6 +786,7 @@ async def admin_disable_tenant(
     tenant_id: str,
 ) -> TenantAdminResponse:
     auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
     _authorize_tenant_administration(
         request,
         action="tenants.disable",
@@ -754,6 +796,7 @@ async def admin_disable_tenant(
         tenant = tenant_admin_service.disable_tenant(
             tenant_id=tenant_id,
             api_key_id=auth.api_key_id,
+            actor=actor,
         )
     except TenantAdminServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -769,6 +812,7 @@ async def admin_reactivate_tenant(
     tenant_id: str,
 ) -> TenantAdminResponse:
     auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
     _authorize_tenant_administration(
         request,
         action="tenants.reactivate",
@@ -778,6 +822,7 @@ async def admin_reactivate_tenant(
         tenant = tenant_admin_service.reactivate_tenant(
             tenant_id=tenant_id,
             api_key_id=auth.api_key_id,
+            actor=actor,
         )
     except TenantAdminServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -1095,10 +1140,24 @@ async def rotate_seed_operator_password(
 async def list_audit_events(
     request: Request,
     tenant_id: str | None = None,
+    actor_operator_id: str | None = Query(default=None, min_length=1),
+    target_operator_id: str | None = Query(default=None, min_length=1),
+    event_type: Annotated[list[str] | None, Query()] = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[AuditEventResponse]:
-    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
-    events = audit_service.list_events(tenant_id=resolved_tenant_id, limit=limit)
+    authorization = _authorize_audit_read(request, tenant_id=tenant_id)
+    events = audit_service.list_events(
+        tenant_id=authorization.tenant_id,
+        actor_operator_id=actor_operator_id,
+        target_operator_id=target_operator_id,
+        event_types=event_type,
+        created_from=created_from,
+        created_to=created_to,
+        include_administrative=authorization.include_administrative,
+        limit=limit,
+    )
     return [_build_audit_event_response(event) for event in events]
 
 

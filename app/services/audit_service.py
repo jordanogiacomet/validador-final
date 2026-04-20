@@ -1,7 +1,13 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.audit import AuditEvent, AuditEventType
+from app.core.audit import (
+    AuditEvent,
+    AuditEventType,
+    is_administrative_audit_event,
+    sanitize_audit_details,
+)
 from app.core.operational_sqlite import (
     OperationalSQLiteStore,
     resolve_operational_sqlite_path,
@@ -50,7 +56,7 @@ class AuditService:
             tenant_id=canonicalize_tenant_id(tenant_id),
             job_id=job_id,
             api_key_id=api_key_id,
-            details=details or {},
+            details=sanitize_audit_details(details),
         )
         self._events.append(event)
         self._persist_events()
@@ -60,6 +66,12 @@ class AuditService:
         self,
         *,
         tenant_id: str | None = None,
+        actor_operator_id: str | None = None,
+        target_operator_id: str | None = None,
+        event_types: list[AuditEventType | str] | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        include_administrative: bool = True,
         limit: int | None = None,
     ) -> list[AuditEvent]:
         events = self._events
@@ -68,6 +80,47 @@ class AuditService:
             events = [
                 event for event in events if event.tenant_id == resolved_tenant_id
             ]
+
+        if not include_administrative:
+            events = [
+                event for event in events if not is_administrative_audit_event(event)
+            ]
+
+        if actor_operator_id is not None:
+            events = [
+                event
+                for event in events
+                if event.details.get("actor_operator_id") == actor_operator_id
+            ]
+
+        if target_operator_id is not None:
+            events = [
+                event
+                for event in events
+                if event.details.get("target_operator_id") == target_operator_id
+            ]
+
+        if event_types:
+            normalized_event_types = {
+                event_type.value
+                if isinstance(event_type, AuditEventType)
+                else str(event_type).strip()
+                for event_type in event_types
+                if str(event_type).strip()
+            }
+            events = [
+                event
+                for event in events
+                if event.event_type.value in normalized_event_types
+            ]
+
+        if created_from is not None:
+            events = [
+                event for event in events if event.created_at >= created_from
+            ]
+
+        if created_to is not None:
+            events = [event for event in events if event.created_at <= created_to]
 
         ordered_events = list(reversed(events))
         if limit is not None:

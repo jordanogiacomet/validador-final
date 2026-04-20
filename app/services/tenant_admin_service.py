@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from app.core.audit import AuditEventType
+from app.core.audit import (
+    AuditEventResult,
+    AuditEventType,
+    AuditPrincipal,
+    build_audit_principal_details,
+)
 from app.core.tenant_config import DEFAULT_TENANT_ID, TenantConfig
 from app.core.tenant_loader import (
     TenantDisabledError,
@@ -93,6 +98,7 @@ class TenantAdminService:
         display_name: str,
         aliases: list[str] | None = None,
         api_key_id: str | None = None,
+        actor: AuditPrincipal | None = None,
     ) -> TenantAdminRecord:
         self._ensure_storage_configured()
         normalized_tenant_id = self._validate_identifier(tenant_id, field_name="tenant_id")
@@ -128,6 +134,7 @@ class TenantAdminService:
             AuditEventType.TENANT_CREATED,
             admin_record,
             api_key_id=api_key_id,
+            actor=actor,
         )
         return admin_record
 
@@ -138,6 +145,7 @@ class TenantAdminService:
         display_name: str | None = None,
         aliases: list[str] | None = None,
         api_key_id: str | None = None,
+        actor: AuditPrincipal | None = None,
     ) -> TenantAdminRecord:
         self._ensure_storage_configured()
         current_config = self._load_existing_tenant(tenant_id)
@@ -177,6 +185,7 @@ class TenantAdminService:
             AuditEventType.TENANT_UPDATED,
             admin_record,
             api_key_id=api_key_id,
+            actor=actor,
         )
         return admin_record
 
@@ -185,6 +194,7 @@ class TenantAdminService:
         *,
         tenant_id: str,
         api_key_id: str | None = None,
+        actor: AuditPrincipal | None = None,
     ) -> TenantAdminRecord:
         self._ensure_storage_configured()
         current_config = self._load_existing_tenant(tenant_id)
@@ -208,6 +218,7 @@ class TenantAdminService:
             AuditEventType.TENANT_DISABLED,
             admin_record,
             api_key_id=api_key_id,
+            actor=actor,
         )
         return admin_record
 
@@ -216,6 +227,7 @@ class TenantAdminService:
         *,
         tenant_id: str,
         api_key_id: str | None = None,
+        actor: AuditPrincipal | None = None,
     ) -> TenantAdminRecord:
         self._ensure_storage_configured()
         current_config = self._load_existing_tenant(tenant_id)
@@ -236,6 +248,7 @@ class TenantAdminService:
             AuditEventType.TENANT_REACTIVATED,
             admin_record,
             api_key_id=api_key_id,
+            actor=actor,
         )
         return admin_record
 
@@ -422,6 +435,7 @@ class TenantAdminService:
         tenant: TenantAdminRecord,
         *,
         api_key_id: str | None,
+        actor: AuditPrincipal | None = None,
     ) -> None:
         if self._audit_service is None:
             return
@@ -430,11 +444,15 @@ class TenantAdminService:
             event_type,
             tenant_id=tenant.tenant_id,
             api_key_id=api_key_id,
-            details={
-                "tenant_id": tenant.tenant_id,
-                "display_name": tenant.display_name,
-                "aliases": tenant.aliases,
-                "disabled": tenant.disabled,
-                "source": tenant.source.value,
-            },
+            details=build_audit_principal_details(
+                actor=actor,
+                result=AuditEventResult.SUCCESS,
+                extra={
+                    "tenant_id": tenant.tenant_id,
+                    "display_name": tenant.display_name,
+                    "aliases": tenant.aliases,
+                    "disabled": tenant.disabled,
+                    "source": tenant.source.value,
+                },
+            ),
         )

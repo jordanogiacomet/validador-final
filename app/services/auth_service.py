@@ -15,7 +15,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.core.audit import AuditEventType
+from app.core.audit import (
+    AuditEventResult,
+    AuditEventType,
+    AuditPrincipal,
+    build_audit_principal_details,
+)
 from app.core.operational_sqlite import (
     OperationalSQLiteStore,
     resolve_operational_sqlite_path,
@@ -168,6 +173,12 @@ class InitialSetupState:
     storage_configured: bool
     requires_setup_token: bool
     tenant_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditReadAuthorization:
+    tenant_id: str | None
+    include_administrative: bool
 
 
 class IssuedAPIKeyStatus(StrEnum):
@@ -490,6 +501,64 @@ class AuthService:
         )
         raise AuthServiceError(403, "Only platform_admin can manage tenants")
 
+    def authorize_audit_read(
+        self,
+        *,
+        actor_tenant_id: str,
+        actor_operator_id: str | None,
+        api_key_id: str | None,
+        requested_tenant_id: str | None,
+    ) -> AuditReadAuthorization:
+        normalized_actor_tenant_id = canonicalize_tenant_id(actor_tenant_id)
+        normalized_requested_tenant_id = (
+            canonicalize_tenant_id(requested_tenant_id)
+            if requested_tenant_id is not None
+            else None
+        )
+        actor = (
+            self._find_operator_by_id(normalized_actor_tenant_id, actor_operator_id)
+            if actor_operator_id is not None
+            else None
+        )
+
+        if actor is not None and not actor.disabled:
+            if actor.role is OperatorRole.PLATFORM_ADMIN:
+                return AuditReadAuthorization(
+                    tenant_id=normalized_requested_tenant_id,
+                    include_administrative=True,
+                )
+
+            if actor.role is OperatorRole.TENANT_ADMIN:
+                target_tenant_id = (
+                    normalized_requested_tenant_id or normalized_actor_tenant_id
+                )
+                if tenant_ids_match(target_tenant_id, normalized_actor_tenant_id):
+                    return AuditReadAuthorization(
+                        tenant_id=target_tenant_id,
+                        include_administrative=True,
+                    )
+
+        if normalized_requested_tenant_id is not None and not tenant_ids_match(
+            normalized_requested_tenant_id,
+            normalized_actor_tenant_id,
+        ):
+            self._record_authorization_denied_event(
+                tenant_id=normalized_actor_tenant_id,
+                api_key_id=api_key_id,
+                action="audit.read",
+                target_tenant_id=normalized_requested_tenant_id,
+                operator=actor,
+            )
+            raise AuthServiceError(
+                403,
+                f"API key does not grant access to tenant '{normalized_requested_tenant_id}'",
+            )
+
+        return AuditReadAuthorization(
+            tenant_id=normalized_actor_tenant_id,
+            include_administrative=False,
+        )
+
     def authorize_operator_role_assignment(
         self,
         *,
@@ -667,6 +736,7 @@ class AuthService:
             AuditEventType.INITIAL_ADMIN_CREATED,
             operator=operator,
             api_key_id=None,
+            actor=operator,
             details={
                 "initial_setup": True,
                 "setup_token_required": bool(expected_setup_token),
@@ -951,6 +1021,7 @@ class AuthService:
                 reset=reset_record,
                 api_key_id=None,
                 details={"reason": "token_already_used"},
+                result=AuditEventResult.FAILED,
             )
             raise AuthServiceError(409, "Password reset token already used")
 
@@ -960,6 +1031,7 @@ class AuthService:
                 reset=reset_record,
                 api_key_id=None,
                 details={"reason": "token_expired"},
+                result=AuditEventResult.FAILED,
             )
             raise AuthServiceError(410, "Password reset token expired")
 
@@ -973,6 +1045,7 @@ class AuthService:
                 reset=reset_record,
                 api_key_id=None,
                 details={"reason": "operator_not_found"},
+                result=AuditEventResult.FAILED,
             )
             raise AuthServiceError(404, "Operator not found")
         if operator.disabled:
@@ -981,6 +1054,7 @@ class AuthService:
                 reset=reset_record,
                 api_key_id=None,
                 details={"reason": "operator_disabled"},
+                result=AuditEventResult.FAILED,
             )
             raise AuthServiceError(403, "Operator is disabled")
 
@@ -1280,6 +1354,22 @@ class AuthService:
                 else None,
             },
         )
+        if operator.role in {
+            OperatorRole.PLATFORM_ADMIN,
+            OperatorRole.TENANT_ADMIN,
+        }:
+            self._record_operator_audit_event(
+                AuditEventType.ADMIN_LOGIN_SUCCEEDED,
+                operator=operator,
+                api_key_id=record.key_id,
+                actor=operator,
+                details={
+                    "login_method": "password",
+                    "expires_at": record.expires_at.isoformat()
+                    if record.expires_at is not None
+                    else None,
+                },
+            )
         return IssuedAPIKey(
             raw_api_key=raw_api_key,
             record=record,
@@ -2191,10 +2281,10 @@ class AuthService:
             AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
             tenant_id=DEFAULT_TENANT_ID,
             details={
-                "token_hash_prefix": token_hash[:12],
                 "reason": reason,
                 "status_code": status_code,
                 "detail": detail,
+                "result": AuditEventResult.FAILED.value,
             },
         )
 
@@ -2337,27 +2427,84 @@ class AuthService:
             details=details,
         )
 
+    @staticmethod
+    def _audit_principal_from_operator(operator: EffectiveOperator) -> AuditPrincipal:
+        return AuditPrincipal(
+            tenant_id=operator.tenant_id,
+            operator_id=operator.operator_id,
+            username=operator.username,
+            role=operator.role.value,
+        )
+
+    @staticmethod
+    def _audit_principal_from_issued_record(
+        record: IssuedAPIKeyRecord,
+    ) -> AuditPrincipal:
+        return AuditPrincipal(
+            tenant_id=record.tenant_id,
+            operator_id=record.operator_id,
+            username=record.username,
+            role=record.role.value,
+        )
+
+    def _resolve_audit_actor_principal(
+        self,
+        *,
+        api_key_id: str | None,
+        actor: EffectiveOperator | AuditPrincipal | None = None,
+    ) -> AuditPrincipal | None:
+        if isinstance(actor, AuditPrincipal):
+            return actor
+        if actor is not None:
+            return self._audit_principal_from_operator(actor)
+        if api_key_id is None:
+            return None
+
+        record = self._records.get(api_key_id)
+        if record is None and self._storage_path is not None:
+            self._load_records()
+            record = self._records.get(api_key_id)
+        if record is None:
+            return None
+
+        try:
+            operator = self._find_operator_by_id(record.tenant_id, record.operator_id)
+        except AuthServiceError:
+            operator = None
+        if operator is not None and not operator.disabled:
+            return self._audit_principal_from_operator(operator)
+        return self._audit_principal_from_issued_record(record)
+
     def _record_operator_audit_event(
         self,
         event_type: AuditEventType,
         *,
         operator: EffectiveOperator,
         api_key_id: str | None,
+        actor: EffectiveOperator | AuditPrincipal | None = None,
         details: dict[str, object] | None = None,
+        result: AuditEventResult = AuditEventResult.SUCCESS,
     ) -> None:
         if self._audit_service is None:
             return
 
-        payload = {
-            "operator_id": operator.operator_id,
-            "username": operator.username,
-            "role": operator.role.value,
-            "disabled": operator.disabled,
-            "must_change_password": operator.must_change_password,
-            "is_seed": operator.is_seed,
-        }
-        if details:
-            payload.update(details)
+        payload = build_audit_principal_details(
+            actor=self._resolve_audit_actor_principal(
+                api_key_id=api_key_id,
+                actor=actor,
+            ),
+            target=self._audit_principal_from_operator(operator),
+            result=result,
+            extra={
+                "operator_id": operator.operator_id,
+                "username": operator.username,
+                "role": operator.role.value,
+                "disabled": operator.disabled,
+                "must_change_password": operator.must_change_password,
+                "is_seed": operator.is_seed,
+                **(details or {}),
+            },
+        )
 
         self._audit_service.record_event(
             event_type,
@@ -2372,20 +2519,36 @@ class AuthService:
         *,
         invite: OperatorInvitationRecord,
         api_key_id: str | None,
+        actor: EffectiveOperator | AuditPrincipal | None = None,
         details: dict[str, object] | None = None,
+        result: AuditEventResult = AuditEventResult.SUCCESS,
     ) -> None:
         if self._audit_service is None:
             return
 
-        payload: dict[str, object] = {
-            "invite_id": invite.invite_id,
-            "username": invite.username,
-            "role": invite.role.value,
-            "expires_at": invite.expires_at.isoformat(),
-            "used_at": invite.used_at.isoformat() if invite.used_at is not None else None,
-        }
-        if details:
-            payload.update(details)
+        payload = build_audit_principal_details(
+            actor=self._resolve_audit_actor_principal(
+                api_key_id=api_key_id,
+                actor=actor,
+            ),
+            target=AuditPrincipal(
+                tenant_id=invite.tenant_id,
+                operator_id=invite.accepted_operator_id,
+                username=invite.username,
+                role=invite.role.value,
+            ),
+            result=result,
+            extra={
+                "invite_id": invite.invite_id,
+                "username": invite.username,
+                "role": invite.role.value,
+                "expires_at": invite.expires_at.isoformat(),
+                "used_at": (
+                    invite.used_at.isoformat() if invite.used_at is not None else None
+                ),
+                **(details or {}),
+            },
+        )
 
         self._audit_service.record_event(
             event_type,
@@ -2400,20 +2563,43 @@ class AuthService:
         *,
         reset: OperatorPasswordResetRecord,
         api_key_id: str | None,
+        actor: EffectiveOperator | AuditPrincipal | None = None,
         details: dict[str, object] | None = None,
+        result: AuditEventResult = AuditEventResult.SUCCESS,
     ) -> None:
         if self._audit_service is None:
             return
 
-        payload: dict[str, object] = {
-            "reset_id": reset.reset_id,
-            "operator_id": reset.operator_id,
-            "username": reset.username,
-            "expires_at": reset.expires_at.isoformat(),
-            "used_at": reset.used_at.isoformat() if reset.used_at is not None else None,
-        }
-        if details:
-            payload.update(details)
+        try:
+            target_operator = self._find_operator_by_id(
+                reset.tenant_id,
+                reset.operator_id,
+            )
+        except AuthServiceError:
+            target_operator = None
+        payload = build_audit_principal_details(
+            actor=self._resolve_audit_actor_principal(
+                api_key_id=api_key_id,
+                actor=actor,
+            ),
+            target=AuditPrincipal(
+                tenant_id=reset.tenant_id,
+                operator_id=reset.operator_id,
+                username=reset.username,
+                role=target_operator.role.value if target_operator is not None else None,
+            ),
+            result=result,
+            extra={
+                "reset_id": reset.reset_id,
+                "operator_id": reset.operator_id,
+                "username": reset.username,
+                "expires_at": reset.expires_at.isoformat(),
+                "used_at": (
+                    reset.used_at.isoformat() if reset.used_at is not None else None
+                ),
+                **(details or {}),
+            },
+        )
 
         self._audit_service.record_event(
             event_type,
@@ -2445,5 +2631,13 @@ class AuthService:
             AuditEventType.AUTHORIZATION_DENIED,
             tenant_id=tenant_id,
             api_key_id=api_key_id,
-            details=details,
+            details=build_audit_principal_details(
+                actor=(
+                    self._audit_principal_from_operator(operator)
+                    if operator is not None
+                    else None
+                ),
+                result=AuditEventResult.DENIED,
+                extra=details,
+            ),
         )

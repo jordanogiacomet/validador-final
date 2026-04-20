@@ -115,10 +115,40 @@ def test_issue_api_key_records_audit_event_and_expiration_metadata() -> None:
     )
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events] == [AuditEventType.API_KEY_ISSUED]
+    assert [event.event_type for event in events] == [
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
+        AuditEventType.API_KEY_ISSUED,
+    ]
+    assert events[1].api_key_id == issued_key.record.key_id
+    assert events[1].details["operator_id"] == "default-local-operator"
+    assert events[1].details["issued_ttl_seconds"] == 28800
+
+
+def test_issue_api_key_records_explicit_admin_login_event_for_admin_roles() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    admin = service.create_operator(
+        tenant_id="default",
+        username="gestor.admin",
+        password="GestorAdmin@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="gestor.admin",
+        password="GestorAdmin@2026",
+    )
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
+        AuditEventType.API_KEY_ISSUED,
+    ]
     assert events[0].api_key_id == issued_key.record.key_id
-    assert events[0].details["operator_id"] == "default-local-operator"
-    assert events[0].details["issued_ttl_seconds"] == 28800
+    assert events[0].details["actor_operator_id"] == admin.operator_id
+    assert events[0].details["target_operator_id"] == admin.operator_id
+    assert events[0].details["result"] == "success"
 
 
 def test_expired_api_key_records_single_audit_event_and_stops_resolving() -> None:
@@ -148,6 +178,7 @@ def test_expired_api_key_records_single_audit_event_and_stops_resolving() -> Non
     events = audit_service.list_events(tenant_id="default")
     assert [event.event_type for event in events] == [
         AuditEventType.API_KEY_EXPIRED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
     assert issued_key.record.expired_at == inspection_time
@@ -176,6 +207,7 @@ def test_revoke_api_key_records_audit_event_and_blocks_resolution() -> None:
     events = audit_service.list_events(tenant_id="default")
     assert [event.event_type for event in events] == [
         AuditEventType.API_KEY_REVOKED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
     assert events[0].details["actor"] == "self"
@@ -217,6 +249,7 @@ def test_renew_api_key_issues_new_key_and_invalidates_previous() -> None:
     events = audit_service.list_events(tenant_id="default")
     assert [event.event_type for event in events] == [
         AuditEventType.API_KEY_RENEWED,
+        AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.API_KEY_ISSUED,
     ]
     renewal_event = events[0]
@@ -1195,6 +1228,73 @@ def test_authorize_operator_management_rejects_operator_and_records_audit_event(
     assert events[0].details["operator_id"] == operator.operator_id
     assert events[0].details["role"] == "operator"
     assert events[0].details["action"] == "operators.create"
+
+
+def test_authorize_audit_read_allows_tenant_admin_only_for_own_tenant() -> None:
+    service = AuthService()
+    tenant_admin = service.create_operator(
+        tenant_id="default",
+        username="admin.tenant",
+        password="AdminTenant@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+
+    authorization = service.authorize_audit_read(
+        actor_tenant_id="default",
+        actor_operator_id=tenant_admin.operator_id,
+        api_key_id="issued-tenant-admin",
+        requested_tenant_id=None,
+    )
+
+    assert authorization.tenant_id == "default"
+    assert authorization.include_administrative is True
+
+
+def test_authorize_audit_read_rejects_cross_tenant_scope_and_records_denial() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    tenant_admin = service.create_operator(
+        tenant_id="default",
+        username="admin.tenant",
+        password="AdminTenant@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.authorize_audit_read(
+            actor_tenant_id="default",
+            actor_operator_id=tenant_admin.operator_id,
+            api_key_id="issued-tenant-admin",
+            requested_tenant_id="redesim",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "API key does not grant access to tenant 'redesim'"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["action"] == "audit.read"
+    assert event.details["result"] == "denied"
+    assert event.details["actor_operator_id"] == tenant_admin.operator_id
+
+
+def test_authorize_audit_read_keeps_operator_on_operational_view() -> None:
+    service = AuthService()
+    operator = service.create_operator(
+        tenant_id="default",
+        username="operador.audit",
+        password="OperadorAudit@2026",
+        role=OperatorRole.OPERATOR,
+    )
+
+    authorization = service.authorize_audit_read(
+        actor_tenant_id="default",
+        actor_operator_id=operator.operator_id,
+        api_key_id="issued-operator",
+        requested_tenant_id="default",
+    )
+
+    assert authorization.tenant_id == "default"
+    assert authorization.include_administrative is False
 
 
 def test_authorize_operator_role_assignment_blocks_tenant_admin_platform_escalation():
