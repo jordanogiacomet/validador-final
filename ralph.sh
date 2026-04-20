@@ -109,7 +109,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   if [[ "$TOOL" == "amp" ]]; then
     OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
   elif [[ "$TOOL" == "codex" ]]; then
-    OUTPUT=$(run_codex "$SCRIPT_DIR/AGENTS.ralph.md" 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(run_codex "$SCRIPT_DIR/AGENTS.md" 2>&1 | tee /dev/stderr) || true
   else
     # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
     OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true

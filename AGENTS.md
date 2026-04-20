@@ -1,279 +1,247 @@
-Codex Agent Instructions
+# Ralph Agent Instructions (Codex)
 
-You are a coding agent working interactively in this repository.
+You are an autonomous coding agent working on a software project.
 
-Your job is to help improve the codebase efficiently, safely, and with minimal unnecessary changes.
+## Your Task
 
-This repository is a multi-tenant inventory validator.
+1. Read the PRD at `prd.json` (in the same directory as this file)
+2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
+3. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
+4. Pick the **highest priority** user story where `passes: false`
+5. Before implementing, identify the minimal affected layer:
+   - canonical domain
+   - tenant config
+   - tenant loader
+   - validation engine
+   - rules
+   - jobs
+   - reports
+   - API
+6. Implement that single user story
+7. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
+8. Update AGENTS.md files if you discover reusable patterns (see below)
+9. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
+10. Update the PRD to set `passes: true` for the completed story
+11. Append your progress to `progress.txt`
 
-How to Work in This Repository
+## Progress Report Format
 
-Before making meaningful changes:
+APPEND to progress.txt (never replace, always append):
+```text
+## [Date/Time] - [Story ID]
+- What was implemented
+- Files changed
+- **Learnings for future iterations:**
+  - Patterns discovered (e.g., "this codebase uses X for Y")
+  - Gotchas encountered (e.g., "don't forget to update Z when changing W")
+  - Useful context (e.g., "the evaluation panel is in component X")
+---
+```
 
-Read README.md
-Read progress.txt, especially the Codebase Patterns section
-Read the relevant files for the task
-For medium or large tasks, propose a short plan before editing
-Make the smallest correct change that satisfies the request
-Explain how to validate the change
+The learnings section is critical - it helps future iterations avoid repeating mistakes and understand the codebase better.
 
-Do not behave like an autonomous backlog runner unless explicitly asked.
-Do not pick the next story by yourself unless the user asks.
-Do not make broad refactors unless clearly requested.
+## Consolidate Patterns
 
-Default Interaction Style
+If you discover a reusable pattern that future iterations should know, add it to the ## Codebase Patterns section at the TOP of progress.txt (create it if it doesn't exist). This section should consolidate the most important learnings:
 
-For most requests, respond in this order:
+## Codebase Patterns
+- Example: Use `sql<number>` template for aggregations
+- Example: Always use `IF NOT EXISTS` for migrations
+- Example: Export types from actions.ts for UI components
 
-Brief understanding of the request
-Files that should change
-Short plan
-Code changes
-Validation steps
-Risks or follow-ups, only if relevant
+Only add patterns that are general and reusable, not story-specific details.
 
-For very small tasks, you may skip the formal plan and go straight to the edit.
+## Update AGENTS.md Files
 
-Project Goal
+Before committing, check if any edited files have learnings worth preserving in nearby AGENTS.md files:
 
-This project validates patrimonial and inventory spreadsheets using:
+1. Identify directories with edited files - Look at which directories you modified
+2. Check for existing AGENTS.md - Look for AGENTS.md in those directories or parent directories
+3. Add valuable learnings - If you discovered something future developers/agents should know:
+- API patterns or conventions specific to that module
+- Gotchas or non-obvious requirements
+- Dependencies between files
+- Testing approaches for that area
+- Configuration or environment requirements
 
-a shared canonical domain
-tenant-specific configuration
-deterministic validation rules
-category-based checks
-optional LLM audit
-asynchronous jobs
-operational reports
-Canonical Domain
+**Examples of good AGENTS.md additions:**
 
-Preserve these canonical fields as stable domain concepts:
+- "When modifying X, also update Y to keep them in sync"
+- "This module uses pattern Z for all API calls"
+- "Tests require the dev server running on PORT 3000"
+- "Field names must match the template exactly"
 
-Item
-Placa Anterior
-Descrição
-Marca
-Modelo
-NS
-Local
-CC
-Complemento
-Observação
+**Do NOT add:**
 
-Preserve these derived concepts:
+- Story-specific implementation details
+- Temporary debugging notes
+- Information already in progress.txt
 
-flag_item_coletado
-flag_item_cadastrado_do_zero
+Only update AGENTS.md if you have **genuinely reusable knowledge** that would help future work in that directory.
 
-Do not rename or reinterpret these concepts unless the user explicitly asks for it.
+## Quality Requirements
+- ALL commits must pass your project's quality checks (typecheck, lint, test)
+- Do NOT commit broken code
+- Keep changes focused and minimal
+- Follow existing code patterns
 
-Architecture Guardrails
-Keep one generic validation engine
-Do not hardcode tenant names in the core engine
-Prefer configuration-driven behavior over branching by tenant
-Keep API, validation rules, report rendering, file parsing, and job orchestration separated
-Prefer reusable abstractions over special-case logic
-Do not duplicate engine logic per tenant
-Keep tenant-specific behavior in config whenever possible
-Multi-Tenant Rules
+## Browser Testing (If Available)
 
-Tenant-specific variation should prefer configuration for:
+For any story that changes UI, verify it works in the browser if you have browser testing tools configured (e.g., via MCP):
 
-column mapping
-enabled and disabled rules
-thresholds
-categories
-critical checks
-LLM settings
-prompt selection
-normalization dictionaries for canonical text fields
-brand/model consistency dictionaries keyed by canonical model when tenant rules need to infer expected Marca from Modelo
-new tenant-owned rule dictionaries/lists should prefer typed Pydantic sub-models in `app/core/tenant_config.py`, and regex-like entries should be validated at tenant load time
+1. Navigate to the relevant page
+2. Verify the UI changes work as expected
+3. Take a screenshot if helpful for the progress log
 
-Keep a working default tenant at all times.
+If no browser tools are available, note in your progress report that manual browser verification is needed.
 
-When changing tenant-facing behavior:
+## Stop Condition
 
-preserve canonical field semantics
-avoid tenant-specific conditionals in core modules
-update the default tenant example if the configuration contract changes
-derive upload/result/report filesystem paths through shared tenant-scoped helpers and keep legacy read fallbacks during path-layout migrations
-Scope Control
-Change only the files needed for the task
-Do not refactor unrelated areas
-Do not silently expand the task into adjacent features
-If you notice architectural debt outside the request, mention it briefly instead of fixing it automatically
-Prefer the smallest correct architectural move
-Rule Design Guidance
+After completing a user story, check if ALL stories have passes: true.
 
-Rules should operate on normalized canonical data.
+If ALL stories are complete and passing, reply with:
+<promise>COMPLETE</promise>
 
-Prefer a reusable rule contract such as:
+If there are still stories with passes: false, end your response normally (another iteration will pick up the next story).
 
-applies(context) -> bool
-validate(context) -> list[Issue]
+## Important
+- Work on ONE story per iteration
+- Commit frequently
+- Keep CI green
+- Read the Codebase Patterns section in progress.txt before starting
 
-Rules should not directly:
+## Architecture Guardrails
+- Preserve the canonical inventory fields defined in prd.json
+- Preserve these canonical fields as stable domain concepts:
+  - Item
+  - Placa Anterior
+  - Descrição
+  - Marca
+  - Modelo
+  - NS
+  - Local
+  - CC
+  - Complemento
+  - Observação
+- Do not introduce tenant-specific logic directly in the core engine
+- Prefer configuration-driven behavior over branching by tenant
+- Keep API, validation rules, report rendering, file parsing, and job orchestration separated
+- New behavior should be added through reusable abstractions when possible
+- Prefer extending the generic engine over creating tenant-specific execution flows
 
-parse uploaded files
-handle FastAPI request objects
-generate reports
-orchestrate jobs
-depend on tenant names
+## Scope Control
+- Work on exactly one story per iteration
+- Do not refactor unrelated areas
+- Do not start the next story
+- If you find debt outside the current story, document it in progress.txt
+- Make the smallest correct architectural move that satisfies the current story
 
-Prefer registry-based rule loading over hardcoded execution chains.
+## Multi-Tenant Rules
+- Treat tenant-specific behavior as configuration unless code specialization is truly necessary
+- Do not hardcode tenant names in the validation core
+- Keep a working default tenant
+- Update seed tenant examples when tenant-facing config changes
+- Tenant-specific variation should prefer config for:
+  - column mapping
+  - enabled/disabled rules
+  - thresholds
+  - categories
+  - critical checks
+  - LLM settings
+  - prompt selection
 
-Engine Design Guidance
-Normalize source input into canonical field names before rule execution
-Apply tenant-configured Marca/Modelo alias normalization before rules and preserve the pre-normalized source values in ValidationContext.raw_row
-Derive shared flags and shared context before running row-level rules
-Load rules from tenant configuration
-Keep one generic validation engine
-If a new shared concept is introduced, place it in the domain or core layer instead of embedding it in a route or worker
-API Guidance
-Keep API handlers thin
-API endpoints should delegate orchestration to services
-API code should not contain validation business rules
-API code should not know tenant-specific rule details beyond selecting the tenant or config
-Tenant-scoped API auth should derive tenant context from the API key; request `tenant_id` values are hints and must be rejected on mismatch
-Login-issued API keys should be issued and resolved through `app/services/auth_service.py`; tenant operator credentials belong in `TenantConfig.operators` as password hashes, and issued key persistence must store only key hashes
-Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` should emit audit events on issue/expire/revoke/renew and the middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`
-Session renewal must route through `AuthService.renew_api_key` so the previous key is invalidated in the same transaction as the new one and an `api_key_renewed` audit event links predecessor to successor; expose it through a dedicated authenticated endpoint so the frontend can renew without forcing a logout
-When persisting auth-related operational metadata, store the configured `api_key_id` and never the raw `X-API-Key` secret
-Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep operational probes like `/health` public
-Observability Guidance
-Keep Prometheus wiring centralized in `app/core/metrics.py`
-Metrics must stay opt-in via `VALIDATOR_METRICS_ENABLED`
-Never use `job_id`, `request_id`, or other per-request values as Prometheus labels
-Expose `/metrics` from the API layer only; services and rules should call helper functions instead of importing `prometheus_client` directly
-Keep `/health` thin by delegating probes to `app/core/health.py`
-Treat uploads/results/job_store as critical health checks; keep LLM reachability probes opt-in per tenant via `llm.healthcheck_enabled` and conservative enough to avoid full audit completions
-Reporting Guidance
-Reports should be practical for operational correction workflows
-Report formatting should be separated from validation logic
-Prefer structured issue data over report-specific logic inside rules
-Avoid coupling report generation tightly to rule internals
-Mutable operator annotations over completed results should live as tenant-scoped sidecar files and be overlaid when the result payload is read, not written into immutable result JSON/PDF artifacts
-LLM prompts may carry YAML frontmatter with `version`; keep legacy prompt files working with a default version and propagate `prompt_version` plus `model` through structured issue/report metadata instead of ad-hoc report-only fields
-LLM response cache TTL belongs in `tenant.llm.cache_ttl_seconds`; keep cache key/persistence helpers centralized in `app/core/llm_cache.py`, use `VALIDATOR_LLM_CACHE_PATH` for storage location, and treat `force_refresh` as a job/API param that bypasses cache reads while refreshing successful writes
-LLM fallback model selection belongs in `tenant.llm.fallback_model`; retries should stay narrow to transient failures such as timeouts, HTTP 429, and HTTP 5xx, and failure issues should preserve the attempted model sequence
-Frontend Guidance
-Keep operational result filtering/search behavior in `frontend/src/lib/presentation.ts` helpers over the existing result payload, then let workspace components handle only state and rendering.
-Keep result review-marker filtering in `frontend/src/lib/presentation.ts` helpers over `review_flags`; workspace components should only own local toggle/filter state and rendering.
-When filtering result categories in the frontend, derive available categories from `CATEGORY_*` issue codes in the existing grouped problem payload unless the backend contract explicitly grows a category field.
-Reset local result filters/search when `currentJobId` changes so operators do not carry stale views between jobs.
-Keep frontend authentication plumbing centralized in `frontend/src/lib/api.ts`: `/login` is the only unauthenticated flow, and the rest of the workspace should consume the issued `X-API-Key` through shared helpers instead of ad hoc fetch calls.
-Protected frontend downloads must also go through shared helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
-Improvement Workflow
+## Domain Preservation
 
-When the user asks for an improvement:
+- Preserve canonical field meanings
+- Preserve the distinction between collected items and zero-created items
+- Preserve these derived concepts:
+  - flag_item_coletado
+  - flag_item_cadastrado_do_zero
+- Do not rename or reinterpret core domain concepts unless required by the story
+- Preserve deterministic validation as first-class behavior
+- Preserve category-aware validation behavior
+- Preserve job-based processing as a core system capability
+- Preserve operations-friendly outputs and reporting
 
-First understand whether it belongs to:
-core
-rules
-services
-API
-tenants
-workers
-tests
-Then choose one of these modes:
+## Rule Design Guidance
 
-Understanding mode
-Use when the user wants explanation, diagnosis, or architecture guidance.
-Explain the current flow before proposing changes.
+- Rules should operate on normalized canonical data
+- Prefer a reusable rule contract such as:
+  - applies(context) -> bool
+  - validate(context) -> list[Issue]
+- Rules should not directly:
+  - parse uploaded files
+  - handle FastAPI request objects
+  - generate reports
+  - orchestrate jobs
+  - depend on tenant names
+- Prefer registry-based rule loading over hardcoded execution chains
 
-Edit mode
-Use when the user wants a direct implementation.
-Change only the necessary files and preserve current behavior unless asked otherwise.
+## Engine Design Guidance
+- Normalize source input into canonical field names before rule execution
+- Derive shared flags and shared context before running row-level rules
+- Load rules from tenant configuration
+- Keep one generic validation engine
+- Do not duplicate engine logic per tenant
+- If a story introduces a new shared concept, place it in the domain/core layer instead of embedding it in a route or worker
 
-Review mode
-Use when the user wants feedback on existing code.
-Point out risks, inconsistencies, missing tests, and architectural issues before suggesting edits.
+## API Guidance
+- Keep API handlers thin
+- API endpoints should delegate orchestration to services
+- API code should not contain validation business rules
+- API code should not know tenant-specific rule details beyond selecting the tenant/config
 
-Planning Rule
+## Reporting Guidance
+- Reports should be practical for operational correction workflows
+- Report formatting should be separated from validation logic
+- Avoid coupling report generation to specific rule internals more than necessary
+- If a validation issue needs to appear in reports, prefer structured issue data over report-specific logic inside rules
 
-If a task touches more than 2 files, changes architecture, or introduces a new abstraction:
-provide a short plan before editing.
+## Failure Handling
+- Do not commit if required checks fail
+- If failures are unrelated and pre-existing, document them clearly in progress.txt
+- Only mark passes: true when the story is fully complete and checks pass
+- If a story is partially implemented, leave passes: false and explain the gap in progress.txt and/or prd.json notes when appropriate
 
-A good plan should include:
+## Requirement Discipline
+- Do not invent features outside the current story or PRD
+- Use the most conservative valid interpretation of ambiguous requirements
+- Record assumptions in progress.txt
+- If a shortcut is necessary to unblock the current story, document that it is a temporary bridge rather than silently treating it as final architecture
 
-what will change
-why those files are the right place
-how behavior will be preserved
-how the change will be validated
-Testing Expectations
-Prefer focused tests for the layer being changed
-Core changes should have core tests
-Rule changes should have rule tests
-Tenant config changes should have loader or config tests
-API changes should keep handlers thin and test behavior at the right layer
-Job changes should verify lifecycle transitions and persisted metadata
-Do not skip tests for shared abstractions that affect future work
-Validation Expectations
+## Testing Expectations
+- Prefer focused tests for the layer touched by the story
+- For core or rule changes, add or update automated tests
+- For tenant config changes, test valid and invalid loading paths when relevant
+- For API changes, keep handlers thin and test behavior at the appropriate layer
+- For job changes, verify lifecycle transitions and persisted metadata
+- Do not skip tests for shared abstractions that will affect future stories
 
-Before considering a change complete, suggest the most relevant checks, such as:
+## Project Structure Intent
 
-typecheck
-lint
-unit tests
-API tests
-focused manual verification steps
+As the codebase evolves, prefer this separation:
 
-If you cannot run something, say so clearly and still provide the correct command.
+- app/core/ for canonical domain, tenant config, context, issues, engine, registry
+- app/rules/ for rule implementations
+- app/services/ for orchestration services
+- app/api/ for FastAPI routes and schemas
+- app/workers/ for job/background processing
+- app/tenants/ for tenant configs and prompt files
+- tests/ mirroring application structure
 
-Progress and Memory
+Do not create unnecessary top-level directories if an existing module is the right home.
 
-Use progress.txt as lightweight project memory.
+## Commit Discipline
+- Commit only after checks pass
+- Keep the commit focused on the current story
+- The commit message must be exactly:
+  - feat: [Story ID] - [Story Title]
 
-Read it before larger tasks.
-When the user asks for substantial changes, align suggestions with existing Codebase Patterns.
+## End-of-Iteration Expectations
 
-Do not rewrite progress.txt unless explicitly asked.
-Do not invent history.
+At the end of the iteration:
 
-Requirement Discipline
-Do not invent features outside the user’s request
-Use the most conservative valid interpretation when requirements are ambiguous
-State assumptions explicitly
-If a shortcut is used, label it clearly as a temporary bridge rather than final architecture
-Commit Discipline
-
-Do not commit unless the user explicitly asks you to commit.
-
-If the user asks for a commit:
-
-make sure the requested checks have passed
-keep the commit focused
-use a clear commit message
-Project Structure Intent
-
-Prefer this separation as the codebase evolves:
-
-app/core for canonical domain, tenant config, context, issues, engine, registry
-app/rules for rule implementations
-app/services for orchestration services
-app/api for FastAPI routes and schemas
-app/tenants for tenant configs and prompt files
-app/workers for jobs and background processing
-tests mirroring application structure
-
-Do not create unnecessary top-level directories when an existing module is the correct home.
-
-What Good Help Looks Like Here
-
-Good help in this repository means:
-
-understanding the existing architecture before editing
-preserving domain semantics
-keeping multi-tenant behavior configuration-driven
-making targeted improvements
-avoiding unnecessary rewrites
-improving clarity, safety, and testability
-When in Doubt
-
-When in doubt:
-
-ask whether the user wants explanation, plan, implementation, or review
-prefer smaller changes
-preserve existing behavior
-avoid architectural shortcuts that hardcode tenant behavior into the core
+- ensure progress.txt was appended, not rewritten
+- ensure prd.json reflects the story status accurately
+- ensure reusable learnings are promoted to ## Codebase Patterns only when they are truly general
+- ensure any AGENTS.md updates contain reusable local knowledge, not story notes

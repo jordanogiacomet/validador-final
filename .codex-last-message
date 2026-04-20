@@ -1,0 +1,5 @@
+Implementada a `US-046` com paralelização controlada da fase segura de `llm_audit`, mantendo regras cross-row e agregações compartilhadas no passe serial da mesma `ValidationEngine`. Também adicionei `llm.parallel_requests`, merge determinístico de metadados LLM, lock por caminho no cache local e testes de equivalência serial/paralela e ganho de throughput. O PRD foi atualizado, o `progress.txt` recebeu a entrada da story e o commit criado foi `35b8a5e` com a mensagem exigida.
+
+Checks executados com sucesso: `ruff check --fix app tests`, `ruff check app tests`, `pytest tests/test_engine.py tests/test_llm_cache.py tests/test_tenant.py tests/test_validation_service.py -q` e `pytest -q`. Permaneceram fora do commit mudanças locais não relacionadas em `AGENTS.md`, `ralph.sh` e `frontend/.env.local`.
+
+<promise>COMPLETE</promise>
