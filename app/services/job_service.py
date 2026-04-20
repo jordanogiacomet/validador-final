@@ -344,6 +344,12 @@ class JobService:
             if job.tenant_id != resolved_tenant_id:
                 job.tenant_id = resolved_tenant_id
                 updated = True
+            if job.status == JobStatus.RUNNING and job.cancel_requested:
+                job.mark_canceled(
+                    "O cancelamento solicitado anteriormente foi finalizado ao "
+                    "recarregar o serviço."
+                )
+                updated = True
             self._jobs[job.job_id] = job
 
         if updated:

@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.core.canonical_fields import normalize_row
@@ -13,7 +14,17 @@ from app.core.validation_scope import DEFAULT_VALIDATION_SCOPE, ValidationScope
 from app.rules.base import BaseRule
 
 RowType = dict[str, str | int | float | None]
+CancellationCheckpoint = Callable[[], None]
 PARALLEL_SAFE_RULE_NAMES = frozenset({"llm_audit"})
+CHECKPOINT_INTERVAL = 1000
+
+
+def _maybe_run_checkpoint(
+    checkpoint: CancellationCheckpoint | None,
+    offset: int,
+) -> None:
+    if checkpoint is not None and offset % CHECKPOINT_INTERVAL == 0:
+        checkpoint()
 
 
 @dataclass(frozen=True)
@@ -93,6 +104,7 @@ class ValidationEngine:
         all_rows: list[dict[str, str | int | float | None]] | None = None,
         shared_context: dict | None = None,
         rule_names: tuple[str, ...] | list[str] | None = None,
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
     ) -> list[ValidationIssue]:
         source_shared_context = shared_context if shared_context is not None else {}
         context = ValidationContext(
@@ -107,9 +119,13 @@ class ValidationEngine:
         issues: list[ValidationIssue] = []
 
         for rule in self.get_enabled_rules(rule_names=rule_names):
+            if cancellation_checkpoint is not None:
+                cancellation_checkpoint()
             if rule.applies(context):
                 started_at = time.perf_counter()
                 rule_issues = rule.validate(context)
+                if cancellation_checkpoint is not None:
+                    cancellation_checkpoint()
                 record_rule_execution(
                     self.tenant.tenant_id,
                     rule.name,
@@ -127,15 +143,38 @@ class ValidationEngine:
     def normalize_rows(
         self,
         raw_rows: list[dict[str, object]],
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
     ) -> list[RowType]:
-        return [
-            normalize_row(
-                row,
-                self.tenant.columns,
-                self.brand_model_normalizer,
+        normalized_rows: list[RowType] = []
+        for offset, row in enumerate(raw_rows):
+            _maybe_run_checkpoint(cancellation_checkpoint, offset)
+            normalized_rows.append(
+                normalize_row(
+                    row,
+                    self.tenant.columns,
+                    self.brand_model_normalizer,
+                )
             )
-            for row in raw_rows
-        ]
+
+        if cancellation_checkpoint is not None:
+            cancellation_checkpoint()
+        return normalized_rows
+
+    def normalize_row(
+        self,
+        row: dict[str, object],
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
+    ) -> RowType:
+        if cancellation_checkpoint is not None:
+            cancellation_checkpoint()
+        normalized_row = normalize_row(
+            row,
+            self.tenant.columns,
+            self.brand_model_normalizer,
+        )
+        if cancellation_checkpoint is not None:
+            cancellation_checkpoint()
+        return normalized_row
 
     def is_row_in_scope(
         self,
@@ -151,15 +190,23 @@ class ValidationEngine:
         self,
         normalized_rows: list[RowType],
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
     ) -> list[int]:
         if validation_scope == ValidationScope.DUPLICATE_ITEMS:
-            return get_duplicate_item_row_indices(normalized_rows)
+            return get_duplicate_item_row_indices(
+                normalized_rows,
+                checkpoint=cancellation_checkpoint,
+            )
 
-        return [
-            idx
-            for idx, normalized_row in enumerate(normalized_rows)
-            if self.is_row_in_scope(normalized_row, validation_scope=validation_scope)
-        ]
+        scoped_indices: list[int] = []
+        for offset, normalized_row in enumerate(normalized_rows):
+            _maybe_run_checkpoint(cancellation_checkpoint, offset)
+            if self.is_row_in_scope(normalized_row, validation_scope=validation_scope):
+                scoped_indices.append(offset)
+
+        if cancellation_checkpoint is not None:
+            cancellation_checkpoint()
+        return scoped_indices
 
     def validate_normalized_rows(
         self,
@@ -167,10 +214,12 @@ class ValidationEngine:
         raw_rows: list[dict[str, object]] | None = None,
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
         rule_names: tuple[str, ...] | list[str] | None = None,
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
     ) -> dict[int, list[ValidationIssue]]:
         scope_row_indices = self.get_scoped_row_indices(
             normalized_rows,
             validation_scope=validation_scope,
+            cancellation_checkpoint=cancellation_checkpoint,
         )
         scope_rows = [normalized_rows[idx] for idx in scope_row_indices]
 
@@ -184,6 +233,7 @@ class ValidationEngine:
                 all_rows=scope_rows,
                 shared_context=shared_context,
                 rule_names=rule_names,
+                cancellation_checkpoint=cancellation_checkpoint,
             )
             results[idx] = issues
 
@@ -194,11 +244,16 @@ class ValidationEngine:
         raw_rows: list[dict[str, object]],
         validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
         rule_names: tuple[str, ...] | list[str] | None = None,
+        cancellation_checkpoint: CancellationCheckpoint | None = None,
     ) -> dict[int, list[ValidationIssue]]:
-        normalized_rows = self.normalize_rows(raw_rows)
+        normalized_rows = self.normalize_rows(
+            raw_rows,
+            cancellation_checkpoint=cancellation_checkpoint,
+        )
         return self.validate_normalized_rows(
             normalized_rows,
             raw_rows=raw_rows,
             validation_scope=validation_scope,
             rule_names=rule_names,
+            cancellation_checkpoint=cancellation_checkpoint,
         )

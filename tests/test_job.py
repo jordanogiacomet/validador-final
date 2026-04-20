@@ -429,6 +429,39 @@ class TestJobService:
         assert reloaded_job.rows_with_issues == 2
         assert reloaded_job.total_issues == 3
 
+    def test_file_backed_service_recovers_running_cancel_requested_job_on_load(
+        self,
+        tmp_path,
+    ):
+        storage_path = tmp_path / "jobs.json"
+        service = JobService(storage_path=storage_path)
+        job = service.create_job(tenant_id="default", file_name="lote.csv")
+
+        service.start_job(job.job_id)
+        service.update_partial_result(
+            job.job_id,
+            total_rows=100,
+            source_total_rows=120,
+            processed_rows=40,
+            batch_size=10,
+            partial_summary={"total_rows": 100, "processed_rows": 40},
+            current_step="validating_batches",
+            status_title="Prévia operacional em atualização",
+            status_detail="40 de 100 linhas já foram validadas.",
+        )
+        service.request_job_cancellation(job.job_id)
+
+        reloaded_job = JobService(storage_path=storage_path).get_job(job.job_id)
+
+        assert reloaded_job is not None
+        assert reloaded_job.status == JobStatus.CANCELED
+        assert reloaded_job.cancel_requested is False
+        assert reloaded_job.total_rows == 100
+        assert reloaded_job.source_total_rows == 120
+        assert reloaded_job.processed_rows == 40
+        assert reloaded_job.status_title == "Processamento cancelado"
+        assert "recarregar o serviço" in (reloaded_job.status_detail or "")
+
     def test_save_job_persists_external_file_path_assignment(self, tmp_path):
         storage_path = tmp_path / "jobs.json"
         service = JobService(storage_path=storage_path)

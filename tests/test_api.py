@@ -751,6 +751,27 @@ def test_cancel_job_marks_running_job_as_cancel_requested():
     assert payload["status_title"] == "Cancelamento solicitado"
 
 
+def test_cancel_job_reaches_canceled_after_worker_observes_request():
+    job = job_service.create_job(tenant_id="default", file_name="lote.csv")
+    job_service.start_job(job.job_id)
+
+    cancel_response = client.post(
+        f"/jobs/{job.job_id}/cancel",
+        headers=auth_headers(),
+    )
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["cancel_requested"] is True
+
+    run_validation_job(job.job_id, job_service)
+
+    status_response = client.get(f"/jobs/{job.job_id}", headers=auth_headers())
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["status"] == "canceled"
+    assert payload["cancel_requested"] is False
+    assert payload["status_title"] == "Processamento cancelado"
+
+
 def test_cancel_job_rejects_completed_job():
     job = job_service.create_job(tenant_id="default")
     job.mark_running()

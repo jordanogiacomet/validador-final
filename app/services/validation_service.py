@@ -4,7 +4,8 @@ import math
 import re
 import shutil
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -55,8 +56,12 @@ RESULTS_DIR = Path("results")
 DEFAULT_BATCH_SIZE = 200
 TARGET_PREVIEW_BATCHES = 10
 REVIEW_FLAGS_FILE_NAME = "review_flags.json"
+CSV_READ_CHUNK_SIZE = 5000
+COOPERATIVE_CHECKPOINT_ROW_INTERVAL = 1000
+PARALLEL_CANCELLATION_POLL_SECONDS = 0.1
 
 _logger = get_logger("validation_service")
+CancellationCheckpoint = Callable[[], None]
 
 
 @dataclass
@@ -248,6 +253,37 @@ def _read_tenant_csv(file_path: Path, tenant_config: TenantConfig) -> pd.DataFra
     return df
 
 
+def _read_tenant_csv_for_job(
+    file_path: Path,
+    tenant_config: TenantConfig,
+    cancellation_checkpoint: CancellationCheckpoint,
+) -> pd.DataFrame:
+    cancellation_checkpoint()
+    raw_headers = _read_raw_csv_headers(file_path, tenant_config)
+    cancellation_checkpoint()
+
+    reader = pd.read_csv(
+        file_path,
+        dtype=str,
+        chunksize=CSV_READ_CHUNK_SIZE,
+        **_build_csv_read_kwargs(tenant_config),
+    )
+    chunks: list[pd.DataFrame] = []
+    for chunk in reader:
+        cancellation_checkpoint()
+        chunks.append(chunk)
+
+    df = (
+        pd.concat(chunks, ignore_index=True)
+        if chunks
+        else pd.DataFrame(columns=raw_headers)
+    )
+    if raw_headers and len(raw_headers) == len(df.columns):
+        df.columns = raw_headers
+    cancellation_checkpoint()
+    return df
+
+
 def _write_tenant_csv(
     df: pd.DataFrame,
     file_path: Path,
@@ -261,11 +297,27 @@ def _write_tenant_csv(
     )
 
 
-def _dataframe_to_raw_rows(df: pd.DataFrame) -> list[dict[str, object]]:
-    return [
-        dict(zip(df.columns, row, strict=False))
-        for row in df.itertuples(index=False, name=None)
-    ]
+def _dataframe_to_raw_rows(
+    df: pd.DataFrame,
+    cancellation_checkpoint: CancellationCheckpoint | None = None,
+) -> list[dict[str, object]]:
+    raw_rows: list[dict[str, object]] = []
+    for offset, row in enumerate(df.itertuples(index=False, name=None)):
+        if (
+            cancellation_checkpoint is not None
+            and offset % COOPERATIVE_CHECKPOINT_ROW_INTERVAL == 0
+        ):
+            cancellation_checkpoint()
+        raw_rows.append(dict(zip(df.columns, row, strict=False)))
+
+    if cancellation_checkpoint is not None:
+        cancellation_checkpoint()
+    return raw_rows
+
+
+def _cleanup_temp_artifacts(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 class JobCancellationRequestedError(Exception):
@@ -333,6 +385,7 @@ def _validate_parallel_rule_batch(
     base_shared_context: dict,
     shared_context: dict,
     max_workers: int,
+    cancellation_checkpoint: CancellationCheckpoint,
 ) -> dict[int, list[ValidationIssue]]:
     if not batch_indices or not rule_names:
         return {}
@@ -351,16 +404,45 @@ def _validate_parallel_rule_batch(
         )
         return issues, _extract_llm_audit_metadata(row_shared_context)
 
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    future_to_row_index: dict[
+        Future[tuple[list[ValidationIssue], dict[str, list[str]] | None]],
+        int,
+    ] = {
+        executor.submit(_validate_row_with_isolated_context, row_index): row_index
+        for row_index in batch_indices
+    }
+    pending = set(future_to_row_index)
+    batch_results: dict[
+        int,
+        tuple[list[ValidationIssue], dict[str, list[str]] | None],
+    ] = {}
+
+    try:
+        while pending:
+            cancellation_checkpoint()
+            done, pending = wait(
+                pending,
+                timeout=PARALLEL_CANCELLATION_POLL_SECONDS,
+                return_when=FIRST_COMPLETED,
+            )
+            for future in done:
+                row_index = future_to_row_index[future]
+                batch_results[row_index] = future.result()
+        cancellation_checkpoint()
+    except BaseException:
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+
     results: dict[int, list[ValidationIssue]] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            row_index: executor.submit(_validate_row_with_isolated_context, row_index)
-            for row_index in batch_indices
-        }
-        for row_index in batch_indices:
-            issues, metadata = futures[row_index].result()
-            merge_llm_audit_metadata(shared_context, metadata)
-            results[row_index] = issues
+    for row_index in batch_indices:
+        issues, metadata = batch_results[row_index]
+        merge_llm_audit_metadata(shared_context, metadata)
+        results[row_index] = issues
 
     return results
 
@@ -1287,6 +1369,11 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         return
 
     started_at = datetime.now(UTC)
+    temp_artifact_paths: list[Path] = []
+
+    def cancellation_checkpoint() -> None:
+        _raise_if_cancellation_requested(job_id, job_service)
+
     log_event(
         _logger,
         "validation.started",
@@ -1295,9 +1382,9 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
     )
 
     try:
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
         job_service.start_job(job_id)
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
 
         ensure_rules_registered()
 
@@ -1306,8 +1393,15 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         validation_scope = _get_job_validation_scope(job)
 
         file_path = Path(job.file_path)  # type: ignore[arg-type]
-        df = _read_tenant_csv(file_path, tenant_config)
-        raw_rows = _dataframe_to_raw_rows(df)
+        df = _read_tenant_csv_for_job(
+            file_path,
+            tenant_config,
+            cancellation_checkpoint,
+        )
+        raw_rows = _dataframe_to_raw_rows(
+            df,
+            cancellation_checkpoint=cancellation_checkpoint,
+        )
 
         job_service.update_progress(
             job_id=job_id,
@@ -1315,12 +1409,16 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             status_title="Indexação global do lote",
             status_detail=_build_scope_indexing_detail(validation_scope),
         )
-        _raise_if_cancellation_requested(job_id, job_service)
-        normalized_rows = engine.normalize_rows(raw_rows)
+        cancellation_checkpoint()
+        normalized_rows = engine.normalize_rows(
+            raw_rows,
+            cancellation_checkpoint=cancellation_checkpoint,
+        )
         source_total_rows = len(normalized_rows)
         scoped_row_indices = engine.get_scoped_row_indices(
             normalized_rows,
             validation_scope=validation_scope,
+            cancellation_checkpoint=cancellation_checkpoint,
         )
         scoped_rows = [normalized_rows[idx] for idx in scoped_row_indices]
         total_rows = len(scoped_row_indices)
@@ -1373,15 +1471,15 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                 validation_scope,
             ),
         )
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
 
         for start in range(0, total_rows, batch_size):
-            _raise_if_cancellation_requested(job_id, job_service)
+            cancellation_checkpoint()
             stop = min(start + batch_size, total_rows)
             batch_indices = scoped_row_indices[start:stop]
 
             for idx in batch_indices:
-                _raise_if_cancellation_requested(job_id, job_service)
+                cancellation_checkpoint()
                 validation_results[idx] = []
                 if execution_plan.serial_rule_names:
                     validation_results[idx] = engine.validate_row(
@@ -1391,7 +1489,9 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                         all_rows=scoped_rows,
                         shared_context=shared_context,
                         rule_names=execution_plan.serial_rule_names,
+                        cancellation_checkpoint=cancellation_checkpoint,
                     )
+                cancellation_checkpoint()
 
             if execution_plan.parallel_rule_names:
                 parallel_results = _validate_parallel_rule_batch(
@@ -1404,9 +1504,11 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                     base_shared_context=shared_context,
                     shared_context=shared_context,
                     max_workers=execution_plan.parallel_workers,
+                    cancellation_checkpoint=cancellation_checkpoint,
                 )
                 for idx in batch_indices:
                     validation_results[idx].extend(parallel_results.get(idx, []))
+                cancellation_checkpoint()
 
             processed_row_indices.extend(batch_indices)
             partial_report = build_partial_report(
@@ -1442,7 +1544,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
                     source_total_rows,
                 ),
             )
-            _raise_if_cancellation_requested(job_id, job_service)
+            cancellation_checkpoint()
 
         report_data = build_full_report(
             normalized_rows,
@@ -1451,7 +1553,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             source_total_rows=source_total_rows,
             llm_audit_metadata=shared_context.get(LLM_AUDIT_METADATA_KEY),
         )
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
 
         job_service.update_progress(
             job_id=job_id,
@@ -1459,17 +1561,25 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             status_title="Consolidação dos artefatos",
             status_detail=_build_scope_artifact_detail(validation_scope),
         )
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
 
         result_path = build_job_result_path(job.tenant_id, job_id)
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_text(json.dumps(report_data, ensure_ascii=False, default=str))
+        result_temp_path = result_path.with_name(f"{result_path.name}.tmp")
+        temp_artifact_paths.append(result_temp_path)
+        result_temp_path.write_text(
+            json.dumps(report_data, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        cancellation_checkpoint()
 
         pdf_path = build_job_report_path(job.tenant_id, job_id)
+        pdf_temp_path = pdf_path.with_name(f"{pdf_path.name}.tmp")
+        temp_artifact_paths.append(pdf_temp_path)
         generate_pdf_report(
             normalized_rows,
             validation_results,
-            pdf_path,
+            pdf_temp_path,
             metadata={
                 "organization_name": tenant_config.display_name,
                 "file_name": job.file_name,
@@ -1481,7 +1591,11 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             validation_scope=validation_scope,
             llm_audit_metadata=shared_context.get(LLM_AUDIT_METADATA_KEY),
         )
-        _raise_if_cancellation_requested(job_id, job_service)
+        cancellation_checkpoint()
+
+        result_temp_path.replace(result_path)
+        pdf_temp_path.replace(pdf_path)
+        temp_artifact_paths.clear()
 
         summary = report_data["summary"]
         job_service.complete_job(
@@ -1503,6 +1617,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
         )
 
     except JobCancellationRequestedError as exc:
+        _cleanup_temp_artifacts(temp_artifact_paths)
         current_job = job_service.get_job(job_id)
         if current_job is not None and current_job.status != JobStatus.CANCELED:
             job_service.cancel_job(job_id, str(exc))
@@ -1516,6 +1631,7 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
             detail=str(exc),
         )
     except Exception as exc:
+        _cleanup_temp_artifacts(temp_artifact_paths)
         current_job = job_service.get_job(job_id)
         if current_job is not None and current_job.status != JobStatus.CANCELED:
             job_service.fail_job(job_id, str(exc))

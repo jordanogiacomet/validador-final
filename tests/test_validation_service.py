@@ -63,6 +63,18 @@ EMPRESA_EXEMPLO_LLM_BATCH_CONTENT = (
 )
 
 
+def build_default_csv_content(row_count: int) -> str:
+    rows = [
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação"
+    ]
+    for index in range(row_count):
+        rows.append(
+            f"{index:03},,Mesa,MarcaX,ModeloY,SN{index},Sala,CC,"
+            f"Detalhe completo {index},Obs"
+        )
+    return "\n".join(rows) + "\n"
+
+
 class RecordingJobService(JobService):
     def __init__(self) -> None:
         super().__init__()
@@ -995,6 +1007,57 @@ def test_run_validation_job_can_be_canceled_after_batch_checkpoint(
     assert updated_job.status_title == "Processamento cancelado"
     assert updated_job.result_path is None
     assert updated_job.report_path is None
+
+
+def test_run_validation_job_can_be_canceled_during_batch_processing(
+    tmp_path,
+    monkeypatch,
+):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+
+    csv_path = tmp_path / "lote.csv"
+    csv_path.write_text(build_default_csv_content(25), encoding="utf-8")
+
+    service = RecordingJobService()
+    job = service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "all_items"},
+    )
+    original_validate_row = validation_service.ValidationEngine.validate_row
+    cancellation_requested = False
+
+    def cancel_after_first_row(self, *args, **kwargs):
+        nonlocal cancellation_requested
+        result = original_validate_row(self, *args, **kwargs)
+        row_index = kwargs.get("row_index")
+        if row_index is None and args:
+            row_index = args[0]
+        if row_index == 0 and not cancellation_requested:
+            service.request_job_cancellation(job.job_id)
+            cancellation_requested = True
+        return result
+
+    monkeypatch.setattr(
+        validation_service.ValidationEngine,
+        "validate_row",
+        cancel_after_first_row,
+    )
+
+    run_validation_job(job.job_id, service)
+
+    updated_job = service.get_job(job.job_id)
+    assert updated_job is not None
+    assert updated_job.status == JobStatus.CANCELED
+    assert updated_job.cancel_requested is False
+    assert updated_job.total_rows == 25
+    assert updated_job.source_total_rows == 25
+    assert updated_job.result_path is None
+    assert updated_job.report_path is None
+    assert not any(results_dir.rglob("*_result.json"))
+    assert not any(results_dir.rglob("*_report.pdf"))
 
 
 def test_get_job_operational_export_builds_duplicates_csv_from_result(tmp_path):

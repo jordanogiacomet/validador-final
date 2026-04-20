@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-18 17:12 -03
+Last Updated: 2026-04-20 14:35 -02
 
 ---
 
@@ -63,6 +63,8 @@ Last Updated: 2026-04-18 17:12 -03
 - Prefer operator-facing labels like `empresa` and `lote` in the primary UI copy; reserve backend terms like `tenant` and `job` for technical or support contexts only.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
+- Validation job cancellation should use cooperative checkpoints through long service/engine loops; do not rely only on batch-end polling for large CSV reads, global indexing, row validation, or artifact preparation.
+- Persisted jobs loaded as `running` with `cancel_requested=true` should be finalized as `canceled` by `JobService` so restarts do not leave inactive work stuck as "Cancelando".
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
 - Environment-driven first-admin bootstrap should run through `AuthService` over persisted operator storage (`VALIDATOR_SQLITE_PATH` or `VALIDATOR_OPERATOR_STORE_PATH`), use `VALIDATOR_OFFICIAL_TENANT_ID` as the canonical tenant target, and stay idempotent unless `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true` is set explicitly.
@@ -941,4 +943,19 @@ Expected architectural direction:
   - Paralelize apenas fases realmente isoladas; regras que dependem de `all_rows` ou caches compartilhados devem continuar no passe serial para preservar semântica.
   - Metadados de auditoria LLM sem findings explícitos ainda precisam ser agregados fora das issues para manter JSON/PDF reprodutíveis entre execuções seriais e paralelas.
   - Cache local baseado em arquivo precisa de locking por caminho antes de suportar múltiplos workers na mesma API processando auditorias LLM em paralelo.
+---
+
+## 2026-04-20 14:35 -02 - HOTFIX-JOB-CANCELLATION
+- Corrigido o bug operacional em que lotes podiam permanecer indefinidamente com `status=running` e `cancel_requested=true` após o operador clicar em "Parar lote".
+- Adicionados checkpoints cooperativos no pipeline de validação para leitura chunked do CSV, preparação de linhas, normalização, indexação de escopo, validação serial por linha e monitoramento de batches paralelos.
+- A geração de artefatos finais passou a usar arquivos temporários e só publica JSON/PDF após novo checkpoint de cancelamento, evitando tratar cancelamentos como conclusão bem-sucedida.
+- `JobService` agora recupera registros persistidos como `running` + `cancel_requested=true` para `canceled` ao carregar o storage, preservando contadores úteis como `processed_rows`, `total_rows` e `source_total_rows`.
+- Files changed: `app/core/duplicate_items.py`, `app/core/engine.py`, `app/services/job_service.py`, `app/services/validation_service.py`, `tests/test_job.py`, `tests/test_validation_service.py`, `tests/test_api.py`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+- **Learnings for future iterations:**
+  - Cancelamento de jobs deve ser cooperativo e checado em loops longos, inclusive antes de publicar artefatos finais.
+  - Batches paralelos precisam ser monitorados pelo thread principal com timeout curto; usar apenas `future.result()` em ordem pode esconder `cancel_requested=true` até a chamada lenta terminar.
+  - Ao recarregar storage operacional, `running` + `cancel_requested=true` é uma intenção de cancelamento já confirmada pelo operador e deve ser finalizada de forma segura.
 ---
