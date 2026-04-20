@@ -30,30 +30,40 @@ export function UploadPanel({
   onFileChange,
   onSubmit,
 }: UploadPanelProps) {
+  const hasMultipleTenants = tenants.length > 1;
+  const selectedTenant = tenants.find((tenant) => tenant.tenant_id === selectedTenantId);
+
   return (
     <section className="panel control-card">
       <div className="panel-kicker">1. Enviar planilha</div>
       <h2 className="panel-title">Começar nova conferência</h2>
       <p className="panel-copy">
-        Escolha a empresa, selecione o CSV e diga o que deseja conferir. O restante acontece automaticamente.
+        Confirme a empresa da sessão, selecione o CSV e diga o que deseja conferir. O restante acontece automaticamente.
       </p>
 
       <form className="form-grid" onSubmit={onSubmit}>
         <div className="field">
           <label htmlFor="tenant">Empresa</label>
-          <select
-            id="tenant"
-            name="tenant_id"
-            value={selectedTenantId}
-            disabled={isTenantLoading}
-            onChange={(event) => onTenantChange(event.target.value)}
-          >
-            {tenants.map((tenant) => (
-              <option key={tenant.tenant_id} value={tenant.tenant_id}>
-                {tenant.display_name} ({tenant.tenant_id})
-              </option>
-            ))}
-          </select>
+          {hasMultipleTenants ? (
+            <select
+              id="tenant"
+              name="tenant_id"
+              value={selectedTenantId}
+              disabled={isTenantLoading}
+              onChange={(event) => onTenantChange(event.target.value)}
+            >
+              {tenants.map((tenant) => (
+                <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                  {tenant.display_name} ({tenant.tenant_id})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="tenant-context" id="tenant">
+              <strong>{selectedTenant?.display_name || selectedTenantId}</strong>
+              <span>{selectedTenantId}</span>
+            </div>
+          )}
           {tenantError ? <p className="inline-error">{tenantError}</p> : null}
         </div>
 

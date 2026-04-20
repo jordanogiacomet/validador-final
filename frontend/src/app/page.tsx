@@ -110,8 +110,8 @@ export default function HomePage() {
             <section className="panel session-card">
               <div className="session-meta">
                 <div className="panel-kicker panel-kicker-inline">Sessão ativa</div>
-                <strong>{session.tenant_id}</strong>
-                <p>{session.operator_id}</p>
+                <strong>Empresa {session.tenant_id}</strong>
+                <p>Operador {session.operator_id}</p>
               </div>
               <button className="action-button" type="button" onClick={handleLogout}>
                 Sair
@@ -143,7 +143,7 @@ export default function HomePage() {
                 </button>
               </section>
             ) : null}
-            <OperationalWorkspace />
+            <OperationalWorkspace initialTenantId={session.tenant_id} />
           </>
         ) : (
           <LoginScreen onAuthenticated={handleAuthenticated} />

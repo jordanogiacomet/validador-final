@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-20 14:35 -02
+Last Updated: 2026-04-20 15:05 -02
 
 ---
 
@@ -51,6 +51,7 @@ Last Updated: 2026-04-20 14:35 -02
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
 - Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via the shared SQLite store or the legacy `VALIDATOR_API_KEY_STORE_PATH` fallback, and middleware resolves issued keys before legacy tenant `api_keys`.
 - Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` owns issue/expire/revoke transitions plus audit emission, and middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`.
+- When issued API keys are persisted in shared storage, `AuthService.inspect_issued_api_key()` must reload records on cache miss before returning `MISSING`; otherwise a fresh login issued by another process/pod can be rejected immediately as `Invalid API key`.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
 - Tenant text alias dictionaries belong in `tenant.normalization`; normalize `Marca`/`Modelo` in the core pipeline before rules and preserve the original source values in `ValidationContext.raw_row`.
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
@@ -61,13 +62,17 @@ Last Updated: 2026-04-20 14:35 -02
 - Tenant-scoped operational panels in the frontend should fetch through authenticated helpers in `frontend/src/lib/api.ts` and keep local filter/reset behavior in `frontend/src/lib/presentation.ts`, resetting context-sensitive filters when the tenant or `currentJobId` changes.
 - For operator-facing frontend flows, keep the main path step-based (`Enviar planilha` -> `Acompanhar lote` -> `Revisar resultado`) and push secondary panels like audit behind an explicit disclosure to reduce visual noise.
 - Prefer operator-facing labels like `empresa` and `lote` in the primary UI copy; reserve backend terms like `tenant` and `job` for technical or support contexts only.
+- Frontend tenant-scoped workspaces must initialize their active tenant from the authenticated session, not from a hardcoded `default` fallback; otherwise optional panels can fire a mismatched tenant request before `/tenants` finishes loading and trigger false auth failures for non-default operators.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
+- Frontend session invalidation should react to true credential failures (`Invalid/Expired/Revoked API key`), not to generic `403` authorization mismatches like `API key does not grant access to tenant ...`; those should surface as local errors without logging the operator out.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Validation job cancellation should use cooperative checkpoints through long service/engine loops; do not rely only on batch-end polling for large CSV reads, global indexing, row validation, or artifact preparation.
 - Persisted jobs loaded as `running` with `cancel_requested=true` should be finalized as `canceled` by `JobService` so restarts do not leave inactive work stuck as "Cancelando".
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
 - Environment-driven first-admin bootstrap should run through `AuthService` over persisted operator storage (`VALIDATOR_SQLITE_PATH` or `VALIDATOR_OPERATOR_STORE_PATH`), use `VALIDATOR_OFFICIAL_TENANT_ID` as the canonical tenant target, and stay idempotent unless `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true` is set explicitly.
+- Public first-run setup routes are `GET /setup` and `POST /setup`; keep them unauthenticated in `app/api/auth.py`, backed by `AuthService`, and closed whenever any persisted operator record already exists.
+- First-run administrator setup must require persistent operator storage, store only password hashes and minimal operator metadata, use `VALIDATOR_SETUP_TOKEN` for optional published-environment protection, and use SQLite atomic insertion for cross-process single-use protection.
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 
@@ -945,6 +950,61 @@ Expected architectural direction:
   - Cache local baseado em arquivo precisa de locking por caminho antes de suportar múltiplos workers na mesma API processando auditorias LLM em paralelo.
 ---
 
+## 2026-04-20 10:10 -02 - HOTFIX-AUTH-ROLLING-DEPLOY
+- Corrigido o falso logout logo após login: `AuthService.inspect_issued_api_key()` agora recarrega o storage compartilhado de chaves emitidas quando a chave não está no cache local antes de retornar `MISSING`.
+- Adicionado teste cobrindo duas instâncias do `AuthService` apontando para o mesmo storage persistido para reproduzir o cenário de cache local defasado entre processos/pods.
+- Realizado deploy da API com a correção no namespace Kubernetes existente.
+- Files changed: `app/services/auth_service.py`, `tests/test_auth_service.py`, `progress.txt`
+- Deployed:
+  - API image: `ttl.sh/validador-final-api-20260420100602:24h`
+  - Namespace: `validador-final`
+  - Frontend URL reused unchanged: `http://192.168.0.20:30092`
+  - API URL: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final` rolled out successfully with the new API image
+  - Confirmed `GET http://127.0.0.1:30091/health` returned `status=ok`
+  - Confirmed `GET http://192.168.0.20:30091/health` returned `status=ok`
+  - Confirmed `POST /login` for `default/default.operator` returned an issued `X-API-Key`
+  - Confirmed authenticated `GET /tenants` succeeded immediately after login via both `127.0.0.1:30091` and `192.168.0.20:30091`
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (434 tests)
+- **Learnings for future iterations:**
+  - Em ambientes com persistência compartilhada de auth e mais de um processo/pod, tratar `Invalid API key` logo após um login válido como forte sinal de cache local defasado, não apenas de credencial incorreta.
+  - Para hotfixes só de backend, validar o fluxo publicado com `POST /login` seguido de uma rota protegida é uma checagem operacional mais fiel do que apenas consultar `/health`.
+  - Browser verification: no browser-testing connector was available in this session; manual UI verification of the full login -> funcionalidades flow is still recommended after deployment.
+---
+
+## 2026-04-20 10:23 -02 - HOTFIX-FRONTEND-TENANT-SESSION
+- Corrigido o retorno indevido para a tela de login no frontend quando o operador autenticado não pertence ao tenant `default`.
+- `OperationalWorkspace` agora inicializa o tenant ativo a partir do tenant da sessão autenticada, evitando que o `AuditPanel` dispare `GET /audit?tenant_id=default` antes de `/tenants` terminar de carregar.
+- Ajustada a invalidação automática de sessão em `frontend/src/lib/api.ts` para não derrubar o operador em `403` de autorização por tenant escopo; apenas falhas reais de credencial (`Invalid/Expired/Revoked API key`) limpam a sessão.
+- Adicionados testes cobrindo o repasse do tenant autenticado para o workspace e o comportamento de `403` sem logout automático.
+- Files changed: `frontend/src/app/page.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/lib/api.ts`, `frontend/src/app/page.test.tsx`, `frontend/src/lib/__tests__/api.test.ts`, `progress.txt`
+- Deployed:
+  - Frontend image: `ttl.sh/validador-final-frontend-20260420102012:24h`
+  - Namespace: `validador-final`
+  - Frontend URL: `http://192.168.0.20:30092`
+  - API URL reused unchanged: `http://192.168.0.20:30091`
+- Validation performed:
+  - Confirmed `deployment/validador-final-frontend` rolled out successfully with the new image
+  - Confirmed `GET http://192.168.0.20:30092` returned `HTTP/1.1 200 OK`
+  - Confirmed the published frontend is serving a new page chunk (`/_next/static/chunks/app/page-5a0b7bfd8763365b.js`)
+  - Confirmed `POST /login` with `redesim.operator` succeeded on the deployed API
+  - Confirmed authenticated `GET /tenants` returned only `redesim` for the same issued key
+  - Confirmed authenticated `GET /audit?tenant_id=redesim` succeeded and `GET /audit?tenant_id=default` still returns `403`, matching the scenario that previously triggered the false logout
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest` (434 tests)
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test` (64 tests)
+- **Learnings for future iterations:**
+  - Se um fluxo opcional do frontend depende do tenant atual, ele não deve chutar `default` antes de a sessão ou `/tenants` resolverem o contexto; esse tipo de fallback silencioso pode parecer bug de login quando o problema real é escopo incorreto na primeira chamada.
+  - `403` de autorização e `401` de credencial têm impactos operacionais diferentes; tratar ambos como “logout imediato” mascara o erro real e piora o diagnóstico em produção.
+  - Browser verification: no browser-testing connector was available in this session; manual UI verification of the `redesim` login flow is still recommended after deployment.
+---
+
 ## 2026-04-20 14:35 -02 - HOTFIX-JOB-CANCELLATION
 - Corrigido o bug operacional em que lotes podiam permanecer indefinidamente com `status=running` e `cancel_requested=true` após o operador clicar em "Parar lote".
 - Adicionados checkpoints cooperativos no pipeline de validação para leitura chunked do CSV, preparação de linhas, normalização, indexação de escopo, validação serial por linha e monitoramento de batches paralelos.
@@ -958,4 +1018,24 @@ Expected architectural direction:
   - Cancelamento de jobs deve ser cooperativo e checado em loops longos, inclusive antes de publicar artefatos finais.
   - Batches paralelos precisam ser monitorados pelo thread principal com timeout curto; usar apenas `future.result()` em ordem pode esconder `cancel_requested=true` até a chamada lenta terminar.
   - Ao recarregar storage operacional, `running` + `cancel_requested=true` é uma intenção de cancelamento já confirmada pelo operador e deve ser finalizada de forma segura.
+---
+
+## 2026-04-20 15:05 -02 - US-047
+- Implementado fluxo público e single-use de primeiro acesso: `GET /setup` expõe disponibilidade somente quando há storage persistente e nenhum operador persistido, e `POST /setup` cria o administrador inicial sem exigir `X-API-Key`.
+- `AuthService` agora centraliza a criação do administrador inicial, exige storage persistente, usa `VALIDATOR_OFFICIAL_TENANT_ID` com fallback para `default`, aceita proteção opcional por `VALIDATOR_SETUP_TOKEN`, persiste apenas hash da senha/metadados mínimos e registra `initial_admin_created` sem senha, token bruto ou segredo.
+- Adicionada proteção contra corrida: a criação usa lock no serviço e insert atômico no SQLite quando `VALIDATOR_SQLITE_PATH` está ativo, evitando que múltiplas requisições/processos criem mais de um primeiro administrador.
+- A tela de login agora consulta `/setup` sem autenticação e mostra um painel de primeiro acesso apenas quando disponível; após criação, o painel fecha e o formulário de login é preenchido com empresa/usuário criados.
+- Documentado o fluxo no `README.md` e adicionada variável opcional `VALIDATOR_SETUP_TOKEN` ao deployment Kubernetes.
+- Files changed: `app/services/auth_service.py`, `app/core/operational_sqlite.py`, `app/core/audit.py`, `app/api/auth.py`, `app/api/routes.py`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/components/login-screen.tsx`, `frontend/src/components/login-screen.test.tsx`, `frontend/src/lib/__tests__/api.test.ts`, `tests/test_auth_service.py`, `tests/test_api.py`, `README.md`, `deploy/k8s/deployment.yaml`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test` (76 tests)
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the first-run setup panel is still recommended before using it in a published environment.
+- **Learnings for future iterations:**
+  - O estado público de primeiro setup deve ser derivado de operadores persistidos, não dos operadores seed em YAML; seeds continuam como bootstrap legado, mas não devem reabrir ou fechar indevidamente o setup runtime.
+  - Rotas públicas novas precisam ser adicionadas explicitamente em `app/api/auth.py`, e helpers frontend correspondentes devem passar `includeAuth: false` para não vazar `X-API-Key` existente.
+  - Para setup single-use com SQLite compartilhado, não basta checar cache local do `AuthService`; use transação/insert atômico no storage para proteger múltiplos processos.
 ---

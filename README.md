@@ -291,6 +291,18 @@ metadata, and is safe to rerun:
 Bootstrap is intentionally disabled when no persistent operator store is configured, because the
 initial admin must survive process restarts.
 
+First-run setup through the application
+
+The API also exposes a public first-run setup flow for environments that should create the initial
+administrator through the application instead of startup env credentials:
+
+- `GET /setup` returns `available=true` only when persistent operator storage is configured and no
+  operator has been persisted yet.
+- `POST /setup` creates the initial administrator once, stores only the password hash and minimal
+  operator metadata, records an audit event, and closes the public setup flow.
+- Set `VALIDATOR_SETUP_TOKEN` to require a one-time setup token in the request body for published
+  environments. The token itself is never stored in operator metadata or audit payloads.
+
 Generated artifacts remain file-based on purpose:
 
 - uploaded CSV files

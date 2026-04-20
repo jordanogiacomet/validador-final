@@ -10,7 +10,7 @@ export function StateBanner({ banner }: StateBannerProps) {
   }
 
   return (
-    <section className={`panel state-banner ${banner.kind}`}>
+    <section className={`panel state-banner ${banner.kind}`} role="status" aria-live="polite">
       <small>Estado do lote</small>
       <strong>{banner.label}</strong>
       <p>{banner.detail}</p>

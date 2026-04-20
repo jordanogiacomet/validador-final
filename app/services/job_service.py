@@ -96,6 +96,7 @@ class JobService:
         tenant_id: str | None = None,
         *,
         active_only: bool = False,
+        limit: int | None = None,
     ) -> list[JobRecord]:
         jobs = list(self._jobs.values())
         if tenant_id is not None:
@@ -108,7 +109,10 @@ class JobService:
                 if j.status in (JobStatus.QUEUED, JobStatus.RUNNING)
                 or j.cancel_requested
             ]
-        return sorted(jobs, key=lambda j: j.created_at, reverse=True)
+        sorted_jobs = sorted(jobs, key=lambda j: j.created_at, reverse=True)
+        if limit is not None:
+            return sorted_jobs[:limit]
+        return sorted_jobs
 
     def start_job(self, job_id: str) -> JobRecord:
         job = self._get_or_raise(job_id)

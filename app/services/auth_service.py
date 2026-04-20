@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -21,6 +22,7 @@ from app.core.operational_sqlite import (
 )
 from app.core.tenant_config import (
     DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
+    DEFAULT_TENANT_ID,
     OperatorConfig,
     TenantConfig,
 )
@@ -36,6 +38,7 @@ OFFICIAL_TENANT_ID_ENV = "VALIDATOR_OFFICIAL_TENANT_ID"
 BOOTSTRAP_ADMIN_USERNAME_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_FORCE_RESET_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET"
+INITIAL_SETUP_TOKEN_ENV = "VALIDATOR_SETUP_TOKEN"
 
 if TYPE_CHECKING:
     from app.services.audit_service import AuditService
@@ -98,6 +101,14 @@ class BootstrapAdminConfig:
     username: str
     password: str
     force_password_reset: bool = False
+
+
+@dataclass(frozen=True)
+class InitialSetupState:
+    available: bool
+    storage_configured: bool
+    requires_setup_token: bool
+    tenant_id: str | None = None
 
 
 class IssuedAPIKeyStatus(StrEnum):
@@ -227,6 +238,7 @@ class AuthService:
         self._audit_service = audit_service
         self._records: dict[str, IssuedAPIKeyRecord] = {}
         self._operator_records: dict[tuple[str, str], StoredOperatorRecord] = {}
+        self._initial_setup_lock = Lock()
         self._load_records()
         self._load_operator_records()
 
@@ -255,6 +267,100 @@ class AuthService:
         if config is None:
             return None
         return self.ensure_bootstrap_admin(config)
+
+    def get_initial_setup_state(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> InitialSetupState:
+        environment = os.environ if env is None else env
+        storage_configured = self._operator_storage_path is not None
+        requires_setup_token = bool(environment.get(INITIAL_SETUP_TOKEN_ENV, "").strip())
+
+        if not storage_configured:
+            return InitialSetupState(
+                available=False,
+                storage_configured=False,
+                requires_setup_token=requires_setup_token,
+            )
+
+        self._load_operator_records()
+        if self._has_persisted_operator_records():
+            return InitialSetupState(
+                available=False,
+                storage_configured=True,
+                requires_setup_token=requires_setup_token,
+            )
+
+        tenant_id = self._resolve_initial_setup_tenant_id(environment)
+        try:
+            self._load_tenant_for_login(tenant_id)
+        except AuthServiceError:
+            return InitialSetupState(
+                available=False,
+                storage_configured=True,
+                requires_setup_token=requires_setup_token,
+            )
+
+        return InitialSetupState(
+            available=True,
+            storage_configured=True,
+            requires_setup_token=requires_setup_token,
+            tenant_id=tenant_id,
+        )
+
+    def create_initial_admin(
+        self,
+        *,
+        username: str,
+        password: str,
+        setup_token: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> EffectiveOperator:
+        if self._operator_storage_path is None:
+            raise AuthServiceError(
+                503,
+                "Initial setup requires persistent operator storage",
+            )
+
+        environment = os.environ if env is None else env
+        expected_setup_token = environment.get(INITIAL_SETUP_TOKEN_ENV, "").strip()
+        if expected_setup_token and not (
+            setup_token
+            and hmac.compare_digest(setup_token.strip(), expected_setup_token)
+        ):
+            raise AuthServiceError(403, "Invalid setup token")
+
+        normalized_tenant_id = self._resolve_initial_setup_tenant_id(environment)
+        normalized_username = username.strip()
+        self._load_tenant_for_login(normalized_tenant_id)
+
+        with self._initial_setup_lock:
+            self._load_operator_records()
+            if self._has_persisted_operator_records():
+                raise AuthServiceError(409, "Initial setup is no longer available")
+
+            if self._find_operator_by_username(normalized_tenant_id, normalized_username):
+                raise AuthServiceError(409, "Operator username already exists")
+
+            record = StoredOperatorRecord(
+                tenant_id=normalized_tenant_id,
+                operator_id=f"operator-{uuid4().hex}",
+                username=normalized_username,
+                password_hash=hash_password(password),
+            )
+            operator = self._persist_initial_admin_record(record)
+
+        self._record_operator_audit_event(
+            AuditEventType.INITIAL_ADMIN_CREATED,
+            operator=operator,
+            api_key_id=None,
+            details={
+                "initial_setup": True,
+                "setup_token_required": bool(expected_setup_token),
+            },
+        )
+        return operator
 
     def ensure_bootstrap_admin(
         self,
@@ -475,6 +581,9 @@ class AuthService:
     ) -> IssuedAPIKeyResolution:
         api_key_hash = hash_api_key(raw_api_key.strip())
         record = self._find_record_by_hash(api_key_hash)
+        if record is None and self._storage_path is not None:
+            self._load_records()
+            record = self._find_record_by_hash(api_key_hash)
         if record is None:
             return IssuedAPIKeyResolution(status=IssuedAPIKeyStatus.MISSING)
 
@@ -697,6 +806,23 @@ class AuthService:
         )
         return operators
 
+    def _persist_initial_admin_record(
+        self,
+        record: StoredOperatorRecord,
+    ) -> EffectiveOperator:
+        if self._sqlite_store is not None:
+            created = self._sqlite_store.try_insert_first_operator_record(
+                record.model_dump(mode="json")
+            )
+            self._load_operator_records()
+            if not created:
+                raise AuthServiceError(409, "Initial setup is no longer available")
+            return self._operator_from_record(record, is_seed=False)
+
+        self._operator_records[self._operator_record_key(record)] = record
+        self._persist_operator_records()
+        return self._operator_from_record(record, is_seed=False)
+
     def _store_effective_operator(
         self,
         operator: EffectiveOperator,
@@ -771,6 +897,14 @@ class AuthService:
 
         if updated:
             self._persist_operator_records()
+
+    def _has_persisted_operator_records(self) -> bool:
+        return bool(self._operator_records)
+
+    @staticmethod
+    def _resolve_initial_setup_tenant_id(environment: Mapping[str, str]) -> str:
+        tenant_id = environment.get(OFFICIAL_TENANT_ID_ENV, "").strip()
+        return canonicalize_tenant_id(tenant_id or DEFAULT_TENANT_ID)
 
     def _persist_records(self) -> None:
         if self._storage_path is None:

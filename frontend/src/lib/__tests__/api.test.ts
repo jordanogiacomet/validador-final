@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearApiSession,
+  createInitialAdmin,
   downloadGeneratedFile,
   downloadApiFile,
   getApiSession,
   getApiSessionExpiresAtMs,
+  getInitialSetupState,
   listAuditEvents,
+  listJobs,
   listTenants,
   loginOperator,
   renewApiSession,
@@ -59,6 +62,75 @@ describe("api auth session helpers", () => {
     expect(headers.get("X-API-Key")).toBeNull();
   });
 
+  it("loads initial setup state without sending an existing X-API-Key header", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          available: true,
+          storage_configured: true,
+          requires_setup_token: true,
+          tenant_id: "default",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    const state = await getInitialSetupState();
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/setup");
+    expect(headers.get("X-API-Key")).toBeNull();
+    expect(state.available).toBe(true);
+    expect(state.requires_setup_token).toBe(true);
+  });
+
+  it("creates the initial admin without sending an existing X-API-Key header", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          tenant_id: "default",
+          operator_id: "operator-1",
+          username: "admin.inicial",
+          disabled: false,
+          is_seed: false,
+        }),
+        {
+          status: 201,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    const operator = await createInitialAdmin({
+      username: " admin.inicial ",
+      password: "Setup@2026",
+      setupToken: " token-publicado ",
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    const body = JSON.parse(String(requestInit?.body));
+    expect(headers.get("X-API-Key")).toBeNull();
+    expect(body).toEqual({
+      username: "admin.inicial",
+      password: "Setup@2026",
+      setup_token: "token-publicado",
+    });
+    expect(operator.username).toBe("admin.inicial");
+  });
+
   it("attaches the issued X-API-Key to authenticated requests", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
       new Response(JSON.stringify([]), {
@@ -100,6 +172,28 @@ describe("api auth session helpers", () => {
     expect(headers.get("X-API-Key")).toBe("vapi_example");
   });
 
+  it("lists recent jobs with an optional limit", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }),
+    );
+
+    setApiSession(SESSION);
+
+    await listJobs({ limit: 8 });
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/jobs?");
+    expect(requestUrl).toContain("limit=8");
+    expect(requestUrl).not.toContain("active_only=true");
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
   it("persists the issued session in sessionStorage", () => {
     setApiSession(SESSION);
 
@@ -133,6 +227,51 @@ describe("api auth session helpers", () => {
     expect(getApiSession()).toBeNull();
     expect(window.sessionStorage.length).toBe(0);
     expect(onSessionInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes the request id in operator-facing API errors", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Job not completed: running" }), {
+        status: 409,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": "req-123",
+        },
+      }),
+    );
+
+    setApiSession(SESSION);
+
+    await expect(listTenants()).rejects.toMatchObject({
+      status: 409,
+      detail: "Job not completed: running",
+      requestId: "req-123",
+      message:
+        "O lote ainda não foi concluído. Aguarde o fim do processamento para baixar ou revisar. Código de suporte: req-123.",
+    });
+  });
+
+  it("keeps the session when the API returns a tenant-scope 403", async () => {
+    const onSessionInvalid = vi.fn();
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ detail: "API key does not grant access to tenant 'default'" }),
+        {
+          status: 403,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+    setApiSessionInvalidHandler(onSessionInvalid);
+
+    await expect(listAuditEvents({ tenantId: "default" })).rejects.toMatchObject({ status: 403 });
+
+    expect(getApiSession()).toEqual(SESSION);
+    expect(onSessionInvalid).not.toHaveBeenCalled();
   });
 
   it("renews the session and replaces the stored X-API-Key", async () => {

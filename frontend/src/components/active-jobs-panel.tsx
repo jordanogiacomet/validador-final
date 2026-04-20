@@ -19,18 +19,18 @@ export function ActiveJobsPanel({
   return (
     <section className="panel control-card jobs-card">
       <div className="panel-kicker">Se precisar</div>
-      <h2 className="panel-title">Outros lotes em aberto</h2>
+      <h2 className="panel-title">Lotes recentes</h2>
       <p className="panel-copy">
-        Use esta lista para voltar a um lote que ainda está rodando ou que foi aberto há pouco.
+        Retome a revisão, acompanhe um processamento em andamento ou abra um resultado concluído da empresa atual.
       </p>
 
       <div className="job-list">
         {isLoading && !jobs.length ? (
-          <p className="job-empty">Carregando lotes...</p>
+          <p className="job-empty">Carregando lotes recentes...</p>
         ) : null}
 
         {!isLoading && !jobs.length ? (
-          <p className="job-empty">Nenhum lote em processamento.</p>
+          <p className="job-empty">Nenhum lote recente encontrado.</p>
         ) : null}
 
         {error ? <p className="inline-error">{error}</p> : null}
@@ -54,7 +54,7 @@ export function ActiveJobsPanel({
 
               <div className="job-item-meta">
                 <span>
-                  <b>Job:</b> {job.job_id}
+                  <b>Lote:</b> {job.job_id}
                 </span>
                 <span>
                   <b>Atualizado:</b> {formatDateTime(job.updated_at)}
@@ -69,14 +69,16 @@ export function ActiveJobsPanel({
                 <button className="action-button" type="button" onClick={() => onOpenJob(job.job_id)}>
                   Abrir lote
                 </button>
-                <button
-                  className={`action-button ${canCancel ? "" : "primary"}`.trim()}
-                  type="button"
-                  disabled={!canCancel}
-                  onClick={() => onCancelJob(job.job_id)}
-                >
-                  {job.cancel_requested ? "Parando..." : "Parar lote"}
-                </button>
+                {canCancel || job.cancel_requested ? (
+                  <button
+                    className="action-button"
+                    type="button"
+                    disabled={!canCancel}
+                    onClick={() => onCancelJob(job.job_id)}
+                  >
+                    {job.cancel_requested ? "Parando..." : "Parar lote"}
+                  </button>
+                ) : null}
               </div>
             </article>
           );

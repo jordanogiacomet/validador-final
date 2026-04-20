@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ActiveJobsPanel } from "@/components/active-jobs-panel";
 import { AuditPanel } from "@/components/audit-panel";
@@ -28,6 +28,7 @@ import {
   PROBLEM_OCCURRENCES_STEP,
   buildFinalScopeCopy,
   buildPreviewReportData,
+  formatJobFailureMessage,
   formatFieldName,
   getBulkConsolidatableSameNameDuplicates,
   hasDuplicateDescriptionConflict,
@@ -61,6 +62,18 @@ const FALLBACK_TENANT: TenantListItem = {
   display_name: "Empresa padrão",
   is_default: true,
 };
+
+function buildFallbackTenant(tenantId: string): TenantListItem {
+  if (tenantId === FALLBACK_TENANT.tenant_id) {
+    return FALLBACK_TENANT;
+  }
+
+  return {
+    tenant_id: tenantId,
+    display_name: tenantId,
+    is_default: false,
+  };
+}
 
 function createClientJobState(params: {
   jobId: string;
@@ -153,7 +166,7 @@ function deriveDefaultBanner(
     return {
       kind: "error",
       label: "Falha no processamento",
-      detail: job.error_message || job.status_detail || "O lote não foi concluído.",
+      detail: formatJobFailureMessage(job),
     };
   }
 
@@ -179,10 +192,21 @@ function deriveDefaultBanner(
   return null;
 }
 
-export function OperationalWorkspace() {
-  const { jobs, isLoading: jobsLoading, error: jobsError, refreshJobs } = useActiveJobs();
-  const [tenants, setTenants] = useState<TenantListItem[]>([FALLBACK_TENANT]);
-  const [selectedTenantId, setSelectedTenantId] = useState(FALLBACK_TENANT.tenant_id);
+interface OperationalWorkspaceProps {
+  initialTenantId: string;
+}
+
+export function OperationalWorkspace({ initialTenantId }: OperationalWorkspaceProps) {
+  const { jobs, isLoading: jobsLoading, error: jobsError, refreshJobs } = useActiveJobs({
+    activeOnly: false,
+    limit: 8,
+  });
+  const fallbackTenant = useMemo(
+    () => buildFallbackTenant(initialTenantId),
+    [initialTenantId],
+  );
+  const [tenants, setTenants] = useState<TenantListItem[]>([fallbackTenant]);
+  const [selectedTenantId, setSelectedTenantId] = useState(initialTenantId);
   const [tenantError, setTenantError] = useState<string | null>(null);
   const [isTenantLoading, setIsTenantLoading] = useState(true);
   const [validationScope, setValidationScope] = useState<ValidationScope>("zero_items");
@@ -237,8 +261,8 @@ export function OperationalWorkspace() {
             ? caughtError.message
             : "Falha ao carregar os tenants disponíveis.";
         setTenantError(message);
-        setTenants([FALLBACK_TENANT]);
-        setSelectedTenantId(FALLBACK_TENANT.tenant_id);
+        setTenants([fallbackTenant]);
+        setSelectedTenantId(initialTenantId);
       } finally {
         if (!isCancelled) {
           setIsTenantLoading(false);
@@ -250,7 +274,7 @@ export function OperationalWorkspace() {
     return () => {
       isCancelled = true;
     };
-  }, [selectedTenantId]);
+  }, [fallbackTenant, initialTenantId, selectedTenantId]);
 
   useJobPolling({
     jobId: currentJobId,
@@ -369,10 +393,10 @@ export function OperationalWorkspace() {
       setValidationScope(normalizeValidationScope(job.validation_scope));
     } catch (caughtError) {
       const message =
-        caughtError instanceof Error ? caughtError.message : "Falha ao carregar o job selecionado.";
+        caughtError instanceof Error ? caughtError.message : "Falha ao carregar o lote selecionado.";
       setManualBanner({
         kind: "error",
-        label: "Falha ao abrir o job",
+        label: "Falha ao abrir o lote",
         detail: message,
       });
     }
@@ -398,7 +422,7 @@ export function OperationalWorkspace() {
       const message =
         caughtError instanceof Error
           ? caughtError.message
-          : "Não foi possível interromper o job selecionado.";
+          : "Não foi possível interromper o lote selecionado.";
       setManualBanner({
         kind: "error",
         label: "Falha ao cancelar o job",

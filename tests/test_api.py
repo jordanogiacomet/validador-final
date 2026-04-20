@@ -31,6 +31,14 @@ def auth_headers(api_key: str = DEFAULT_API_KEY) -> dict[str, str]:
     return {"X-API-Key": api_key}
 
 
+def enable_initial_setup_storage(monkeypatch, tmp_path) -> Path:
+    operator_storage_path = tmp_path / "operators.json"
+    monkeypatch.setattr(auth_service, "_operator_storage_path", operator_storage_path)
+    monkeypatch.setattr(auth_service, "_sqlite_store", None)
+    auth_service._operator_records.clear()
+    return operator_storage_path
+
+
 def login_headers(
     *,
     tenant_id: str = "default",
@@ -82,19 +90,28 @@ def test_health():
     assert all(check["ok"] is True for check in payload["checks"])
 
 
-def test_frontend_page_renders_friendly_form():
+def test_root_returns_api_status_when_frontend_url_is_not_configured(monkeypatch):
+    monkeypatch.delenv("VALIDATOR_FRONTEND_URL", raising=False)
+
     response = client.get("/")
+
     assert response.status_code == 200
-    assert "Central de Correção Patrimonial" in response.text
-    assert "Trilha de processamento" in response.text
-    assert "Processamentos em andamento" in response.text
-    assert "Baixar CSV corrigido" in response.text
-    assert "Carregar mais" in response.text
-    assert "Exportações operacionais" in response.text
-    assert "itens cadastrados do zero" in response.text
-    assert "Todos os itens" in response.text
-    assert 'name="validation_scope"' in response.text
-    assert 'id="validation-form"' in response.text
+    assert response.json() == {
+        "service": "validador-final-api",
+        "status": "ok",
+        "ui": "Configure VALIDATOR_FRONTEND_URL to redirect operators to the frontend.",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
+def test_root_redirects_to_configured_frontend_url(monkeypatch):
+    monkeypatch.setenv("VALIDATOR_FRONTEND_URL", "https://validador.example.com")
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://validador.example.com"
 
 
 def test_list_tenants_returns_display_names():
@@ -161,6 +178,128 @@ def test_invalid_api_key_is_rejected():
     response = client.get("/jobs", headers=auth_headers("invalid-api-key"))
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid API key"
+
+
+def test_initial_setup_status_is_public_and_reports_availability(tmp_path, monkeypatch):
+    monkeypatch.delenv("VALIDATOR_SETUP_TOKEN", raising=False)
+    enable_initial_setup_storage(monkeypatch, tmp_path)
+
+    response = client.get("/setup")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "available": True,
+        "storage_configured": True,
+        "requires_setup_token": False,
+        "tenant_id": "default",
+    }
+
+
+def test_initial_setup_rejects_creation_without_persistent_storage():
+    response = client.post(
+        "/setup",
+        json={
+            "username": "admin.inicial",
+            "password": "Setup@2026",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Initial setup requires persistent operator storage"
+
+
+def test_initial_setup_creates_admin_once_and_then_closes_public_setup(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("VALIDATOR_SETUP_TOKEN", raising=False)
+    operator_storage_path = enable_initial_setup_storage(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/setup",
+        json={
+            "username": "admin.inicial",
+            "password": "Setup@2026",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["tenant_id"] == "default"
+    assert payload["username"] == "admin.inicial"
+    assert payload["disabled"] is False
+    assert payload["is_seed"] is False
+    assert "password" not in payload
+
+    assert "Setup@2026" not in operator_storage_path.read_text(encoding="utf-8")
+
+    status_response = client.get("/setup")
+    assert status_response.status_code == 200
+    assert status_response.json()["available"] is False
+
+    second_response = client.post(
+        "/setup",
+        json={
+            "username": "outro.admin",
+            "password": "Outra@2026",
+        },
+    )
+
+    assert second_response.status_code == 409
+    assert second_response.json()["detail"] == "Initial setup is no longer available"
+
+    audit_events = audit_service.list_events(tenant_id="default")
+    assert audit_events[0].event_type is AuditEventType.INITIAL_ADMIN_CREATED
+    assert audit_events[0].details["username"] == "admin.inicial"
+    assert "Setup@2026" not in json.dumps(audit_events[0].details)
+
+    login_response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "admin.inicial",
+            "password": "Setup@2026",
+        },
+    )
+
+    assert login_response.status_code == 200
+    assert login_response.json()["operator_id"] == payload["operator_id"]
+
+
+def test_initial_setup_accepts_required_setup_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("VALIDATOR_SETUP_TOKEN", "token-publicado")
+    enable_initial_setup_storage(monkeypatch, tmp_path)
+
+    status_response = client.get("/setup")
+    assert status_response.status_code == 200
+    assert status_response.json()["requires_setup_token"] is True
+
+    denied_response = client.post(
+        "/setup",
+        json={
+            "username": "admin.inicial",
+            "password": "Setup@2026",
+            "setup_token": "token-incorreto",
+        },
+    )
+
+    assert denied_response.status_code == 403
+    assert denied_response.json()["detail"] == "Invalid setup token"
+
+    created_response = client.post(
+        "/setup",
+        json={
+            "username": "admin.inicial",
+            "password": "Setup@2026",
+            "setup_token": "token-publicado",
+        },
+    )
+
+    assert created_response.status_code == 201
+    audit_events = audit_service.list_events(tenant_id="default")
+    assert audit_events[0].event_type is AuditEventType.INITIAL_ADMIN_CREATED
+    assert audit_events[0].details["setup_token_required"] is True
+    assert "token-publicado" not in json.dumps(audit_events[0].details)
 
 
 def test_login_emits_tenant_scoped_api_key():
@@ -516,6 +655,20 @@ def test_jobs_are_scoped_to_issued_api_key_tenant():
     assert response.status_code == 200
     payload = response.json()
     assert [job["job_id"] for job in payload] == [default_job.job_id]
+
+
+def test_list_jobs_accepts_limit_without_leaking_other_tenant():
+    older_job = job_service.create_job(tenant_id="default", file_name="older.csv")
+    newer_job = job_service.create_job(tenant_id="default", file_name="newer.csv")
+    job_service.create_job(tenant_id="redesim", file_name="redesim.csv")
+    headers, _payload = login_headers()
+
+    response = client.get("/jobs?limit=1", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [job["job_id"] for job in payload] == [newer_job.job_id]
+    assert older_job.job_id not in {job["job_id"] for job in payload}
 
 
 def test_upload_and_validate_creates_job():

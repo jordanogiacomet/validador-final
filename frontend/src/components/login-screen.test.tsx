@@ -1,8 +1,13 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, loginOperator } from "@/lib/api";
+import {
+  ApiError,
+  createInitialAdmin,
+  getInitialSetupState,
+  loginOperator,
+} from "@/lib/api";
 
 import { LoginScreen } from "./login-screen";
 
@@ -10,15 +15,32 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    createInitialAdmin: vi.fn(),
+    getInitialSetupState: vi.fn(),
     loginOperator: vi.fn(),
   };
 });
 
+const createInitialAdminMock = vi.mocked(createInitialAdmin);
+const getInitialSetupStateMock = vi.mocked(getInitialSetupState);
 const loginOperatorMock = vi.mocked(loginOperator);
 
 describe("LoginScreen", () => {
   beforeEach(() => {
+    createInitialAdminMock.mockReset();
+    getInitialSetupStateMock.mockReset();
     loginOperatorMock.mockReset();
+    getInitialSetupStateMock.mockResolvedValue({
+      available: false,
+      storage_configured: true,
+      requires_setup_token: false,
+      tenant_id: null,
+    });
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("renders the typed tenant login fields", () => {
@@ -27,9 +49,120 @@ describe("LoginScreen", () => {
     expect(screen.getByLabelText("Código da empresa")).toBeDefined();
     expect(screen.getByLabelText("Usuário")).toBeDefined();
     expect(screen.getByLabelText("Senha")).toBeDefined();
-    expect(screen.getByText("Dados iniciais já configurados")).toBeDefined();
-    expect(screen.getByText("default.operator")).toBeDefined();
+    expect(screen.queryByText("default.operator")).toBeNull();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeDefined();
+  });
+
+  it("shows local development login hints only when enabled", () => {
+    vi.stubEnv("NEXT_PUBLIC_SHOW_DEV_LOGIN_HINTS", "true");
+
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+
+    expect(screen.getByText("Dados iniciais de desenvolvimento")).toBeDefined();
+    expect(screen.getByText("default.operator")).toBeDefined();
+  });
+
+  it("shows the initial setup form only when the API reports setup availability", async () => {
+    getInitialSetupStateMock.mockResolvedValueOnce({
+      available: true,
+      storage_configured: true,
+      requires_setup_token: false,
+      tenant_id: "default",
+    });
+
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+
+    expect(await screen.findByText("Criar administrador inicial")).toBeDefined();
+    expect(screen.getByLabelText("Usuário administrador")).toBeDefined();
+    expect(screen.getByLabelText("Senha inicial")).toBeDefined();
+    expect(screen.queryByLabelText("Token de setup")).toBeNull();
+  });
+
+  it("creates the initial admin and prepares the login form for the created account", async () => {
+    getInitialSetupStateMock.mockResolvedValueOnce({
+      available: true,
+      storage_configured: true,
+      requires_setup_token: false,
+      tenant_id: "default",
+    });
+    createInitialAdminMock.mockResolvedValueOnce({
+      tenant_id: "default",
+      operator_id: "operator-1",
+      username: "admin.inicial",
+      disabled: false,
+      is_seed: false,
+    });
+
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Usuário administrador"), {
+      target: { value: "admin.inicial" },
+    });
+    fireEvent.change(screen.getByLabelText("Senha inicial"), {
+      target: { value: "Setup@2026" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Criar administrador" }));
+
+    await waitFor(() => {
+      expect(createInitialAdminMock).toHaveBeenCalledWith({
+        username: "admin.inicial",
+        password: "Setup@2026",
+        setupToken: "",
+      });
+    });
+
+    expect(
+      await screen.findByText("Administrador inicial criado. Entre com o usuário criado."),
+    ).toBeDefined();
+    expect(screen.queryByText("Criar administrador inicial")).toBeNull();
+    expect((screen.getByLabelText("Código da empresa") as HTMLInputElement).value).toBe(
+      "default",
+    );
+    expect((screen.getByLabelText("Usuário") as HTMLInputElement).value).toBe(
+      "admin.inicial",
+    );
+  });
+
+  it("requires and submits the setup token when configured by the API", async () => {
+    getInitialSetupStateMock.mockResolvedValueOnce({
+      available: true,
+      storage_configured: true,
+      requires_setup_token: true,
+      tenant_id: "default",
+    });
+    createInitialAdminMock.mockResolvedValueOnce({
+      tenant_id: "default",
+      operator_id: "operator-1",
+      username: "admin.inicial",
+      disabled: false,
+      is_seed: false,
+    });
+
+    render(<LoginScreen onAuthenticated={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Usuário administrador"), {
+      target: { value: "admin.inicial" },
+    });
+    fireEvent.change(screen.getByLabelText("Senha inicial"), {
+      target: { value: "Setup@2026" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Criar administrador" }));
+
+    expect(createInitialAdminMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Informe o token de setup.")).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText("Token de setup"), {
+      target: { value: "token-publicado" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Criar administrador" }));
+
+    await waitFor(() => {
+      expect(createInitialAdminMock).toHaveBeenCalledWith({
+        username: "admin.inicial",
+        password: "Setup@2026",
+        setupToken: "token-publicado",
+      });
+    });
   });
 
   it("validates required fields before calling login", async () => {

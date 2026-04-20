@@ -19,7 +19,7 @@ from app.services.auth_service import AuthService, IssuedAPIKeyStatus
 
 API_KEY_HEADER = "X-API-Key"
 _AUTH_STATE_KEY = "tenant_auth"
-_PUBLIC_EXACT_PATHS = {"/", "/health", "/login", "/metrics", "/openapi.json"}
+_PUBLIC_EXACT_PATHS = {"/", "/health", "/login", "/metrics", "/openapi.json", "/setup"}
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
 
 

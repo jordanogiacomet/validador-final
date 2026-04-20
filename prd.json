@@ -791,6 +791,141 @@
       "priority": 46,
       "passes": true,
       "notes": "Implementado com plano explícito de execução na `ValidationEngine`: regras cross-row seguem no passe serial, a fase opcional `llm_audit` pode rodar em paralelo via `llm.parallel_requests`, o cache local recebeu proteção para escrita concorrente e testes focados cobrem equivalência serial/paralela e ganho de throughput."
+    },
+    {
+      "id": "US-047",
+      "title": "Criar fluxo seguro de primeiro acesso para o administrador inicial",
+      "description": "Como dono do ambiente, preciso criar o primeiro usuário administrador pela própria aplicação quando ainda não existir nenhum administrador persistido, sem deixar cadastro público aberto depois do setup.",
+      "acceptanceCriteria": [
+        "Expor um estado de setup inicial apenas quando não existir administrador persistido no storage operacional",
+        "Exigir storage persistente configurado antes de permitir a criação do primeiro administrador",
+        "Permitir criação do primeiro administrador uma única vez, com proteção contra corrida entre múltiplas requisições simultâneas",
+        "Opcionalmente exigir um token de setup configurado por variável de ambiente para ambientes publicados",
+        "Persistir somente hash da senha e metadados mínimos do administrador inicial",
+        "Após criar o primeiro administrador, desabilitar automaticamente o endpoint/tela de setup público",
+        "Registrar evento de auditoria da criação inicial sem armazenar senha, token bruto ou segredo",
+        "Adicionar testes cobrindo setup disponível, setup bloqueado após criação, concorrência e ausência de storage persistente",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 47,
+      "passes": true,
+      "notes": "Implementado com `GET /setup` e `POST /setup` públicos, criação single-use do administrador inicial via `AuthService`, exigência de storage persistente, token opcional `VALIDATOR_SETUP_TOKEN`, insert atômico em SQLite para concorrência, evento `initial_admin_created` sem segredos e painel de primeiro acesso na tela de login."
+    },
+    {
+      "id": "US-048",
+      "title": "Adicionar papéis administrativos e autorização por escopo",
+      "description": "Como administrador, preciso que a aplicação diferencie administrador global, administrador de tenant e operador comum para limitar quem pode criar tenants, usuários e acessar dados operacionais.",
+      "acceptanceCriteria": [
+        "Definir papéis mínimos: `platform_admin`, `tenant_admin` e `operator`",
+        "Persistir papéis por usuário sem depender de tenant hardcoded no core",
+        "Permitir que `platform_admin` gerencie tenants e usuários de qualquer tenant",
+        "Permitir que `tenant_admin` gerencie apenas usuários do próprio tenant",
+        "Impedir que `operator` crie usuários, altere tenants ou visualize dados administrativos fora do próprio escopo",
+        "Aplicar autorização no service layer e manter rotas FastAPI finas",
+        "Incluir o papel efetivo em respostas autenticadas somente quando necessário para a UI",
+        "Registrar tentativas negadas em auditoria com tenant, usuário e ação solicitada",
+        "Adicionar testes de permissão para cada papel e para tentativas cross-tenant",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "RBAC deve ser uma camada genérica de auth/autorização. Não introduzir lógica específica de tenant no engine de validação."
+    },
+    {
+      "id": "US-049",
+      "title": "Permitir administração segura de tenants pela aplicação",
+      "description": "Como administrador global, preciso criar, listar, editar, desabilitar e reativar tenants pela aplicação para não depender de alteração manual de arquivos em produção.",
+      "acceptanceCriteria": [
+        "Criar APIs administrativas para listar, criar, editar, desabilitar e reativar tenants",
+        "Restringir todas as operações de tenant ao papel `platform_admin`",
+        "Persistir metadados runtime do tenant em storage operacional sem quebrar tenants YAML existentes",
+        "Preservar carregamento do tenant `default` e dos tenants file-based já existentes",
+        "Validar identificadores, aliases e display name para evitar colisões e tenant spoofing",
+        "Permitir configurar dados administrativos básicos do tenant sem alterar regras de validação canônicas por acidente",
+        "Evitar exclusão física destrutiva de tenant com jobs, auditoria ou artefatos vinculados; preferir estado `disabled`",
+        "Registrar auditoria de criação, edição, desativação e reativação de tenants",
+        "Adicionar testes cobrindo criação válida, colisões, tenant desabilitado e isolamento de acesso",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": "A administração de tenants deve ser tenant-agnóstica e compatível com a configuração file-based atual. Alterações profundas de regras/colunas podem continuar em fluxo separado de configuração até existir uma UI específica."
+    },
+    {
+      "id": "US-050",
+      "title": "Gerenciar usuários por convite ou criação administrativa",
+      "description": "Como administrador global ou administrador de tenant, preciso criar usuários de forma controlada, definir papéis e garantir que cada conta fique vinculada ao tenant correto.",
+      "acceptanceCriteria": [
+        "Permitir que `platform_admin` crie usuários em qualquer tenant habilitado",
+        "Permitir que `tenant_admin` crie usuários apenas no próprio tenant",
+        "Suportar criação administrativa com senha inicial temporária ou convite com token de uso único e expiração",
+        "Obrigar troca de senha no primeiro login quando a senha inicial for definida por administrador",
+        "Vincular cada usuário ao tenant correto e a um papel permitido para o escopo de quem criou",
+        "Rejeitar criação de usuários em tenant desabilitado",
+        "Revogar sessões/API keys ativas quando usuário for desabilitado ou tiver senha resetada",
+        "Registrar auditoria para criação, convite, aceite, reset de senha, desabilitação e troca de papel",
+        "Adicionar testes cobrindo convites expirados, token já usado, cross-tenant e revogação de credenciais",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": "Se não houver infraestrutura de e-mail, o token de convite pode ser gerado e exibido uma única vez ao administrador para entrega fora do sistema. Nunca persistir token bruto."
+    },
+    {
+      "id": "US-051",
+      "title": "Endurecer segurança de autenticação e recuperação de conta",
+      "description": "Como mantenedor, preciso de controles básicos de segurança para criação, login e recuperação de contas, reduzindo risco de força bruta, senha fraca e reutilização de tokens.",
+      "acceptanceCriteria": [
+        "Aplicar política mínima de senha forte no setup inicial, criação de usuários e troca de senha",
+        "Armazenar senhas com hash forte, salt por usuário e parâmetros versionáveis para migração futura",
+        "Implementar rate limiting ou bloqueio temporário por usuário/origem para tentativas de login e setup",
+        "Usar tokens de convite e reset com hash persistido, expiração curta e uso único",
+        "Não revelar se tenant, usuário ou e-mail existem em respostas públicas de login/reset",
+        "Revogar API keys emitidas após troca de senha, reset de senha ou desabilitação de usuário",
+        "Registrar auditoria de falhas relevantes sem armazenar senha, token bruto ou dados sensíveis",
+        "Adicionar testes cobrindo senha fraca, token expirado, token reutilizado, rate limit e revogação de sessões",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 51,
+      "passes": false,
+      "notes": "Este hardening deve complementar o RBAC e o fluxo de convite, mantendo compatibilidade com a emissão atual de `X-API-Key` pós-login."
+    },
+    {
+      "id": "US-052",
+      "title": "Criar console administrativo para primeiro setup, tenants e usuários",
+      "description": "Como administrador, preciso de uma interface simples para inicializar o ambiente, gerenciar tenants e administrar usuários sem depender de chamadas manuais à API.",
+      "acceptanceCriteria": [
+        "Mostrar tela de primeiro setup apenas quando a API indicar que o ambiente ainda não tem administrador inicial",
+        "Após login, exibir navegação administrativa somente para usuários com papel compatível",
+        "Permitir que `platform_admin` gerencie tenants e usuários em uma área administrativa separada do fluxo operacional de validação",
+        "Permitir que `tenant_admin` gerencie usuários do próprio tenant sem ver controles globais",
+        "Ocultar ações não permitidas pela autorização backend e tratar respostas 403 sem logout automático",
+        "Exibir mensagens operacionais claras para criação, convite, reset, desabilitação e reativação",
+        "Manter a UI de validação simples para operadores comuns",
+        "Adicionar testes frontend para setup inicial, visibilidade por papel e tratamento de permissão negada",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 52,
+      "passes": false,
+      "notes": "O console administrativo não deve virar landing page. Ele deve ser um painel utilitário acessível apenas quando o papel do usuário permitir."
+    },
+    {
+      "id": "US-053",
+      "title": "Auditar e revisar ações administrativas sensíveis",
+      "description": "Como responsável pelo ambiente, preciso rastrear ações de criação de contas, gestão de tenants e mudanças de papel para investigar acessos indevidos e suportar governança.",
+      "acceptanceCriteria": [
+        "Registrar eventos estruturados para setup inicial, login administrativo, criação/edição/desativação de tenant, criação/convite/desativação de usuário, reset de senha e troca de papel",
+        "Incluir nos eventos tenant alvo, usuário ator, usuário alvo, papel anterior/novo quando aplicável e resultado da ação",
+        "Nunca registrar senha, token bruto, segredo de API key ou hash sensível em payload de auditoria",
+        "Permitir filtro de auditoria por tenant, ator, alvo, tipo de evento e período",
+        "Restringir leitura global de auditoria a `platform_admin` e leitura tenant-scoped a `tenant_admin`",
+        "Preservar compatibilidade com a auditoria operacional de jobs existente",
+        "Adicionar testes de persistência, filtros, escopo e sanitização de payload sensível",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 53,
+      "passes": false,
+      "notes": "A auditoria administrativa deve reutilizar a infraestrutura existente de audit log, estendendo tipos de evento e filtros em vez de criar armazenamento paralelo."
     }
   ],
   "nonFunctionalRequirements": {

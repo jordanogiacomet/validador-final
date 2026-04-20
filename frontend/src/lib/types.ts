@@ -20,6 +20,27 @@ export interface LoginRequestPayload {
   password: string;
 }
 
+export interface InitialSetupState {
+  available: boolean;
+  storage_configured: boolean;
+  requires_setup_token: boolean;
+  tenant_id: string | null;
+}
+
+export interface InitialAdminSetupPayload {
+  username: string;
+  password: string;
+  setupToken?: string;
+}
+
+export interface OperatorResponse {
+  tenant_id: string;
+  operator_id: string;
+  username: string;
+  disabled: boolean;
+  is_seed: boolean;
+}
+
 export interface LoginResponse {
   tenant_id: string;
   operator_id: string;
@@ -47,7 +68,11 @@ export type AuditEventType =
   | "api_key_issued"
   | "api_key_expired"
   | "api_key_revoked"
-  | "api_key_renewed";
+  | "api_key_renewed"
+  | "initial_admin_created"
+  | "operator_created"
+  | "operator_disabled"
+  | "operator_password_rotated";
 
 export interface AuditEventResponse {
   event_id: string;

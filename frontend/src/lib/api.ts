@@ -1,12 +1,15 @@
 import type {
   AuditEventResponse,
   APIKeyRenewalResponse,
+  InitialAdminSetupPayload,
+  InitialSetupState,
   DuplicateResolutionResponse,
   JobListItemResponse,
   LoginRequestPayload,
   LoginResponse,
   JobResultPayload,
   JobStatusResponse,
+  OperatorResponse,
   ReviewFlagActionStatus,
   RowReadResponse,
   RowReviewFlagResponse,
@@ -26,11 +29,19 @@ let sessionInvalidHandler: (() => void) | null = null;
 
 export class ApiError extends Error {
   status: number;
+  detail: string;
+  requestId: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(
+    message: string,
+    status: number,
+    options: { detail?: string; requestId?: string | null } = {},
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = options.detail ?? message;
+    this.requestId = options.requestId ?? null;
   }
 }
 
@@ -166,6 +177,108 @@ async function readErrorDetail(response: Response): Promise<string> {
   }
 }
 
+function readRequestId(response: Response): string | null {
+  return response.headers.get("x-request-id") || response.headers.get("X-Request-ID");
+}
+
+function appendSupportCode(message: string, requestId: string | null): string {
+  if (!requestId) {
+    return message;
+  }
+
+  return `${message} Código de suporte: ${requestId}.`;
+}
+
+function mapApiErrorDetail(detail: string, status: number): string {
+  const normalizedDetail = detail.toLowerCase();
+
+  if (status === 401) {
+    if (normalizedDetail.includes("missing x-api-key")) {
+      return "Sessão operacional não encontrada. Entre novamente para continuar.";
+    }
+
+    if (normalizedDetail.includes("expired api key")) {
+      return "Sua sessão expirou. Entre novamente para continuar.";
+    }
+
+    if (normalizedDetail.includes("revoked api key")) {
+      return "Sua sessão foi encerrada. Entre novamente para continuar.";
+    }
+
+    if (normalizedDetail.includes("invalid api key")) {
+      return "Sessão inválida. Entre novamente para continuar.";
+    }
+
+    return "Credenciais inválidas ou sessão expirada.";
+  }
+
+  if (status === 403) {
+    if (
+      normalizedDetail.includes("does not grant access") ||
+      normalizedDetail.includes("not allowed for this tenant")
+    ) {
+      return "A sessão atual não permite acessar esta empresa. Entre com o usuário correto.";
+    }
+
+    if (normalizedDetail.includes("operator is disabled")) {
+      return "Este usuário está desabilitado para a operação.";
+    }
+
+    return "Acesso negado para esta operação.";
+  }
+
+  if (status === 404) {
+    if (normalizedDetail.includes("tenant")) {
+      return "Empresa não encontrada. Revise o código informado.";
+    }
+
+    if (normalizedDetail.includes("job")) {
+      return "Lote não encontrado. Atualize a lista de lotes e tente novamente.";
+    }
+
+    return "Registro não encontrado.";
+  }
+
+  if (
+    normalizedDetail.includes("job not completed") ||
+    normalizedDetail.includes("not completed")
+  ) {
+    return "O lote ainda não foi concluído. Aguarde o fim do processamento para baixar ou revisar.";
+  }
+
+  if (
+    normalizedDetail.includes("csv") ||
+    normalizedDetail.includes("delimiter") ||
+    normalizedDetail.includes("encoding") ||
+    normalizedDetail.includes("codec") ||
+    normalizedDetail.includes("tokenizing") ||
+    normalizedDetail.includes("column")
+  ) {
+    return "Não foi possível ler o CSV. Revise o arquivo, delimitador, codificação e cabeçalho.";
+  }
+
+  if (status >= 500) {
+    return "A API operacional encontrou uma falha interna. Tente novamente ou acione o suporte.";
+  }
+
+  return detail || "Falha na comunicação com a API operacional.";
+}
+
+export function formatApiErrorMessage(
+  error: unknown,
+  fallbackMessage = "Falha na comunicação com a API operacional.",
+): string {
+  if (error instanceof ApiError) {
+    return error.message || appendSupportCode(fallbackMessage, error.requestId);
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+}
+
 async function shouldInvalidateSession(
   response: Response,
   includeAuth: boolean,
@@ -183,7 +296,7 @@ async function shouldInvalidateSession(
   }
 
   const detail = await readErrorDetail(response);
-  return /api key|expired|revoked/i.test(detail);
+  return /invalid api key|expired api key|revoked api key/i.test(detail);
 }
 
 function invalidateSession(): void {
@@ -218,11 +331,16 @@ async function readResponse<T>(response: Response): Promise<T> {
     : { detail: await response.text() };
 
   if (!response.ok) {
+    const requestId = readRequestId(response);
     const detail =
       typeof payload.detail === "string" && payload.detail
         ? payload.detail
         : "Falha na comunicação com a API operacional.";
-    throw new ApiError(detail, response.status);
+    throw new ApiError(
+      appendSupportCode(mapApiErrorDetail(detail, response.status), requestId),
+      response.status,
+      { detail, requestId },
+    );
   }
 
   return payload as T;
@@ -285,6 +403,32 @@ export async function loginOperator(payload: LoginRequestPayload): Promise<Login
   return readResponse<LoginResponse>(response);
 }
 
+export async function getInitialSetupState(): Promise<InitialSetupState> {
+  const response = await apiFetch("/setup", {}, { includeAuth: false });
+  return readResponse<InitialSetupState>(response);
+}
+
+export async function createInitialAdmin(
+  payload: InitialAdminSetupPayload,
+): Promise<OperatorResponse> {
+  const response = await apiFetch(
+    "/setup",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: payload.username.trim(),
+        password: payload.password,
+        setup_token: payload.setupToken?.trim() || null,
+      }),
+    },
+    { includeAuth: false },
+  );
+  return readResponse<OperatorResponse>(response);
+}
+
 export async function validateFile(params: {
   file: File;
   tenantId: string;
@@ -304,9 +448,25 @@ export async function validateFile(params: {
   return readResponse<UploadResponse>(response);
 }
 
-export async function listActiveJobs(): Promise<JobListItemResponse[]> {
-  const response = await apiFetch("/jobs?active_only=true");
+export async function listJobs(params: {
+  activeOnly?: boolean;
+  limit?: number;
+} = {}): Promise<JobListItemResponse[]> {
+  const query = new URLSearchParams();
+  if (params.activeOnly) {
+    query.set("active_only", "true");
+  }
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+
+  const queryString = query.toString();
+  const response = await apiFetch(`/jobs${queryString ? `?${queryString}` : ""}`);
   return readResponse<JobListItemResponse[]>(response);
+}
+
+export async function listActiveJobs(): Promise<JobListItemResponse[]> {
+  return listJobs({ activeOnly: true });
 }
 
 export async function getJob(jobId: string): Promise<JobStatusResponse> {

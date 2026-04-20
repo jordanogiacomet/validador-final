@@ -29,7 +29,11 @@ vi.mock("@/components/login-screen", () => ({
 }));
 
 vi.mock("@/components/operational-workspace", () => ({
-  OperationalWorkspace: () => <div>Workspace operacional</div>,
+  OperationalWorkspace: ({
+    initialTenantId,
+  }: {
+    initialTenantId: string;
+  }) => <div>Workspace operacional {initialTenantId}</div>,
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -87,7 +91,7 @@ describe("HomePage auth flow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Entrar mock" }));
 
     expect(setApiSessionMock).toHaveBeenCalledWith(session);
-    expect(await screen.findByText("Workspace operacional")).toBeDefined();
+    expect(await screen.findByText("Workspace operacional default")).toBeDefined();
   });
 
   it("restores a persisted session and allows explicit logout", async () => {
@@ -95,7 +99,7 @@ describe("HomePage auth flow", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByText("Workspace operacional")).toBeDefined();
+    expect(await screen.findByText("Workspace operacional default")).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Sair" }));
 
@@ -148,12 +152,23 @@ describe("HomePage auth flow", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByText("Workspace operacional")).toBeDefined();
+    expect(await screen.findByText("Workspace operacional default")).toBeDefined();
 
     authState.invalidationHandler?.();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Entrar mock" })).toBeDefined();
     });
+  });
+
+  it("passes the authenticated tenant to the workspace", async () => {
+    getApiSessionMock.mockReturnValue({
+      ...session,
+      tenant_id: "redesim",
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Workspace operacional redesim")).toBeDefined();
   });
 });

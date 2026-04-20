@@ -4,6 +4,7 @@ import {
   PROCESS_STEPS,
   buildProcessGuidance,
   formatDateTime,
+  formatJobFailureMessage,
   formatStatusChip,
   getValidationScopeLabel,
 } from "@/lib/presentation";
@@ -26,6 +27,31 @@ export function ProcessCard({
   const activeIndex = PROCESS_STEPS.findIndex((step) => step.id === job?.current_step);
   const isFailed = job?.status === "failed";
   const guidance = buildProcessGuidance(job);
+  const statusDetail = isFailed && job
+    ? formatJobFailureMessage(job)
+    : job?.status_detail || "Assim que você enviar um CSV, a conferência aparece aqui.";
+  const progressTotal = job?.total_rows || job?.source_total_rows || 0;
+  const progressProcessed = job
+    ? job.status === "completed"
+      ? progressTotal
+      : Math.min(job.processed_rows || 0, progressTotal || job.processed_rows || 0)
+    : 0;
+  const progressPercent = job
+    ? job.status === "completed"
+      ? 100
+      : progressTotal > 0
+        ? Math.round((progressProcessed / progressTotal) * 100)
+        : job.status === "running"
+          ? 5
+          : 0
+    : 0;
+  const progressLabel = job
+    ? progressTotal > 0
+      ? `${progressProcessed} de ${progressTotal} linhas em escopo`
+      : job.status === "queued"
+        ? "Aguardando início do processamento"
+        : "Preparando contagem das linhas"
+    : "Nenhum lote em andamento";
 
   return (
     <section className="panel process-card">
@@ -33,11 +59,25 @@ export function ProcessCard({
         <div>
           <div className="panel-kicker">2. Acompanhar o lote</div>
           <h2 className="status-title">{job?.status_title || "Aguardando uma nova planilha"}</h2>
-          <p className="status-detail">
-            {job?.status_detail || "Assim que você enviar um CSV, a conferência aparece aqui."}
-          </p>
+          <p className="status-detail">{statusDetail}</p>
         </div>
         <span className={`status-chip ${chip.kind}`}>{chip.label}</span>
+      </div>
+
+      <div className="progress-block" aria-label="Progresso do lote">
+        <div className="progress-copy">
+          <strong>{progressPercent}%</strong>
+          <span>{progressLabel}</span>
+        </div>
+        <div
+          className="progress-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+        >
+          <span style={{ width: `${progressPercent}%` }} />
+        </div>
       </div>
 
       <div className="lot-grid">

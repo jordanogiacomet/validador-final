@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import (
@@ -14,7 +14,6 @@ from app.api.auth import (
     get_authenticated_tenant,
     resolve_request_tenant_id,
 )
-from app.api.frontend import build_frontend_html
 from app.core.audit import AuditEvent, AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
@@ -122,6 +121,27 @@ class LoginResponse(BaseModel):
     x_api_key: str
     expires_at: datetime
     header_name: str = API_KEY_HEADER
+
+
+class InitialSetupStateResponse(BaseModel):
+    available: bool
+    storage_configured: bool
+    requires_setup_token: bool
+    tenant_id: str | None = None
+
+
+class InitialAdminSetupRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    setup_token: str | None = None
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not LOGIN_USERNAME_PATTERN.fullmatch(normalized_value):
+            raise ValueError("username contains invalid characters")
+        return normalized_value
 
 
 class OperatorResponse(BaseModel):
@@ -375,9 +395,46 @@ def _get_authorized_job(request: Request, job_id: str):
     return job
 
 
-@router.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def frontend() -> HTMLResponse:
-    return HTMLResponse(build_frontend_html())
+@router.get("/", include_in_schema=False, response_model=None)
+async def frontend() -> Response:
+    frontend_url = os.getenv("VALIDATOR_FRONTEND_URL", "").strip()
+    if frontend_url:
+        return RedirectResponse(frontend_url)
+
+    return JSONResponse(
+        {
+            "service": "validador-final-api",
+            "status": "ok",
+            "ui": "Configure VALIDATOR_FRONTEND_URL to redirect operators to the frontend.",
+            "health": "/health",
+            "docs": "/docs",
+        }
+    )
+
+
+@router.get("/setup", response_model=InitialSetupStateResponse)
+async def get_initial_setup_state() -> InitialSetupStateResponse:
+    state = auth_service.get_initial_setup_state()
+    return InitialSetupStateResponse(
+        available=state.available,
+        storage_configured=state.storage_configured,
+        requires_setup_token=state.requires_setup_token,
+        tenant_id=state.tenant_id,
+    )
+
+
+@router.post("/setup", response_model=OperatorResponse, status_code=201)
+async def create_initial_admin(payload: InitialAdminSetupRequest) -> OperatorResponse:
+    try:
+        operator = auth_service.create_initial_admin(
+            username=payload.username,
+            password=payload.password,
+            setup_token=payload.setup_token,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return _build_operator_response(operator)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -580,9 +637,17 @@ async def upload_and_validate(
 
 
 @router.get("/jobs", response_model=list[JobListItemResponse])
-async def list_jobs(request: Request, active_only: bool = False) -> list[JobListItemResponse]:
+async def list_jobs(
+    request: Request,
+    active_only: bool = False,
+    limit: int | None = Query(default=None, ge=1, le=200),
+) -> list[JobListItemResponse]:
     auth = get_authenticated_tenant(request)
-    jobs = job_service.list_jobs(tenant_id=auth.tenant_id, active_only=active_only)
+    jobs = job_service.list_jobs(
+        tenant_id=auth.tenant_id,
+        active_only=active_only,
+        limit=limit,
+    )
     return [_build_job_list_item_response(job) for job in jobs]
 
 

@@ -2,12 +2,18 @@
 
 import React from "react";
 import type { ChangeEvent, FormEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { ApiError, loginOperator } from "@/lib/api";
-import type { LoginResponse } from "@/lib/types";
+import {
+  ApiError,
+  createInitialAdmin,
+  getInitialSetupState,
+  loginOperator,
+} from "@/lib/api";
+import type { InitialSetupState, LoginResponse } from "@/lib/types";
 
 type LoginFieldName = "tenantId" | "username" | "password";
+type SetupFieldName = "username" | "password" | "setupToken";
 
 interface LoginScreenProps {
   onAuthenticated: (session: LoginResponse) => void;
@@ -19,12 +25,25 @@ interface LoginFormState {
   password: string;
 }
 
+interface SetupFormState {
+  username: string;
+  password: string;
+  setupToken: string;
+}
+
 type LoginFieldErrors = Partial<Record<LoginFieldName, string>>;
+type SetupFieldErrors = Partial<Record<SetupFieldName, string>>;
 
 const INITIAL_FORM_STATE: LoginFormState = {
   tenantId: "",
   username: "",
   password: "",
+};
+
+const INITIAL_SETUP_FORM_STATE: SetupFormState = {
+  username: "",
+  password: "",
+  setupToken: "",
 };
 
 const INITIAL_ACCESS = {
@@ -34,6 +53,18 @@ const INITIAL_ACCESS = {
 
 const TENANT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9._@-]+$/;
+
+function shouldShowDevLoginHints(): boolean {
+  return process.env.NEXT_PUBLIC_SHOW_DEV_LOGIN_HINTS === "true";
+}
+
+function appendSupportCode(message: string, error: unknown): string {
+  if (error instanceof ApiError && error.requestId) {
+    return `${message} Código de suporte: ${error.requestId}.`;
+  }
+
+  return message;
+}
 
 function validateLoginForm(values: LoginFormState): LoginFieldErrors {
   const errors: LoginFieldErrors = {};
@@ -59,27 +90,53 @@ function validateLoginForm(values: LoginFormState): LoginFieldErrors {
   return errors;
 }
 
+function validateSetupForm(
+  values: SetupFormState,
+  setupState: InitialSetupState | null,
+): SetupFieldErrors {
+  const errors: SetupFieldErrors = {};
+  const normalizedUsername = values.username.trim();
+
+  if (!normalizedUsername) {
+    errors.username = "Informe o usuário administrador.";
+  } else if (!USERNAME_PATTERN.test(normalizedUsername)) {
+    errors.username = "Use apenas letras, números, ponto, arroba, hífen ou underscore.";
+  }
+
+  if (!values.password.trim()) {
+    errors.password = "Informe a senha inicial.";
+  }
+
+  if (setupState?.requires_setup_token && !values.setupToken.trim()) {
+    errors.setupToken = "Informe o token de setup.";
+  }
+
+  return errors;
+}
+
 function getLoginErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
-      return "Credenciais inválidas. Revise usuário e senha.";
+      return appendSupportCode("Credenciais inválidas. Revise usuário e senha.", error);
     }
 
     if (error.status === 404) {
-      return "Empresa inexistente. Revise o código informado.";
+      return appendSupportCode("Empresa inexistente. Revise o código informado.", error);
     }
 
     if (error.status === 403) {
-      if (error.message === "Operator is not allowed for this tenant") {
-        return "Este usuário não pode acessar a empresa informada.";
+      if (error.detail === "Operator is not allowed for this tenant") {
+        return appendSupportCode("Este usuário não pode acessar a empresa informada.", error);
       }
 
-      if (error.message === "Operator is disabled") {
-        return "Este usuário está desabilitado.";
+      if (error.detail === "Operator is disabled") {
+        return appendSupportCode("Este usuário está desabilitado.", error);
       }
 
-      return "Acesso negado para a empresa informada.";
+      return appendSupportCode("Acesso negado para a empresa informada.", error);
     }
+
+    return error.message;
   }
 
   if (error instanceof Error && error.message) {
@@ -89,11 +146,67 @@ function getLoginErrorMessage(error: unknown): string {
   return "Não foi possível iniciar a sessão operacional.";
 }
 
+function getSetupErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 403) {
+      return appendSupportCode("Token de setup inválido.", error);
+    }
+
+    if (error.status === 409) {
+      return appendSupportCode("O primeiro acesso já foi configurado.", error);
+    }
+
+    if (error.status === 503) {
+      return appendSupportCode(
+        "Configure o storage persistente antes de criar o administrador inicial.",
+        error,
+      );
+    }
+
+    return error.message;
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return "Não foi possível criar o administrador inicial.";
+}
+
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
+  const showDevLoginHints = shouldShowDevLoginHints();
   const [formValues, setFormValues] = useState<LoginFormState>(INITIAL_FORM_STATE);
   const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [setupState, setSetupState] = useState<InitialSetupState | null>(null);
+  const [setupValues, setSetupValues] = useState<SetupFormState>(
+    INITIAL_SETUP_FORM_STATE,
+  );
+  const [setupFieldErrors, setSetupFieldErrors] = useState<SetupFieldErrors>({});
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupSuccess, setSetupSuccess] = useState<string | null>(null);
+  const [isSetupSubmitting, setIsSetupSubmitting] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    getInitialSetupState()
+      .then((state) => {
+        if (isMounted) {
+          setSetupState(state);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setSetupState(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   function handleFieldChange(field: LoginFieldName) {
     return (event: ChangeEvent<HTMLInputElement>) => {
@@ -115,6 +228,30 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
 
       if (submitError) {
         setSubmitError(null);
+      }
+    };
+  }
+
+  function handleSetupFieldChange(field: SetupFieldName) {
+    return (event: ChangeEvent<HTMLInputElement>) => {
+      const nextValue = event.target.value;
+      setSetupValues((currentValue) => ({
+        ...currentValue,
+        [field]: nextValue,
+      }));
+
+      setSetupFieldErrors((currentValue) => {
+        if (!currentValue[field]) {
+          return currentValue;
+        }
+
+        const nextErrors = { ...currentValue };
+        delete nextErrors[field];
+        return nextErrors;
+      });
+
+      if (setupError) {
+        setSetupError(null);
       }
     };
   }
@@ -142,6 +279,47 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
       setSubmitError(getLoginErrorMessage(error));
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleSetupSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextErrors = validateSetupForm(setupValues, setupState);
+    setSetupFieldErrors(nextErrors);
+    setSetupError(null);
+    setSetupSuccess(null);
+
+    if (Object.keys(nextErrors).length > 0) {
+      return;
+    }
+
+    setIsSetupSubmitting(true);
+    try {
+      const operator = await createInitialAdmin({
+        username: setupValues.username,
+        password: setupValues.password,
+        setupToken: setupValues.setupToken,
+      });
+      setSetupValues(INITIAL_SETUP_FORM_STATE);
+      setSetupState((currentValue) =>
+        currentValue
+          ? {
+              ...currentValue,
+              available: false,
+            }
+          : currentValue,
+      );
+      setSetupSuccess("Administrador inicial criado. Entre com o usuário criado.");
+      setFormValues({
+        tenantId: operator.tenant_id,
+        username: operator.username,
+        password: "",
+      });
+    } catch (error) {
+      setSetupError(getSetupErrorMessage(error));
+    } finally {
+      setIsSetupSubmitting(false);
     }
   }
 
@@ -184,28 +362,122 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
             Informe empresa, usuário e senha. Depois disso você já poderá enviar a planilha.
           </p>
 
-          <div className="auth-bootstrap-card">
-            <div className="auth-bootstrap-head">
-              <div>
-                <span className="auth-bootstrap-label">Ambiente local</span>
-                <strong>Dados iniciais já configurados</strong>
+          {setupState?.available ? (
+            <div className="auth-bootstrap-card auth-setup-card">
+              <div className="auth-bootstrap-head">
+                <div>
+                  <span className="auth-bootstrap-label">Primeiro acesso</span>
+                  <strong>Criar administrador inicial</strong>
+                </div>
+                <span className="auth-bootstrap-badge">uso único</span>
               </div>
-              <span className="auth-bootstrap-badge">empresa padrão</span>
+              <form className="form-grid auth-setup-form" noValidate onSubmit={handleSetupSubmit}>
+                <div className="field">
+                  <label htmlFor="setup-username">Usuário administrador</label>
+                  <input
+                    id="setup-username"
+                    name="setup_username"
+                    type="text"
+                    autoComplete="username"
+                    inputMode="email"
+                    value={setupValues.username}
+                    aria-invalid={Boolean(setupFieldErrors.username)}
+                    onChange={handleSetupFieldChange("username")}
+                  />
+                  {setupFieldErrors.username ? (
+                    <p className="inline-error">{setupFieldErrors.username}</p>
+                  ) : (
+                    <small>Esse usuário será vinculado à empresa inicial.</small>
+                  )}
+                </div>
+
+                <div className="field">
+                  <label htmlFor="setup-password">Senha inicial</label>
+                  <input
+                    id="setup-password"
+                    name="setup_password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={setupValues.password}
+                    aria-invalid={Boolean(setupFieldErrors.password)}
+                    onChange={handleSetupFieldChange("password")}
+                  />
+                  {setupFieldErrors.password ? (
+                    <p className="inline-error">{setupFieldErrors.password}</p>
+                  ) : (
+                    <small>A senha não é exibida nem armazenada em texto puro.</small>
+                  )}
+                </div>
+
+                {setupState.requires_setup_token ? (
+                  <div className="field">
+                    <label htmlFor="setup-token">Token de setup</label>
+                    <input
+                      id="setup-token"
+                      name="setup_token"
+                      type="password"
+                      autoComplete="one-time-code"
+                      value={setupValues.setupToken}
+                      aria-invalid={Boolean(setupFieldErrors.setupToken)}
+                      onChange={handleSetupFieldChange("setupToken")}
+                    />
+                    {setupFieldErrors.setupToken ? (
+                      <p className="inline-error">{setupFieldErrors.setupToken}</p>
+                    ) : (
+                      <small>Use o token configurado para este ambiente.</small>
+                    )}
+                  </div>
+                ) : null}
+
+                {setupError ? (
+                  <p className="inline-error auth-submit-error" role="alert">
+                    {setupError}
+                  </p>
+                ) : null}
+
+                <button className="cta auth-cta" type="submit" disabled={isSetupSubmitting}>
+                  {isSetupSubmitting ? "Criando..." : "Criar administrador"}
+                </button>
+              </form>
             </div>
-            <dl className="auth-bootstrap-list">
-              <div>
-                <dt>Empresa inicial</dt>
-                <dd>{INITIAL_ACCESS.tenantId}</dd>
+          ) : null}
+
+          {setupSuccess ? (
+            <div className="auth-bootstrap-card auth-setup-success" role="status">
+              <div className="auth-bootstrap-head">
+                <div>
+                  <span className="auth-bootstrap-label">Primeiro acesso</span>
+                  <strong>{setupSuccess}</strong>
+                </div>
+                <span className="auth-bootstrap-badge">concluído</span>
               </div>
-              <div>
-                <dt>Usuário inicial</dt>
-                <dd>{INITIAL_ACCESS.username}</dd>
+            </div>
+          ) : null}
+
+          {showDevLoginHints ? (
+            <div className="auth-bootstrap-card">
+              <div className="auth-bootstrap-head">
+                <div>
+                  <span className="auth-bootstrap-label">Ambiente local</span>
+                  <strong>Dados iniciais de desenvolvimento</strong>
+                </div>
+                <span className="auth-bootstrap-badge">somente dev</span>
               </div>
-            </dl>
-            <p className="auth-bootstrap-note">
-              A senha inicial fica na configuração deste ambiente local e deve ser trocada antes de uso fora do setup interno.
-            </p>
-          </div>
+              <dl className="auth-bootstrap-list">
+                <div>
+                  <dt>Empresa inicial</dt>
+                  <dd>{INITIAL_ACCESS.tenantId}</dd>
+                </div>
+                <div>
+                  <dt>Usuário inicial</dt>
+                  <dd>{INITIAL_ACCESS.username}</dd>
+                </div>
+              </dl>
+              <p className="auth-bootstrap-note">
+                Esta dica só aparece quando NEXT_PUBLIC_SHOW_DEV_LOGIN_HINTS=true.
+              </p>
+            </div>
+          ) : null}
 
           <form className="form-grid" noValidate onSubmit={handleSubmit}>
             <div className="field">
@@ -223,7 +495,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               {fieldErrors.tenantId ? (
                 <p className="inline-error">{fieldErrors.tenantId}</p>
               ) : (
-                <small>Use o código informado pela sua equipe. Ex.: `default`.</small>
+                <small>Use o código informado pela sua equipe operacional.</small>
               )}
             </div>
 

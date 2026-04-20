@@ -48,8 +48,12 @@ spec:
             - name: http
               containerPort: 8000
           env:
+            - name: VALIDATOR_FRONTEND_URL
+              value: http://192.168.0.20:30092
+            - name: VALIDATOR_FRONTEND_ORIGINS
+              value: http://192.168.0.20:30092,http://192.168.20.209:30092,http://192.168.0.20,http://192.168.20.209
             - name: VALIDATOR_FRONTEND_ORIGIN_REGEX
-              value: "^https?://[^/]+:30092$"
+              value: "^https?://[^/]+(:30092)?$"
             - name: VALIDATOR_SQLITE_PATH
               value: /app/results/operational.sqlite3
             - name: VALIDATOR_OFFICIAL_TENANT_ID
@@ -68,6 +72,12 @@ spec:
                   optional: true
             - name: VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET
               value: "false"
+            - name: VALIDATOR_SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: setup-token
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health

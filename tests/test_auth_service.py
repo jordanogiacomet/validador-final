@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,6 +12,7 @@ from app.services.auth_service import (
     BOOTSTRAP_ADMIN_FORCE_RESET_ENV,
     BOOTSTRAP_ADMIN_PASSWORD_ENV,
     BOOTSTRAP_ADMIN_USERNAME_ENV,
+    INITIAL_SETUP_TOKEN_ENV,
     OFFICIAL_TENANT_ID_ENV,
     AuthService,
     AuthServiceError,
@@ -67,6 +70,26 @@ def test_issue_api_key_persists_only_hashed_secret_and_resolves_after_reload(tmp
     assert resolved.tenant_id == "default"
     assert resolved.api_key_id == issued_key.record.key_id
     assert resolved.operator_id == "default-local-operator"
+
+
+def test_inspect_issued_api_key_reloads_shared_storage_when_local_cache_is_stale(tmp_path):
+    storage_path = tmp_path / "issued_keys.json"
+    issuing_service = AuthService(storage_path=storage_path)
+    validating_service = AuthService(storage_path=storage_path)
+
+    issued_key = issuing_service.issue_api_key(
+        tenant_id="default",
+        username="default.operator",
+        password=DEFAULT_PASSWORD,
+    )
+
+    resolution = validating_service.inspect_issued_api_key(issued_key.raw_api_key)
+
+    assert resolution.status is IssuedAPIKeyStatus.ACTIVE
+    assert resolution.resolved_api_key is not None
+    assert resolution.resolved_api_key.tenant_id == "default"
+    assert resolution.resolved_api_key.api_key_id == issued_key.record.key_id
+    assert resolution.resolved_api_key.operator_id == "default-local-operator"
 
 
 def test_issue_api_key_records_audit_event_and_expiration_metadata() -> None:
@@ -445,6 +468,186 @@ def test_bootstrap_admin_from_env_force_reset_updates_existing_operator_password
         password="SenhaAtualizada@2026",
     )
     assert issued_key.record.operator_id == updated.operator_id
+
+
+def test_initial_setup_state_requires_persistent_operator_storage(tmp_path, monkeypatch):
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    service = AuthService()
+
+    state = service.get_initial_setup_state(env={OFFICIAL_TENANT_ID_ENV: tenant_id})
+
+    assert state.available is False
+    assert state.storage_configured is False
+    assert state.tenant_id is None
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_initial_admin(
+            username="admin.inicial",
+            password="Setup@2026",
+            env={OFFICIAL_TENANT_ID_ENV: tenant_id},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Initial setup requires persistent operator storage"
+
+
+def test_initial_setup_creates_single_persisted_admin_and_closes_public_setup(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    audit_service = AuditService()
+    service = AuthService(
+        operator_storage_path=operator_storage_path,
+        audit_service=audit_service,
+    )
+    setup_env = {OFFICIAL_TENANT_ID_ENV: tenant_id}
+
+    state_before = service.get_initial_setup_state(env=setup_env)
+
+    assert state_before.available is True
+    assert state_before.storage_configured is True
+    assert state_before.requires_setup_token is False
+    assert state_before.tenant_id == tenant_id
+
+    operator = service.create_initial_admin(
+        username="admin.inicial",
+        password="Setup@2026",
+        env=setup_env,
+    )
+
+    assert operator.tenant_id == tenant_id
+    assert operator.username == "admin.inicial"
+    assert operator.is_seed is False
+
+    payload = json.loads(operator_storage_path.read_text(encoding="utf-8"))
+    assert payload == [
+        {
+            "tenant_id": tenant_id,
+            "operator_id": operator.operator_id,
+            "username": "admin.inicial",
+            "password_hash": payload[0]["password_hash"],
+            "disabled": False,
+        }
+    ]
+    assert payload[0]["password_hash"] != "Setup@2026"
+    assert verify_password("Setup@2026", payload[0]["password_hash"]) is True
+    assert "Setup@2026" not in operator_storage_path.read_text(encoding="utf-8")
+
+    state_after = service.get_initial_setup_state(env=setup_env)
+    assert state_after.available is False
+    assert state_after.storage_configured is True
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_initial_admin(
+            username="outro.admin",
+            password="Outra@2026",
+            env=setup_env,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Initial setup is no longer available"
+
+    events = audit_service.list_events(tenant_id=tenant_id)
+    assert [event.event_type for event in events] == [
+        AuditEventType.INITIAL_ADMIN_CREATED
+    ]
+    details = events[0].details
+    assert details["operator_id"] == operator.operator_id
+    assert details["username"] == "admin.inicial"
+    assert details["initial_setup"] is True
+    assert "Setup@2026" not in json.dumps(details)
+
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    issued_key = reloaded.issue_api_key(
+        tenant_id=tenant_id,
+        username="admin.inicial",
+        password="Setup@2026",
+    )
+    assert issued_key.record.operator_id == operator.operator_id
+
+
+def test_initial_setup_optionally_requires_setup_token(tmp_path, monkeypatch) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    audit_service = AuditService()
+    service = AuthService(
+        operator_storage_path=operator_storage_path,
+        audit_service=audit_service,
+    )
+    setup_env = {
+        OFFICIAL_TENANT_ID_ENV: tenant_id,
+        INITIAL_SETUP_TOKEN_ENV: "token-publicado",
+    }
+
+    state = service.get_initial_setup_state(env=setup_env)
+    assert state.available is True
+    assert state.requires_setup_token is True
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_initial_admin(
+            username="admin.inicial",
+            password="Setup@2026",
+            setup_token="token-incorreto",
+            env=setup_env,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Invalid setup token"
+
+    operator = service.create_initial_admin(
+        username="admin.inicial",
+        password="Setup@2026",
+        setup_token="token-publicado",
+        env=setup_env,
+    )
+
+    assert operator.username == "admin.inicial"
+    event = audit_service.list_events(tenant_id=tenant_id)[0]
+    assert event.event_type is AuditEventType.INITIAL_ADMIN_CREATED
+    assert event.details["setup_token_required"] is True
+    assert "token-publicado" not in json.dumps(event.details)
+
+
+def test_initial_setup_concurrency_allows_only_one_persisted_admin(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    sqlite_path = tmp_path / "operational.sqlite3"
+    setup_env = {OFFICIAL_TENANT_ID_ENV: tenant_id}
+    AuthService(sqlite_path=sqlite_path)
+    attempt_count = 6
+    barrier = threading.Barrier(attempt_count)
+
+    def attempt_create(index: int) -> tuple[str, int | str]:
+        service = AuthService(sqlite_path=sqlite_path)
+        barrier.wait(timeout=5)
+        try:
+            operator = service.create_initial_admin(
+                username=f"admin.inicial.{index}",
+                password="Setup@2026",
+                env=setup_env,
+            )
+            return ("created", operator.operator_id)
+        except AuthServiceError as exc:
+            return ("blocked", exc.status_code)
+
+    with ThreadPoolExecutor(max_workers=attempt_count) as executor:
+        results = list(executor.map(attempt_create, range(attempt_count)))
+
+    created = [result for result in results if result[0] == "created"]
+    blocked = [result for result in results if result[0] == "blocked"]
+
+    assert len(created) == 1
+    assert len(blocked) == attempt_count - 1
+    assert {status_code for _status, status_code in blocked} == {409}
+
+    reloaded = AuthService(sqlite_path=sqlite_path)
+    persisted_operators = reloaded.list_operators(tenant_id=tenant_id)
+    assert len(persisted_operators) == 1
+    assert persisted_operators[0].operator_id == created[0][1]
 
 
 def test_create_operator_persists_only_hashed_password_and_supports_login_after_reload(

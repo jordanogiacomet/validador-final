@@ -261,6 +261,31 @@ export function buildFinalScopeCopy(scope: ValidationScope): string {
   return "Itens cadastrados do zero validados. PDF, JSON e CSV estão disponíveis.";
 }
 
+function looksLikeCsvFailure(message: string): boolean {
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("csv") ||
+    normalizedMessage.includes("delimiter") ||
+    normalizedMessage.includes("encoding") ||
+    normalizedMessage.includes("codec") ||
+    normalizedMessage.includes("tokenizing") ||
+    normalizedMessage.includes("column")
+  );
+}
+
+export function formatJobFailureMessage(
+  job: Pick<JobStatusResponse, "job_id" | "error_message" | "status_detail">,
+): string {
+  const supportReference = job.job_id ? ` Referência do lote: ${job.job_id}.` : "";
+  const rawMessage = job.error_message || job.status_detail || "";
+
+  if (looksLikeCsvFailure(rawMessage)) {
+    return `Não foi possível ler o CSV. Revise o arquivo, delimitador, codificação e cabeçalho.${supportReference}`;
+  }
+
+  return `O lote não foi concluído nesta tentativa. Tente novamente ou acione o suporte com a referência do lote.${supportReference}`;
+}
+
 export function buildProcessGuidance(job: JobStatusResponse | null): {
   title: string;
   detail: string;
@@ -289,8 +314,7 @@ export function buildProcessGuidance(job: JobStatusResponse | null): {
   if (job.status === "failed") {
     return {
       title: "Revise a falha e envie novamente",
-      detail:
-        job.error_message || job.status_detail || "O arquivo não pôde ser concluído nesta tentativa.",
+      detail: formatJobFailureMessage(job),
     };
   }
 
@@ -347,8 +371,7 @@ export function buildResultWorkspaceGuide({
   if (job?.status === "failed") {
     return {
       title: "A conferência não foi concluída",
-      detail:
-        job.error_message || job.status_detail || "Revise a mensagem acima e envie o arquivo novamente.",
+      detail: formatJobFailureMessage(job),
     };
   }
 
@@ -1624,6 +1647,10 @@ export function describeJobProgress(
 
   if (job.status === "canceled") {
     return job.status_detail || "Lote interrompido.";
+  }
+
+  if (job.status === "failed") {
+    return "Falha no processamento. Abra o lote para ver a referência de suporte.";
   }
 
   return job.status_detail || "Sem detalhes adicionais.";

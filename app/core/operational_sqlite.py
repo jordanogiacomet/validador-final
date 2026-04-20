@@ -150,6 +150,28 @@ class OperationalSQLiteStore:
             rows=rows,
         )
 
+    def try_insert_first_operator_record(self, payload: dict[str, Any]) -> bool:
+        """Insert one operator only if no persisted operators exist yet."""
+        row = (
+            str(payload["tenant_id"]),
+            str(payload["operator_id"]),
+            str(payload["username"]).casefold(),
+            _serialize_payload(payload),
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            count_row = connection.execute("SELECT COUNT(*) FROM operators").fetchone()
+            persisted_count = int(count_row[0]) if count_row is not None else 0
+            if persisted_count > 0:
+                return False
+
+            connection.execute(
+                "INSERT INTO operators (tenant_id, operator_id, username_key, payload) "
+                "VALUES (?, ?, ?, ?)",
+                row,
+            )
+            return True
+
     def probe(self) -> str:
         if not self.path.exists():
             return str(self.path)
