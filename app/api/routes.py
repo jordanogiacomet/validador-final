@@ -250,6 +250,23 @@ class OperatorInvitationResponse(BaseModel):
     invite_token: str
 
 
+class OperatorPasswordResetTokenCreateRequest(TenantScopedRequest):
+    expires_in_minutes: int = Field(default=60, ge=5, le=240)
+
+
+class OperatorPasswordResetTokenResponse(BaseModel):
+    tenant_id: str
+    operator_id: str
+    reset_id: str
+    expires_at: datetime
+    reset_token: str
+
+
+class OperatorPasswordResetCompletionRequest(BaseModel):
+    reset_token: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
 class SeedOperatorPasswordRotationRequest(TenantScopedRequest):
     new_password: str = Field(min_length=1)
 
@@ -476,6 +493,15 @@ def _build_tenant_admin_response(tenant: TenantAdminRecord) -> TenantAdminRespon
     )
 
 
+def _request_origin(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip() or "unknown"
+    if request.client is not None and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
 def _get_authorized_job(request: Request, job_id: str):
     job = job_service.get_job(job_id)
     if job is None:
@@ -558,12 +584,16 @@ async def get_initial_setup_state() -> InitialSetupStateResponse:
 
 
 @router.post("/setup", response_model=OperatorResponse, status_code=201)
-async def create_initial_admin(payload: InitialAdminSetupRequest) -> OperatorResponse:
+async def create_initial_admin(
+    request: Request,
+    payload: InitialAdminSetupRequest,
+) -> OperatorResponse:
     try:
         operator = auth_service.create_initial_admin(
             username=payload.username,
             password=payload.password,
             setup_token=payload.setup_token,
+            origin=_request_origin(request),
         )
     except AuthServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -572,14 +602,19 @@ async def create_initial_admin(payload: InitialAdminSetupRequest) -> OperatorRes
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest) -> LoginResponse:
+async def login(request: Request, payload: LoginRequest) -> LoginResponse:
     try:
         issued_key = auth_service.issue_api_key(
             tenant_id=payload.tenant_id,
             username=payload.username,
             password=payload.password,
+            origin=_request_origin(request),
         )
     except AuthServiceError as exc:
+        if exc.status_code == 429:
+            raise HTTPException(status_code=429, detail=exc.detail) from None
+        if exc.status_code in {401, 403, 404}:
+            raise HTTPException(status_code=401, detail="Invalid credentials") from None
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
     return LoginResponse(
@@ -856,6 +891,41 @@ async def create_operator_invitation(
 
 
 @router.post(
+    "/operators/{operator_id}/password-reset-token",
+    response_model=OperatorPasswordResetTokenResponse,
+    status_code=201,
+)
+async def create_operator_password_reset_token(
+    request: Request,
+    operator_id: str,
+    payload: OperatorPasswordResetTokenCreateRequest,
+) -> OperatorPasswordResetTokenResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.issue_password_reset_token",
+    )
+    try:
+        reset_token = auth_service.create_operator_password_reset_token(
+            tenant_id=resolved_tenant_id,
+            operator_id=operator_id,
+            expires_in=timedelta(minutes=payload.expires_in_minutes),
+            created_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return OperatorPasswordResetTokenResponse(
+        tenant_id=reset_token.record.tenant_id,
+        operator_id=reset_token.record.operator_id,
+        reset_id=reset_token.record.reset_id,
+        expires_at=reset_token.record.expires_at,
+        reset_token=reset_token.raw_reset_token,
+    )
+
+
+@router.post(
     "/operators/invitations/accept",
     response_model=OperatorResponse,
     status_code=201,
@@ -867,6 +937,23 @@ async def accept_operator_invitation(
         operator = auth_service.accept_operator_invitation(
             invite_token=payload.invite_token,
             password=payload.password,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post(
+    "/operators/password-reset/complete",
+    response_model=OperatorResponse,
+)
+async def complete_operator_password_reset(
+    payload: OperatorPasswordResetCompletionRequest,
+) -> OperatorResponse:
+    try:
+        operator = auth_service.complete_operator_password_reset(
+            reset_token=payload.reset_token,
+            new_password=payload.new_password,
         )
     except AuthServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None

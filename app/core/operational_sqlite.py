@@ -179,6 +179,38 @@ class OperationalSQLiteStore:
             rows=rows,
         )
 
+    def load_operator_password_resets(self) -> list[dict[str, Any]]:
+        return self._load_payloads(
+            "SELECT payload FROM operator_password_resets ORDER BY tenant_id ASC, "
+            "created_at ASC, reset_id ASC"
+        )
+
+    def replace_operator_password_resets(
+        self,
+        payloads: Iterable[dict[str, Any]],
+    ) -> None:
+        rows = [
+            (
+                str(payload["reset_id"]),
+                str(payload["tenant_id"]),
+                str(payload["operator_id"]),
+                str(payload["created_at"]),
+                payload["expires_at"],
+                payload.get("used_at"),
+                _serialize_payload(payload),
+            )
+            for payload in payloads
+        ]
+        self._replace_rows(
+            table_name="operator_password_resets",
+            insert_sql=(
+                "INSERT INTO operator_password_resets "
+                "(reset_id, tenant_id, operator_id, created_at, expires_at, used_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            rows=rows,
+        )
+
     def load_runtime_tenants(self) -> list[dict[str, Any]]:
         return self._load_payloads(
             "SELECT payload FROM runtime_tenants ORDER BY tenant_id ASC"
@@ -303,6 +335,20 @@ class OperationalSQLiteStore:
             ON operator_invites (tenant_id, created_at);
         CREATE INDEX IF NOT EXISTS operator_invites_tenant_username_idx
             ON operator_invites (tenant_id, username_key);
+
+        CREATE TABLE IF NOT EXISTS operator_password_resets (
+            reset_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            operator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS operator_password_resets_tenant_created_idx
+            ON operator_password_resets (tenant_id, created_at);
+        CREATE INDEX IF NOT EXISTS operator_password_resets_operator_idx
+            ON operator_password_resets (tenant_id, operator_id);
 
         CREATE TABLE IF NOT EXISTS runtime_tenants (
             tenant_id TEXT PRIMARY KEY,

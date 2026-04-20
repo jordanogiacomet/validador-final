@@ -37,12 +37,23 @@ from app.core.tenant_loader import (
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_STRENGTH_ERROR = (
+    "Password must be at least 8 characters long and include uppercase, lowercase, "
+    "digit, and special character"
+)
 DEFAULT_OPERATOR_INVITE_TTL_HOURS = 48
+DEFAULT_OPERATOR_PASSWORD_RESET_TTL_MINUTES = 60
+PUBLIC_AUTH_WINDOW = timedelta(minutes=5)
+PUBLIC_AUTH_LOCKOUT = timedelta(minutes=15)
+LOGIN_MAX_FAILURES = 5
+SETUP_MAX_FAILURES = 5
 OFFICIAL_TENANT_ID_ENV = "VALIDATOR_OFFICIAL_TENANT_ID"
 BOOTSTRAP_ADMIN_USERNAME_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_FORCE_RESET_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET"
 INITIAL_SETUP_TOKEN_ENV = "VALIDATOR_SETUP_TOKEN"
+PUBLIC_AUTH_RATE_LIMIT_DETAIL = "Too many attempts. Try again later."
 
 if TYPE_CHECKING:
     from app.services.audit_service import AuditService
@@ -92,6 +103,18 @@ class OperatorInvitationRecord(BaseModel):
     accepted_operator_id: str | None = None
 
 
+class OperatorPasswordResetRecord(BaseModel):
+    reset_id: str = Field(default_factory=lambda: f"reset-{uuid4().hex}")
+    tenant_id: str
+    operator_id: str
+    username: str
+    token_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    expires_at: datetime
+    created_by_api_key_id: str | None = None
+    used_at: datetime | None = None
+
+
 @dataclass(frozen=True)
 class EffectiveOperator:
     tenant_id: str
@@ -115,6 +138,12 @@ class IssuedAPIKey:
 class OperatorInvitation:
     raw_invite_token: str
     record: OperatorInvitationRecord
+
+
+@dataclass(frozen=True)
+class OperatorPasswordResetToken:
+    raw_reset_token: str
+    record: OperatorPasswordResetRecord
 
 
 @dataclass(frozen=True)
@@ -155,6 +184,17 @@ class IssuedAPIKeyResolution:
     detail: str = "Invalid API key"
 
 
+class PublicAuthAction(StrEnum):
+    LOGIN = "login"
+    SETUP = "setup"
+
+
+@dataclass
+class PublicAuthAttemptState:
+    failures: list[datetime]
+    locked_until: datetime | None = None
+
+
 def hash_api_key(raw_api_key: str) -> str:
     return hashlib.sha256(raw_api_key.encode("utf-8")).hexdigest()
 
@@ -162,6 +202,12 @@ def hash_api_key(raw_api_key: str) -> str:
 def _derive_invite_storage_path(operator_storage_path: Path) -> Path:
     return operator_storage_path.with_name(
         f"{operator_storage_path.stem}.invites{operator_storage_path.suffix}"
+    )
+
+
+def _derive_password_reset_storage_path(operator_storage_path: Path) -> Path:
+    return operator_storage_path.with_name(
+        f"{operator_storage_path.stem}.password-resets{operator_storage_path.suffix}"
     )
 
 
@@ -206,6 +252,10 @@ def _parse_env_bool(raw_value: str) -> bool:
     return raw_value.strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _hash_identifier(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def load_bootstrap_admin_config_from_env(
     env: Mapping[str, str] | None = None,
 ) -> BootstrapAdminConfig | None:
@@ -245,6 +295,7 @@ class AuthService:
         storage_path: Path | str | None = None,
         operator_storage_path: Path | str | None = None,
         invite_storage_path: Path | str | None = None,
+        password_reset_storage_path: Path | str | None = None,
         sqlite_path: Path | str | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
@@ -253,6 +304,7 @@ class AuthService:
             storage_path,
             operator_storage_path,
             invite_storage_path,
+            password_reset_storage_path,
         )
         self._sqlite_store = (
             OperationalSQLiteStore(resolved_sqlite_path)
@@ -280,14 +332,28 @@ class AuthService:
             if invite_storage_path is not None
             else None
         )
+        self._password_reset_storage_path = (
+            resolved_sqlite_path
+            if resolved_sqlite_path is not None
+            else Path(password_reset_storage_path)
+            if password_reset_storage_path is not None
+            else None
+        )
         self._audit_service = audit_service
         self._records: dict[str, IssuedAPIKeyRecord] = {}
         self._operator_records: dict[tuple[str, str], StoredOperatorRecord] = {}
         self._invite_records: dict[str, OperatorInvitationRecord] = {}
+        self._password_reset_records: dict[str, OperatorPasswordResetRecord] = {}
+        self._public_auth_attempts: dict[
+            tuple[PublicAuthAction, str, str, str],
+            PublicAuthAttemptState,
+        ] = {}
+        self._public_auth_lock = Lock()
         self._initial_setup_lock = Lock()
         self._load_records()
         self._load_operator_records()
         self._load_invite_records()
+        self._load_password_reset_records()
 
     @property
     def storage_path(self) -> Path | None:
@@ -301,8 +367,25 @@ class AuthService:
     def invite_storage_path(self) -> Path | None:
         return self._resolve_invite_storage_path()
 
+    @property
+    def password_reset_storage_path(self) -> Path | None:
+        return self._resolve_password_reset_storage_path()
+
     def set_audit_service(self, audit_service: AuditService | None) -> None:
         self._audit_service = audit_service
+
+    @staticmethod
+    def validate_password_strength(password: str) -> None:
+        if len(password) < PASSWORD_MIN_LENGTH:
+            raise AuthServiceError(400, PASSWORD_STRENGTH_ERROR)
+        if not any(character.islower() for character in password):
+            raise AuthServiceError(400, PASSWORD_STRENGTH_ERROR)
+        if not any(character.isupper() for character in password):
+            raise AuthServiceError(400, PASSWORD_STRENGTH_ERROR)
+        if not any(character.isdigit() for character in password):
+            raise AuthServiceError(400, PASSWORD_STRENGTH_ERROR)
+        if not any(not character.isalnum() for character in password):
+            raise AuthServiceError(400, PASSWORD_STRENGTH_ERROR)
 
     def list_operators(self, *, tenant_id: str) -> list[EffectiveOperator]:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
@@ -503,8 +586,13 @@ class AuthService:
         username: str,
         password: str,
         setup_token: str | None = None,
+        origin: str | None = None,
+        now: datetime | None = None,
         env: Mapping[str, str] | None = None,
     ) -> EffectiveOperator:
+        current_time = now or datetime.now(UTC)
+        normalized_origin = self._normalize_public_origin(origin)
+        normalized_username = username.strip()
         if self._operator_storage_path is None:
             raise AuthServiceError(
                 503,
@@ -512,16 +600,45 @@ class AuthService:
             )
 
         environment = os.environ if env is None else env
+        normalized_tenant_id = self._resolve_initial_setup_tenant_id(environment)
+        self._ensure_public_auth_allowed(
+            PublicAuthAction.SETUP,
+            origin=normalized_origin,
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            now=current_time,
+        )
         expected_setup_token = environment.get(INITIAL_SETUP_TOKEN_ENV, "").strip()
         if expected_setup_token and not (
             setup_token
             and hmac.compare_digest(setup_token.strip(), expected_setup_token)
         ):
-            raise AuthServiceError(403, "Invalid setup token")
-
-        normalized_tenant_id = self._resolve_initial_setup_tenant_id(environment)
-        normalized_username = username.strip()
-        self._load_tenant_for_login(normalized_tenant_id)
+            self._raise_public_setup_failure(
+                tenant_id=normalized_tenant_id,
+                username=normalized_username,
+                origin=normalized_origin,
+                reason="invalid_setup_token",
+                current_time=current_time,
+                status_code=403,
+                detail="Invalid setup token",
+            )
+        try:
+            self.validate_password_strength(password)
+            self._load_tenant_for_login(normalized_tenant_id)
+        except AuthServiceError as exc:
+            self._raise_public_setup_failure(
+                tenant_id=normalized_tenant_id,
+                username=normalized_username,
+                origin=normalized_origin,
+                reason=(
+                    "weak_password"
+                    if exc.status_code == 400
+                    else "tenant_unavailable"
+                ),
+                current_time=current_time,
+                status_code=exc.status_code,
+                detail=exc.detail,
+            )
 
         with self._initial_setup_lock:
             self._load_operator_records()
@@ -540,6 +657,12 @@ class AuthService:
             )
             operator = self._persist_initial_admin_record(record)
 
+        self._clear_public_auth_failures(
+            PublicAuthAction.SETUP,
+            origin=normalized_origin,
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+        )
         self._record_operator_audit_event(
             AuditEventType.INITIAL_ADMIN_CREATED,
             operator=operator,
@@ -563,6 +686,7 @@ class AuthService:
 
         normalized_tenant_id = canonicalize_tenant_id(config.tenant_id)
         normalized_username = config.username.strip()
+        self.validate_password_strength(config.password)
         self._load_tenant_for_login(normalized_tenant_id)
         existing_operator = self._find_operator_by_username(
             normalized_tenant_id,
@@ -618,6 +742,7 @@ class AuthService:
     ) -> EffectiveOperator:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         normalized_username = username.strip()
+        self.validate_password_strength(password)
         self._load_tenant_for_login(normalized_tenant_id)
         self._load_operator_records()
 
@@ -702,6 +827,7 @@ class AuthService:
         now: datetime | None = None,
     ) -> EffectiveOperator:
         current_time = now or datetime.now(UTC)
+        self.validate_password_strength(password)
         invite = self._find_invitation_by_token(invite_token.strip())
         if invite is None:
             raise AuthServiceError(404, "Invitation token not found")
@@ -740,6 +866,146 @@ class AuthService:
             details={"operator_id": operator.operator_id},
         )
         return operator
+
+    def create_operator_password_reset_token(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        expires_in: timedelta | None = None,
+        created_by_api_key_id: str | None = None,
+        now: datetime | None = None,
+    ) -> OperatorPasswordResetToken:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
+        if operator is None:
+            raise AuthServiceError(404, "Operator not found")
+        if operator.disabled:
+            raise AuthServiceError(409, "Operator is disabled")
+
+        current_time = now or datetime.now(UTC)
+        ttl = expires_in or timedelta(minutes=DEFAULT_OPERATOR_PASSWORD_RESET_TTL_MINUTES)
+        if ttl <= timedelta(0):
+            raise AuthServiceError(400, "Password reset expiration must be greater than zero")
+
+        self._load_password_reset_records()
+        self._invalidate_pending_password_reset_tokens(
+            tenant_id=normalized_tenant_id,
+            operator_id=operator.operator_id,
+            now=current_time,
+        )
+
+        raw_reset_token = f"vreset_{secrets.token_urlsafe(32)}"
+        record = OperatorPasswordResetRecord(
+            tenant_id=normalized_tenant_id,
+            operator_id=operator.operator_id,
+            username=operator.username,
+            token_hash=hash_api_key(raw_reset_token),
+            created_at=current_time,
+            expires_at=current_time + ttl,
+            created_by_api_key_id=created_by_api_key_id,
+        )
+        self._password_reset_records[record.reset_id] = record
+        self._persist_password_reset_records()
+        self._record_password_reset_audit_event(
+            AuditEventType.OPERATOR_PASSWORD_RESET_TOKEN_ISSUED,
+            reset=record,
+            api_key_id=created_by_api_key_id,
+            details={"operator_id": operator.operator_id},
+        )
+        return OperatorPasswordResetToken(raw_reset_token=raw_reset_token, record=record)
+
+    def complete_operator_password_reset(
+        self,
+        *,
+        reset_token: str,
+        new_password: str,
+        now: datetime | None = None,
+    ) -> EffectiveOperator:
+        current_time = now or datetime.now(UTC)
+        token_hash = hash_api_key(reset_token.strip())
+        try:
+            self.validate_password_strength(new_password)
+        except AuthServiceError as exc:
+            self._record_password_reset_failure(
+                token_hash=token_hash,
+                reason="weak_password",
+                status_code=exc.status_code,
+                detail=exc.detail,
+            )
+            raise
+
+        reset_record = self._find_password_reset_by_token(reset_token.strip())
+        if reset_record is None:
+            self._record_password_reset_failure(
+                token_hash=token_hash,
+                reason="token_not_found",
+                status_code=404,
+                detail="Password reset token not found",
+            )
+            raise AuthServiceError(404, "Password reset token not found")
+
+        if reset_record.used_at is not None:
+            self._record_password_reset_audit_event(
+                AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
+                reset=reset_record,
+                api_key_id=None,
+                details={"reason": "token_already_used"},
+            )
+            raise AuthServiceError(409, "Password reset token already used")
+
+        if current_time >= reset_record.expires_at:
+            self._record_password_reset_audit_event(
+                AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
+                reset=reset_record,
+                api_key_id=None,
+                details={"reason": "token_expired"},
+            )
+            raise AuthServiceError(410, "Password reset token expired")
+
+        operator = self._find_operator_by_id(
+            canonicalize_tenant_id(reset_record.tenant_id),
+            reset_record.operator_id,
+        )
+        if operator is None:
+            self._record_password_reset_audit_event(
+                AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
+                reset=reset_record,
+                api_key_id=None,
+                details={"reason": "operator_not_found"},
+            )
+            raise AuthServiceError(404, "Operator not found")
+        if operator.disabled:
+            self._record_password_reset_audit_event(
+                AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
+                reset=reset_record,
+                api_key_id=None,
+                details={"reason": "operator_disabled"},
+            )
+            raise AuthServiceError(403, "Operator is disabled")
+
+        updated_operator = self._store_effective_operator(
+            operator,
+            password_hash=hash_password(new_password),
+            must_change_password=False,
+        )
+        revoked_count = self._revoke_active_keys_for_operator(
+            tenant_id=updated_operator.tenant_id,
+            operator_id=updated_operator.operator_id,
+        )
+
+        reset_record.used_at = current_time
+        self._persist_password_reset_records()
+        self._record_password_reset_audit_event(
+            AuditEventType.OPERATOR_PASSWORD_RESET_COMPLETED,
+            reset=reset_record,
+            api_key_id=None,
+            details={
+                "operator_id": updated_operator.operator_id,
+                "revoked_api_key_count": revoked_count,
+            },
+        )
+        return updated_operator
 
     def change_operator_role(
         self,
@@ -786,6 +1052,7 @@ class AuthService:
         if operator is None:
             raise AuthServiceError(404, "Operator not found")
 
+        self.validate_password_strength(new_password)
         updated_operator = self._store_effective_operator(
             operator,
             password_hash=hash_password(new_password),
@@ -824,6 +1091,7 @@ class AuthService:
         if not operator.must_change_password:
             raise AuthServiceError(409, "Password setup is not required")
 
+        self.validate_password_strength(new_password)
         updated_operator = self._store_effective_operator(
             operator,
             password_hash=hash_password(new_password),
@@ -905,6 +1173,7 @@ class AuthService:
                 "Multiple seed operators configured for tenant",
             )
 
+        self.validate_password_strength(new_password)
         updated_operator = self._store_effective_operator(
             seed_operators[0],
             password_hash=hash_password(new_password),
@@ -932,31 +1201,53 @@ class AuthService:
         tenant_id: str,
         username: str,
         password: str,
+        origin: str | None = None,
+        now: datetime | None = None,
     ) -> IssuedAPIKey:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         normalized_username = username.strip()
-        tenant = self._load_tenant_for_login(normalized_tenant_id)
-        operator = self._find_operator_by_username(
-            normalized_tenant_id,
-            normalized_username,
+        current_time = now or datetime.now(UTC)
+        normalized_origin = self._normalize_public_origin(origin)
+        self._ensure_public_auth_allowed(
+            PublicAuthAction.LOGIN,
+            origin=normalized_origin,
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            now=current_time,
         )
-
-        if operator is None:
-            if self._operator_exists_for_other_tenant(
-                normalized_username,
+        try:
+            tenant = self._load_tenant_for_login(normalized_tenant_id)
+            operator = self._find_operator_by_username(
                 normalized_tenant_id,
-            ):
-                raise AuthServiceError(403, "Operator is not allowed for this tenant")
-            raise AuthServiceError(401, "Invalid credentials")
+                normalized_username,
+            )
 
-        if operator.disabled:
-            raise AuthServiceError(403, "Operator is disabled")
+            if operator is None:
+                if self._operator_exists_for_other_tenant(
+                    normalized_username,
+                    normalized_tenant_id,
+                ):
+                    raise AuthServiceError(403, "Operator is not allowed for this tenant")
+                raise AuthServiceError(401, "Invalid credentials")
 
-        if not verify_password(password, operator.password_hash):
-            raise AuthServiceError(401, "Invalid credentials")
+            if operator.disabled:
+                raise AuthServiceError(403, "Operator is disabled")
+
+            if not verify_password(password, operator.password_hash):
+                raise AuthServiceError(401, "Invalid credentials")
+        except AuthServiceError as exc:
+            self._raise_public_login_failure(
+                tenant_id=normalized_tenant_id,
+                username=normalized_username,
+                origin=normalized_origin,
+                reason=self._login_failure_reason(exc),
+                current_time=current_time,
+                status_code=exc.status_code,
+                detail=exc.detail,
+            )
 
         issued_ttl_seconds = tenant.auth.issued_api_key_ttl_seconds
-        created_at = datetime.now(UTC)
+        created_at = current_time
         raw_api_key = f"vapi_{secrets.token_urlsafe(32)}"
         record = IssuedAPIKeyRecord(
             tenant_id=tenant.tenant_id,
@@ -967,6 +1258,12 @@ class AuthService:
             created_at=created_at,
             issued_ttl_seconds=issued_ttl_seconds,
             expires_at=created_at + timedelta(seconds=issued_ttl_seconds),
+        )
+        self._clear_public_auth_failures(
+            PublicAuthAction.LOGIN,
+            origin=normalized_origin,
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
         )
         self._records[record.key_id] = record
         self._persist_records()
@@ -1140,9 +1437,13 @@ class AuthService:
         self._records.clear()
         self._operator_records.clear()
         self._invite_records.clear()
+        self._password_reset_records.clear()
+        with self._public_auth_lock:
+            self._public_auth_attempts.clear()
         self._persist_records()
         self._persist_operator_records()
         self._persist_invite_records()
+        self._persist_password_reset_records()
 
     def list_records(self) -> list[IssuedAPIKeyRecord]:
         return sorted(self._records.values(), key=lambda item: item.created_at)
@@ -1380,6 +1681,35 @@ class AuthService:
         if updated:
             self._persist_invite_records()
 
+    def _load_password_reset_records(self) -> None:
+        password_reset_storage_path = self._resolve_password_reset_storage_path()
+        if password_reset_storage_path is None:
+            return
+
+        if self._sqlite_store is not None:
+            payload = self._sqlite_store.load_operator_password_resets()
+        else:
+            if not password_reset_storage_path.exists():
+                return
+            import json
+
+            payload = json.loads(password_reset_storage_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise ValueError("Password reset storage payload must be a list")
+
+        self._password_reset_records = {}
+        updated = False
+        for item in payload:
+            record = OperatorPasswordResetRecord.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(record.tenant_id)
+            if record.tenant_id != resolved_tenant_id:
+                record.tenant_id = resolved_tenant_id
+                updated = True
+            self._password_reset_records[record.reset_id] = record
+
+        if updated:
+            self._persist_password_reset_records()
+
     def _has_persisted_operator_records(self) -> bool:
         return bool(self._operator_records)
 
@@ -1424,6 +1754,15 @@ class AuthService:
         if self._operator_storage_path is None:
             return None
         return _derive_invite_storage_path(self._operator_storage_path)
+
+    def _resolve_password_reset_storage_path(self) -> Path | None:
+        if self._sqlite_store is not None:
+            return self._password_reset_storage_path
+        if self._password_reset_storage_path is not None:
+            return self._password_reset_storage_path
+        if self._operator_storage_path is None:
+            return None
+        return _derive_password_reset_storage_path(self._operator_storage_path)
 
     def _persist_records(self) -> None:
         if self._storage_path is None:
@@ -1500,6 +1839,34 @@ class AuthService:
         )
         temp_path.replace(invite_storage_path)
 
+    def _persist_password_reset_records(self) -> None:
+        password_reset_storage_path = self._resolve_password_reset_storage_path()
+        if password_reset_storage_path is None:
+            return
+
+        payload = [
+            record.model_dump(mode="json")
+            for record in sorted(
+                self._password_reset_records.values(),
+                key=lambda item: (item.tenant_id, item.created_at, item.reset_id),
+            )
+        ]
+        if self._sqlite_store is not None:
+            self._sqlite_store.replace_operator_password_resets(payload)
+            return
+
+        import json
+
+        password_reset_storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = password_reset_storage_path.with_suffix(
+            f"{password_reset_storage_path.suffix}.tmp"
+        )
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_path.replace(password_reset_storage_path)
+
     def _find_pending_invitation_by_username(
         self,
         tenant_id: str,
@@ -1544,6 +1911,291 @@ class AuthService:
                 if hmac.compare_digest(candidate.token_hash, invite_token_hash)
             ),
             None,
+        )
+
+    def _invalidate_pending_password_reset_tokens(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        now: datetime,
+    ) -> None:
+        updated = False
+        for record in self._password_reset_records.values():
+            if record.tenant_id != tenant_id or record.operator_id != operator_id:
+                continue
+            if record.used_at is not None:
+                continue
+            if now >= record.expires_at:
+                continue
+            record.used_at = now
+            updated = True
+        if updated:
+            self._persist_password_reset_records()
+
+    def _find_password_reset_by_token(
+        self,
+        raw_reset_token: str,
+    ) -> OperatorPasswordResetRecord | None:
+        reset_token_hash = hash_api_key(raw_reset_token)
+        reset_record = next(
+            (
+                candidate
+                for candidate in self._password_reset_records.values()
+                if hmac.compare_digest(candidate.token_hash, reset_token_hash)
+            ),
+            None,
+        )
+        if reset_record is not None:
+            return reset_record
+
+        if self._resolve_password_reset_storage_path() is None:
+            return None
+
+        self._load_password_reset_records()
+        return next(
+            (
+                candidate
+                for candidate in self._password_reset_records.values()
+                if hmac.compare_digest(candidate.token_hash, reset_token_hash)
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _normalize_public_origin(origin: str | None) -> str:
+        normalized_origin = (origin or "").strip().lower()
+        return normalized_origin or "unknown"
+
+    @staticmethod
+    def _build_public_auth_keys(
+        action: PublicAuthAction,
+        *,
+        origin: str,
+        tenant_id: str,
+        username: str,
+    ) -> list[tuple[PublicAuthAction, str, str, str]]:
+        normalized_username = username.casefold()
+        return [
+            (action, origin, "", ""),
+            (action, origin, tenant_id, normalized_username),
+        ]
+
+    @staticmethod
+    def _prune_public_auth_state(
+        state: PublicAuthAttemptState,
+        *,
+        now: datetime,
+    ) -> None:
+        state.failures = [
+            failure_at
+            for failure_at in state.failures
+            if now - failure_at < PUBLIC_AUTH_WINDOW
+        ]
+        if state.locked_until is not None and now >= state.locked_until:
+            state.locked_until = None
+
+    @staticmethod
+    def _max_public_auth_failures(action: PublicAuthAction) -> int:
+        if action is PublicAuthAction.SETUP:
+            return SETUP_MAX_FAILURES
+        return LOGIN_MAX_FAILURES
+
+    def _ensure_public_auth_allowed(
+        self,
+        action: PublicAuthAction,
+        *,
+        origin: str,
+        tenant_id: str,
+        username: str,
+        now: datetime,
+    ) -> None:
+        with self._public_auth_lock:
+            for key in self._build_public_auth_keys(
+                action,
+                origin=origin,
+                tenant_id=tenant_id,
+                username=username,
+            ):
+                state = self._public_auth_attempts.get(key)
+                if state is None:
+                    continue
+                self._prune_public_auth_state(state, now=now)
+                if state.locked_until is not None and now < state.locked_until:
+                    raise AuthServiceError(429, PUBLIC_AUTH_RATE_LIMIT_DETAIL)
+                if state.locked_until is None and not state.failures:
+                    self._public_auth_attempts.pop(key, None)
+
+    def _register_public_auth_failure(
+        self,
+        action: PublicAuthAction,
+        *,
+        origin: str,
+        tenant_id: str,
+        username: str,
+        now: datetime,
+    ) -> datetime | None:
+        lockout_until: datetime | None = None
+        with self._public_auth_lock:
+            for key in self._build_public_auth_keys(
+                action,
+                origin=origin,
+                tenant_id=tenant_id,
+                username=username,
+            ):
+                state = self._public_auth_attempts.get(key)
+                if state is None:
+                    state = PublicAuthAttemptState(failures=[])
+                    self._public_auth_attempts[key] = state
+                self._prune_public_auth_state(state, now=now)
+                state.failures.append(now)
+                if len(state.failures) >= self._max_public_auth_failures(action):
+                    state.failures.clear()
+                    state.locked_until = now + PUBLIC_AUTH_LOCKOUT
+                if state.locked_until is not None:
+                    if lockout_until is None or state.locked_until > lockout_until:
+                        lockout_until = state.locked_until
+        return lockout_until
+
+    def _clear_public_auth_failures(
+        self,
+        action: PublicAuthAction,
+        *,
+        origin: str,
+        tenant_id: str,
+        username: str,
+    ) -> None:
+        with self._public_auth_lock:
+            for key in self._build_public_auth_keys(
+                action,
+                origin=origin,
+                tenant_id=tenant_id,
+                username=username,
+            ):
+                self._public_auth_attempts.pop(key, None)
+
+    @staticmethod
+    def _login_failure_reason(exc: AuthServiceError) -> str:
+        if exc.detail == "Operator is disabled":
+            return "operator_disabled"
+        if exc.detail == "Operator is not allowed for this tenant":
+            return "tenant_mismatch"
+        if exc.detail == "Tenant is disabled":
+            return "tenant_disabled"
+        if exc.detail == "Tenant not found":
+            return "tenant_not_found"
+        return "invalid_credentials"
+
+    def _raise_public_login_failure(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        origin: str,
+        reason: str,
+        current_time: datetime,
+        status_code: int,
+        detail: str,
+    ) -> None:
+        lockout_until = self._register_public_auth_failure(
+            PublicAuthAction.LOGIN,
+            origin=origin,
+            tenant_id=tenant_id,
+            username=username,
+            now=current_time,
+        )
+        self._record_public_auth_failure_event(
+            AuditEventType.AUTH_LOGIN_FAILED,
+            tenant_id=tenant_id,
+            username=username,
+            origin=origin,
+            reason=reason,
+            lockout_until=lockout_until,
+        )
+        if lockout_until is not None:
+            raise AuthServiceError(429, PUBLIC_AUTH_RATE_LIMIT_DETAIL)
+        raise AuthServiceError(status_code, detail)
+
+    def _raise_public_setup_failure(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        origin: str,
+        reason: str,
+        current_time: datetime,
+        status_code: int,
+        detail: str,
+    ) -> None:
+        lockout_until = self._register_public_auth_failure(
+            PublicAuthAction.SETUP,
+            origin=origin,
+            tenant_id=tenant_id,
+            username=username,
+            now=current_time,
+        )
+        self._record_public_auth_failure_event(
+            AuditEventType.INITIAL_SETUP_FAILED,
+            tenant_id=tenant_id,
+            username=username,
+            origin=origin,
+            reason=reason,
+            lockout_until=lockout_until,
+        )
+        if lockout_until is not None:
+            raise AuthServiceError(429, PUBLIC_AUTH_RATE_LIMIT_DETAIL)
+        raise AuthServiceError(status_code, detail)
+
+    def _record_public_auth_failure_event(
+        self,
+        event_type: AuditEventType,
+        *,
+        tenant_id: str,
+        username: str,
+        origin: str,
+        reason: str,
+        lockout_until: datetime | None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record_event(
+            event_type,
+            tenant_id=tenant_id,
+            details={
+                "requested_tenant_id": tenant_id,
+                "username_hash": _hash_identifier(username.casefold()),
+                "origin": origin,
+                "reason": reason,
+                "rate_limited": lockout_until is not None,
+                "locked_until": (
+                    lockout_until.isoformat()
+                    if lockout_until is not None
+                    else None
+                ),
+            },
+        )
+
+    def _record_password_reset_failure(
+        self,
+        *,
+        token_hash: str,
+        reason: str,
+        status_code: int,
+        detail: str,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record_event(
+            AuditEventType.OPERATOR_PASSWORD_RESET_FAILED,
+            tenant_id=DEFAULT_TENANT_ID,
+            details={
+                "token_hash_prefix": token_hash[:12],
+                "reason": reason,
+                "status_code": status_code,
+                "detail": detail,
+            },
         )
 
     def _find_record_by_hash(self, api_key_hash: str) -> IssuedAPIKeyRecord | None:
@@ -1738,6 +2390,34 @@ class AuthService:
         self._audit_service.record_event(
             event_type,
             tenant_id=invite.tenant_id,
+            api_key_id=api_key_id,
+            details=payload,
+        )
+
+    def _record_password_reset_audit_event(
+        self,
+        event_type: AuditEventType,
+        *,
+        reset: OperatorPasswordResetRecord,
+        api_key_id: str | None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        payload: dict[str, object] = {
+            "reset_id": reset.reset_id,
+            "operator_id": reset.operator_id,
+            "username": reset.username,
+            "expires_at": reset.expires_at.isoformat(),
+            "used_at": reset.used_at.isoformat() if reset.used_at is not None else None,
+        }
+        if details:
+            payload.update(details)
+
+        self._audit_service.record_event(
+            event_type,
+            tenant_id=reset.tenant_id,
             api_key_id=api_key_id,
             details=payload,
         )

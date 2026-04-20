@@ -463,6 +463,42 @@ def test_login_rejects_invalid_credentials():
     assert response.json()["detail"] == "Invalid credentials"
 
 
+def test_login_rate_limits_repeated_failures():
+    for _attempt in range(4):
+        response = client.post(
+            "/login",
+            json={
+                "tenant_id": "default",
+                "username": "default.operator",
+                "password": "wrong-password",
+            },
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid credentials"
+
+    limited = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "default.operator",
+            "password": "wrong-password",
+        },
+    )
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == "Too many attempts. Try again later."
+
+    locked = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "default.operator",
+            "password": DEFAULT_OPERATOR_PASSWORD,
+        },
+    )
+    assert locked.status_code == 429
+    assert locked.json()["detail"] == "Too many attempts. Try again later."
+
+
 def test_login_rejects_unknown_tenant():
     response = client.post(
         "/login",
@@ -472,8 +508,8 @@ def test_login_rejects_unknown_tenant():
             "password": DEFAULT_OPERATOR_PASSWORD,
         },
     )
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Tenant not found"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
 
 
 def test_login_rejects_operator_for_other_tenant():
@@ -485,8 +521,8 @@ def test_login_rejects_operator_for_other_tenant():
             "password": DEFAULT_OPERATOR_PASSWORD,
         },
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Operator is not allowed for this tenant"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
 
 
 def test_login_accepts_redesim_v2_alias_and_returns_canonical_tenant():
@@ -713,6 +749,83 @@ def test_create_operator_invitation_accepts_once_and_does_not_persist_raw_token(
     )
     assert login_response.status_code == 200
     assert login_response.json()["must_change_password"] is False
+
+
+def test_password_reset_token_flow_completes_publicly_and_revokes_active_session():
+    admin_headers, _admin_payload = login_headers()
+    create_response = client.post(
+        "/operators",
+        headers=admin_headers,
+        json={
+            "tenant_id": "default",
+            "username": "recupera.operador",
+            "password": "SenhaAtual@2026",
+            "require_password_change": False,
+        },
+    )
+    assert create_response.status_code == 201
+    operator_id = create_response.json()["operator_id"]
+
+    operator_headers, _login_payload = login_headers(
+        tenant_id="default",
+        username="recupera.operador",
+        password="SenhaAtual@2026",
+    )
+
+    token_response = client.post(
+        f"/operators/{operator_id}/password-reset-token",
+        headers=admin_headers,
+        json={
+            "tenant_id": "default",
+            "expires_in_minutes": 30,
+        },
+    )
+    assert token_response.status_code == 201
+    reset_token = token_response.json()["reset_token"]
+
+    complete_response = client.post(
+        "/operators/password-reset/complete",
+        json={
+            "reset_token": reset_token,
+            "new_password": "SenhaNova@2026",
+        },
+    )
+    assert complete_response.status_code == 200
+    assert complete_response.json()["operator_id"] == operator_id
+
+    revoked = client.get("/tenants", headers=operator_headers)
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"] == "Revoked API key"
+
+    old_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "recupera.operador",
+            "password": "SenhaAtual@2026",
+        },
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "recupera.operador",
+            "password": "SenhaNova@2026",
+        },
+    )
+    assert new_login.status_code == 200
+
+    reused = client.post(
+        "/operators/password-reset/complete",
+        json={
+            "reset_token": reset_token,
+            "new_password": "OutraSenha@2026",
+        },
+    )
+    assert reused.status_code == 409
+    assert reused.json()["detail"] == "Password reset token already used"
 
 
 def test_disable_operator_endpoint_revokes_active_operator_session():
@@ -1259,8 +1372,8 @@ def test_disabled_tenant_blocks_login_and_existing_issued_keys(tmp_path, monkeyp
             "password": "Cliente@2026",
         },
     )
-    assert denied_login.status_code == 403
-    assert denied_login.json()["detail"] == "Tenant is disabled"
+    assert denied_login.status_code == 401
+    assert denied_login.json()["detail"] == "Invalid credentials"
 
     reactivate_response = client.post(
         "/admin/tenants/cliente_bloqueado/reactivate",

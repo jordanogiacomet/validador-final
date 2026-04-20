@@ -29,6 +29,7 @@ _PUBLIC_EXACT_PATHS = {
     "/openapi.json",
     "/setup",
     "/operators/invitations/accept",
+    "/operators/password-reset/complete",
 }
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
 _PASSWORD_SETUP_EXACT_PATHS = {

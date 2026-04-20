@@ -14,7 +14,12 @@ from app.services.auth_service import (
     BOOTSTRAP_ADMIN_PASSWORD_ENV,
     BOOTSTRAP_ADMIN_USERNAME_ENV,
     INITIAL_SETUP_TOKEN_ENV,
+    LOGIN_MAX_FAILURES,
     OFFICIAL_TENANT_ID_ENV,
+    PASSWORD_STRENGTH_ERROR,
+    PUBLIC_AUTH_LOCKOUT,
+    PUBLIC_AUTH_RATE_LIMIT_DETAIL,
+    SETUP_MAX_FAILURES,
     AuthService,
     AuthServiceError,
     IssuedAPIKeyStatus,
@@ -286,6 +291,63 @@ def test_issue_api_key_rejects_invalid_credentials() -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Invalid credentials"
+
+
+def test_issue_api_key_rate_limits_repeated_failures_by_origin_and_username() -> None:
+    service = AuthService()
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
+
+    for attempt in range(LOGIN_MAX_FAILURES - 1):
+        with pytest.raises(AuthServiceError) as exc_info:
+            service.issue_api_key(
+                tenant_id="default",
+                username="default.operator",
+                password="senha-incorreta",
+                origin="198.51.100.20",
+                now=base_time + timedelta(seconds=attempt),
+            )
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "Invalid credentials"
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.issue_api_key(
+            tenant_id="default",
+            username="default.operator",
+            password="senha-incorreta",
+            origin="198.51.100.20",
+            now=base_time + timedelta(seconds=LOGIN_MAX_FAILURES - 1),
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == PUBLIC_AUTH_RATE_LIMIT_DETAIL
+
+    with pytest.raises(AuthServiceError) as locked_exc:
+        service.issue_api_key(
+            tenant_id="default",
+            username="default.operator",
+            password=DEFAULT_PASSWORD,
+            origin="198.51.100.20",
+            now=base_time + timedelta(minutes=1),
+        )
+
+    assert locked_exc.value.status_code == 429
+    assert locked_exc.value.detail == PUBLIC_AUTH_RATE_LIMIT_DETAIL
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="default.operator",
+        password=DEFAULT_PASSWORD,
+        origin="198.51.100.20",
+        now=(
+            base_time
+            + timedelta(seconds=LOGIN_MAX_FAILURES - 1)
+            + PUBLIC_AUTH_LOCKOUT
+            + timedelta(seconds=1)
+        ),
+    )
+
+    assert issued_key.record.operator_id == "default-local-operator"
 
 
 def test_issue_api_key_rejects_unknown_tenant() -> None:
@@ -615,6 +677,103 @@ def test_initial_setup_optionally_requires_setup_token(tmp_path, monkeypatch) ->
     assert "token-publicado" not in json.dumps(event.details)
 
 
+def test_initial_setup_rejects_weak_password_and_records_audit_event(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    audit_service = AuditService()
+    service = AuthService(
+        operator_storage_path=operator_storage_path,
+        audit_service=audit_service,
+    )
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_initial_admin(
+            username="admin.inicial",
+            password="fraca",
+            origin="198.51.100.10",
+            env={OFFICIAL_TENANT_ID_ENV: tenant_id},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == PASSWORD_STRENGTH_ERROR
+    event = audit_service.list_events(tenant_id=tenant_id)[0]
+    assert event.event_type is AuditEventType.INITIAL_SETUP_FAILED
+    assert event.details["reason"] == "weak_password"
+    assert "fraca" not in json.dumps(event.details)
+
+
+def test_initial_setup_rate_limits_repeated_failures_by_origin(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = install_bootstrap_test_tenant(monkeypatch, tmp_path)
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
+    setup_env = {
+        OFFICIAL_TENANT_ID_ENV: tenant_id,
+        INITIAL_SETUP_TOKEN_ENV: "token-publicado",
+    }
+
+    for attempt in range(SETUP_MAX_FAILURES - 1):
+        with pytest.raises(AuthServiceError) as exc_info:
+            service.create_initial_admin(
+                username="admin.inicial",
+                password="Setup@2026",
+                setup_token="token-incorreto",
+                origin="198.51.100.10",
+                now=base_time + timedelta(seconds=attempt),
+                env=setup_env,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Invalid setup token"
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_initial_admin(
+            username="admin.inicial",
+            password="Setup@2026",
+            setup_token="token-incorreto",
+            origin="198.51.100.10",
+            now=base_time + timedelta(seconds=SETUP_MAX_FAILURES - 1),
+            env=setup_env,
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == PUBLIC_AUTH_RATE_LIMIT_DETAIL
+
+    with pytest.raises(AuthServiceError) as locked_exc:
+        service.create_initial_admin(
+            username="admin.inicial",
+            password="Setup@2026",
+            setup_token="token-publicado",
+            origin="198.51.100.10",
+            now=base_time + timedelta(minutes=1),
+            env=setup_env,
+        )
+
+    assert locked_exc.value.status_code == 429
+
+    operator = service.create_initial_admin(
+        username="admin.inicial",
+        password="Setup@2026",
+        setup_token="token-publicado",
+        origin="198.51.100.10",
+        now=(
+            base_time
+            + timedelta(seconds=SETUP_MAX_FAILURES - 1)
+            + PUBLIC_AUTH_LOCKOUT
+            + timedelta(seconds=1)
+        ),
+        env=setup_env,
+    )
+
+    assert operator.username == "admin.inicial"
+
+
 def test_initial_setup_concurrency_allows_only_one_persisted_admin(
     tmp_path,
     monkeypatch,
@@ -707,6 +866,20 @@ def test_create_operator_persists_requested_role_and_issues_it_after_login(tmp_p
     assert issued_key.record.role is OperatorRole.PLATFORM_ADMIN
 
 
+def test_create_operator_rejects_weak_password() -> None:
+    service = AuthService()
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.create_operator(
+            tenant_id="default",
+            username="novo.operador",
+            password="fraca",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == PASSWORD_STRENGTH_ERROR
+
+
 def test_temporary_admin_password_requires_rotation_and_revokes_issued_key() -> None:
     audit_service = AuditService()
     service = AuthService(audit_service=audit_service)
@@ -747,11 +920,12 @@ def test_temporary_admin_password_requires_rotation_and_revokes_issued_key() -> 
     assert exc_info.value.detail == "Invalid credentials"
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
+        AuditEventType.AUTH_LOGIN_FAILED,
         AuditEventType.OPERATOR_PASSWORD_ROTATED,
         AuditEventType.API_KEY_REVOKED,
     ]
-    assert events[0].details["completed_password_setup"] is True
+    assert events[1].details["completed_password_setup"] is True
 
     final_login = service.issue_api_key(
         tenant_id="default",
@@ -814,6 +988,100 @@ def test_operator_invitation_rejects_expired_token() -> None:
     assert exc_info.value.detail == "Invitation token expired"
 
 
+def test_password_reset_token_is_single_use_and_revokes_active_sessions(tmp_path) -> None:
+    audit_service = AuditService()
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(
+        operator_storage_path=operator_storage_path,
+        audit_service=audit_service,
+    )
+    operator = service.create_operator(
+        tenant_id="default",
+        username="recupera.operador",
+        password="SenhaAtual@2026",
+    )
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="recupera.operador",
+        password="SenhaAtual@2026",
+    )
+
+    reset_token = service.create_operator_password_reset_token(
+        tenant_id="default",
+        operator_id=operator.operator_id,
+        created_by_api_key_id="issued-admin",
+    )
+    reset_storage_path = service.password_reset_storage_path
+
+    assert reset_storage_path is not None
+    assert reset_storage_path.exists()
+    assert reset_token.raw_reset_token not in reset_storage_path.read_text(encoding="utf-8")
+
+    completed = service.complete_operator_password_reset(
+        reset_token=reset_token.raw_reset_token,
+        new_password="SenhaNova@2026",
+    )
+
+    assert completed.operator_id == operator.operator_id
+    assert completed.must_change_password is False
+    resolution = service.inspect_issued_api_key(issued_key.raw_api_key)
+    assert resolution.status is IssuedAPIKeyStatus.REVOKED
+
+    with pytest.raises(AuthServiceError) as reuse_exc:
+        service.complete_operator_password_reset(
+            reset_token=reset_token.raw_reset_token,
+            new_password="OutraSenha@2026",
+        )
+
+    assert reuse_exc.value.status_code == 409
+    assert reuse_exc.value.detail == "Password reset token already used"
+
+    with pytest.raises(AuthServiceError) as old_password_exc:
+        service.issue_api_key(
+            tenant_id="default",
+            username="recupera.operador",
+            password="SenhaAtual@2026",
+        )
+
+    assert old_password_exc.value.status_code == 401
+    new_login = service.issue_api_key(
+        tenant_id="default",
+        username="recupera.operador",
+        password="SenhaNova@2026",
+    )
+    assert new_login.record.operator_id == operator.operator_id
+
+    event_types = [event.event_type for event in audit_service.list_events(tenant_id="default")]
+    assert AuditEventType.OPERATOR_PASSWORD_RESET_TOKEN_ISSUED in event_types
+    assert AuditEventType.OPERATOR_PASSWORD_RESET_COMPLETED in event_types
+
+
+def test_password_reset_token_rejects_expired_token() -> None:
+    service = AuthService()
+    operator = service.create_operator(
+        tenant_id="default",
+        username="expira.operador",
+        password="SenhaAtual@2026",
+    )
+    issued_at = datetime.now(UTC)
+    reset_token = service.create_operator_password_reset_token(
+        tenant_id="default",
+        operator_id=operator.operator_id,
+        expires_in=timedelta(minutes=15),
+        now=issued_at,
+    )
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.complete_operator_password_reset(
+            reset_token=reset_token.raw_reset_token,
+            new_password="SenhaNova@2026",
+            now=issued_at + timedelta(minutes=16),
+        )
+
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.detail == "Password reset token expired"
+
+
 def test_reset_operator_password_revokes_active_api_keys_and_requires_new_rotation() -> None:
     audit_service = AuditService()
     service = AuthService(audit_service=audit_service)
@@ -851,11 +1119,12 @@ def test_reset_operator_password_revokes_active_api_keys_and_requires_new_rotati
     assert old_password_exc.value.detail == "Invalid credentials"
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
+        AuditEventType.AUTH_LOGIN_FAILED,
         AuditEventType.OPERATOR_PASSWORD_RESET,
         AuditEventType.API_KEY_REVOKED,
     ]
-    assert events[0].details["revoked_api_key_count"] == 1
+    assert events[1].details["revoked_api_key_count"] == 1
 
     reset_login = service.issue_api_key(
         tenant_id="default",
@@ -986,12 +1255,13 @@ def test_disable_operator_blocks_login_and_revokes_active_api_keys() -> None:
     assert exc_info.value.detail == "Operator is disabled"
 
     events = audit_service.list_events(tenant_id="default")
-    assert [event.event_type for event in events[:2]] == [
+    assert [event.event_type for event in events[:3]] == [
+        AuditEventType.AUTH_LOGIN_FAILED,
         AuditEventType.OPERATOR_DISABLED,
         AuditEventType.API_KEY_REVOKED,
     ]
-    assert events[0].details["operator_id"] == operator.operator_id
-    assert events[0].details["revoked_api_key_count"] == 1
+    assert events[1].details["operator_id"] == operator.operator_id
+    assert events[1].details["revoked_api_key_count"] == 1
 
 
 def test_disable_operator_rejects_last_active_operator() -> None:

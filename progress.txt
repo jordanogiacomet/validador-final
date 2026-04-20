@@ -77,6 +77,8 @@ Last Updated: 2026-04-20 16:46 -02
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
 - First-login password-setup enforcement should stay centralized in `app/api/auth.py`; allowlist only the public invite/setup routes and the password-setup completion route instead of sprinkling auth exceptions across handlers.
 - Persist managed-user auth state on operator records (`must_change_password`) and store invitation tokens hashed-only in the operational store/SQLite; never persist raw invite tokens or mix invite payloads into the operator JSON schema.
+- Public auth hardening should stay in `AuthService`: routes pass request origin, `/login` remains generic for enumeration resistance, and lockout logic should not be reimplemented in FastAPI handlers.
+- Password recovery tokens should follow the same hash-only persistence pattern as invitations, with short TTLs and single-use semantics enforced in shared operational storage.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 - Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
@@ -1094,5 +1096,18 @@ Expected architectural direction:
 - **Learnings for future iterations:**
   - A criação administrativa com senha temporária e o reset administrativo devem convergir no mesmo `must_change_password` + revogação de API keys para manter middleware, auditoria e frontend alinhados.
   - Tokens de convite precisam continuar hash-only no storage compartilhado; o fallback JSON deve usar um arquivo irmão do operator store em vez de misturar convites e operadores no mesmo schema.
-  - Se o frontend interceptar uma sessão com `must_change_password=true`, ele deve concluir a troca antes de chamar rotas operacionais; deixar o workspace tentar carregar só gera `403 Password change required`.
+- Se o frontend interceptar uma sessão com `must_change_password=true`, ele deve concluir a troca antes de chamar rotas operacionais; deixar o workspace tentar carregar só gera `403 Password change required`.
+---
+## 2026-04-20 17:11 -02 - US-051
+- Endurecido o `AuthService` com política mínima de senha forte em setup inicial, criação de operadores e trocas de senha; adicionados lockouts temporários por origem/usuário para login e setup, com auditoria de falhas sem senha/token bruto.
+- Tornado o `/login` enumeration-safe na API, mantendo respostas públicas genéricas para tenant/usuário inválidos, e adicionada recuperação de conta por reset token hash-only, single-use e com expiração curta, emitido por administradores e consumido publicamente.
+- Persistidos password-reset tokens no storage operacional compartilhado (JSON derivado do operator store ou SQLite) e adicionados eventos de auditoria para falhas de login/setup e para emissão/conclusão de reset.
+- Files changed: `app/api/auth.py`, `app/api/routes.py`, `app/core/audit.py`, `app/core/operational_sqlite.py`, `app/services/auth_service.py`, `tests/test_api.py`, `tests/test_auth_service.py`, `tests/test_operational_sqlite.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+- **Learnings for future iterations:**
+  - Hardening de auth pública deve ficar concentrado no `AuthService`; as rotas públicas só encaminham `request origin` e normalizam contratos externos como o `/login` enumeration-safe.
+  - Reset de conta sem canal de e-mail deve permanecer admin-mediated: a emissão do reset token é autenticada, mas a conclusão do reset continua pública e hash-only para não exigir sessão prévia.
+  - Tentativas de login inválidas após disable/reset/rotação agora geram `auth_login_failed` na auditoria; testes que inspecionam a ordem dos eventos precisam considerar esse evento antes dos eventos de revogação/rotação.
 ---

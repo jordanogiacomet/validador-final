@@ -887,8 +887,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 51,
-      "passes": false,
-      "notes": "Este hardening deve complementar o RBAC e o fluxo de convite, mantendo compatibilidade com a emissão atual de `X-API-Key` pós-login."
+      "passes": true,
+      "notes": "Implementado com política mínima de senha forte, lockout temporário por origem/usuário no `AuthService`, respostas públicas de login sem enumeração de tenant/usuário, auditoria de falhas de auth e fluxo de recuperação por reset token hash-only com expiração curta e revogação de sessões."
     },
     {
       "id": "US-052",
