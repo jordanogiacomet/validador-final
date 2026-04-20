@@ -1,4 +1,5 @@
 import re
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -65,10 +66,17 @@ class AuthConfig(BaseModel):
     )
 
 
+class OperatorRole(StrEnum):
+    PLATFORM_ADMIN = "platform_admin"
+    TENANT_ADMIN = "tenant_admin"
+    OPERATOR = "operator"
+
+
 class OperatorConfig(BaseModel):
     operator_id: str
     username: str = Field(min_length=1)
     password_hash: str = Field(min_length=1)
+    role: OperatorRole = OperatorRole.TENANT_ADMIN
     disabled: bool = False
 
 

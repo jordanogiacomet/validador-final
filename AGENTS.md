@@ -192,6 +192,7 @@ If there are still stories with passes: false, end your response normally (anoth
 - API code should not know tenant-specific rule details beyond selecting the tenant/config
 - Public setup/auth bootstrap routes must be explicitly allowlisted in `app/api/auth.py` and should still delegate all state changes to services.
 - Frontend helpers for public API routes must opt out of auth header injection instead of relying on callers to clear the current session.
+- Role/permission decisions belong in `AuthService`; routes should pass authenticated tenant/operator/API-key context plus the target tenant and use the service-returned canonical tenant for admin actions.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows

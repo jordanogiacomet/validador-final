@@ -19,6 +19,7 @@ class AuditEventType(StrEnum):
     OPERATOR_CREATED = "operator_created"
     OPERATOR_DISABLED = "operator_disabled"
     OPERATOR_PASSWORD_ROTATED = "operator_password_rotated"
+    AUTHORIZATION_DENIED = "authorization_denied"
 
 
 class AuditEvent(BaseModel):

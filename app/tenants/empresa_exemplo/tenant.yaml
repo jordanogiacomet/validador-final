@@ -72,4 +72,5 @@ api_keys:
 operators:
   - operator_id: empresa-exemplo-local-operator
     username: empresa.operator
+    role: tenant_admin
     password_hash: pbkdf2_sha256$120000$empresa-exemplo-local-operator$747d4338b208d19c73fa6a6f99aa6329435b8fe1f3f02aa134dd06f46eef9475

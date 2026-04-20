@@ -8,6 +8,8 @@ export type ReviewFlagStatus = "review";
 
 export type ReviewFlagActionStatus = ReviewFlagStatus | "clear";
 
+export type OperatorRole = "platform_admin" | "tenant_admin" | "operator";
+
 export interface TenantListItem {
   tenant_id: string;
   display_name: string;
@@ -37,6 +39,7 @@ export interface OperatorResponse {
   tenant_id: string;
   operator_id: string;
   username: string;
+  role?: OperatorRole;
   disabled: boolean;
   is_seed: boolean;
 }
@@ -44,6 +47,7 @@ export interface OperatorResponse {
 export interface LoginResponse {
   tenant_id: string;
   operator_id: string;
+  role?: OperatorRole;
   api_key_id: string;
   x_api_key: string;
   header_name: string;
@@ -53,6 +57,7 @@ export interface LoginResponse {
 export interface APIKeyRenewalResponse {
   tenant_id: string;
   operator_id: string;
+  role?: OperatorRole;
   api_key_id: string;
   previous_api_key_id: string;
   x_api_key: string;
@@ -72,7 +77,8 @@ export type AuditEventType =
   | "initial_admin_created"
   | "operator_created"
   | "operator_disabled"
-  | "operator_password_rotated";
+  | "operator_password_rotated"
+  | "authorization_denied";
 
 export interface AuditEventResponse {
   event_id: string;

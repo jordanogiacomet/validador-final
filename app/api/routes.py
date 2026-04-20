@@ -17,8 +17,8 @@ from app.api.auth import (
 from app.core.audit import AuditEvent, AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
-from app.core.tenant_config import DEFAULT_TENANT_ID
-from app.core.tenant_loader import load_tenant_config, tenant_ids_match
+from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
+from app.core.tenant_loader import list_tenants, load_tenant_config, tenant_ids_match
 from app.core.validation_scope import (
     DEFAULT_VALIDATION_SCOPE,
     VALIDATION_SCOPE_PARAM,
@@ -117,6 +117,7 @@ class LoginRequest(TenantScopedRequest):
 class LoginResponse(BaseModel):
     tenant_id: str
     operator_id: str
+    role: OperatorRole
     api_key_id: str
     x_api_key: str
     expires_at: datetime
@@ -148,6 +149,7 @@ class OperatorResponse(BaseModel):
     tenant_id: str
     operator_id: str
     username: str
+    role: OperatorRole
     disabled: bool
     is_seed: bool
 
@@ -155,6 +157,7 @@ class OperatorResponse(BaseModel):
 class OperatorCreateRequest(TenantScopedRequest):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
+    role: OperatorRole = OperatorRole.OPERATOR
 
     @field_validator("username")
     @classmethod
@@ -287,6 +290,7 @@ class APIKeyRevocationResponse(BaseModel):
 class APIKeyRenewalResponse(BaseModel):
     tenant_id: str
     operator_id: str
+    role: OperatorRole
     api_key_id: str
     previous_api_key_id: str
     x_api_key: str
@@ -375,6 +379,7 @@ def _build_operator_response(operator: EffectiveOperator) -> OperatorResponse:
         tenant_id=operator.tenant_id,
         operator_id=operator.operator_id,
         username=operator.username,
+        role=operator.role,
         disabled=operator.disabled,
         is_seed=operator.is_seed,
     )
@@ -393,6 +398,25 @@ def _get_authorized_job(request: Request, job_id: str):
         )
 
     return job
+
+
+def _authorize_operator_management(
+    request: Request,
+    *,
+    target_tenant_id: str,
+    action: str,
+) -> str:
+    auth = get_authenticated_tenant(request)
+    try:
+        return auth_service.authorize_operator_management(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            target_tenant_id=target_tenant_id,
+            action=action,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
 
 @router.get("/", include_in_schema=False, response_model=None)
@@ -451,6 +475,7 @@ async def login(payload: LoginRequest) -> LoginResponse:
     return LoginResponse(
         tenant_id=issued_key.record.tenant_id,
         operator_id=issued_key.record.operator_id,
+        role=issued_key.record.role,
         api_key_id=issued_key.record.key_id,
         x_api_key=issued_key.raw_api_key,
         expires_at=issued_key.record.expires_at or issued_key.record.created_at,
@@ -471,6 +496,7 @@ async def renew_api_key(request: Request) -> APIKeyRenewalResponse:
     return APIKeyRenewalResponse(
         tenant_id=issued_key.record.tenant_id,
         operator_id=issued_key.record.operator_id,
+        role=issued_key.record.role,
         api_key_id=issued_key.record.key_id,
         previous_api_key_id=auth.api_key_id,
         x_api_key=issued_key.raw_api_key,
@@ -504,7 +530,14 @@ async def revoke_api_key(
 @router.get("/tenants", response_model=list[TenantListItemResponse])
 async def get_tenants(request: Request) -> list[TenantListItemResponse]:
     auth = get_authenticated_tenant(request)
-    return [_build_tenant_list_item_response(auth.tenant_id)]
+    role = auth_service.get_operator_role(
+        tenant_id=auth.tenant_id,
+        operator_id=auth.operator_id,
+    )
+    tenant_ids = (
+        list_tenants() if role is OperatorRole.PLATFORM_ADMIN else [auth.tenant_id]
+    )
+    return [_build_tenant_list_item_response(tenant_id) for tenant_id in tenant_ids]
 
 
 @router.get("/operators", response_model=list[OperatorResponse])
@@ -512,7 +545,11 @@ async def list_operators(
     request: Request,
     tenant_id: str = Query(min_length=1),
 ) -> list[OperatorResponse]:
-    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=tenant_id,
+        action="operators.list",
+    )
     try:
         operators = auth_service.list_operators(tenant_id=resolved_tenant_id)
     except AuthServiceError as exc:
@@ -526,12 +563,24 @@ async def create_operator(
     payload: OperatorCreateRequest,
 ) -> OperatorResponse:
     auth = get_authenticated_tenant(request)
-    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.create",
+    )
     try:
+        auth_service.authorize_operator_role_assignment(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            target_tenant_id=resolved_tenant_id,
+            requested_role=payload.role,
+        )
         operator = auth_service.create_operator(
             tenant_id=resolved_tenant_id,
             username=payload.username,
             password=payload.password,
+            role=payload.role,
             created_by_api_key_id=auth.api_key_id,
         )
     except AuthServiceError as exc:
@@ -546,7 +595,11 @@ async def disable_operator(
     payload: OperatorDisableRequest,
 ) -> OperatorResponse:
     auth = get_authenticated_tenant(request)
-    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.disable",
+    )
     try:
         operator = auth_service.disable_operator(
             tenant_id=resolved_tenant_id,
@@ -567,7 +620,11 @@ async def rotate_seed_operator_password(
     payload: SeedOperatorPasswordRotationRequest,
 ) -> OperatorResponse:
     auth = get_authenticated_tenant(request)
-    resolved_tenant_id = resolve_request_tenant_id(request, payload.tenant_id)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.rotate_seed_password",
+    )
     try:
         operator = auth_service.rotate_seed_operator_password(
             tenant_id=resolved_tenant_id,

@@ -70,6 +70,7 @@ Last Updated: 2026-04-20 15:05 -02
 - Persisted jobs loaded as `running` with `cancel_requested=true` should be finalized as `canceled` by `JobService` so restarts do not leave inactive work stuck as "Cancelando".
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
+- RBAC/permission decisions should stay in `AuthService`; FastAPI routes pass authenticated actor context plus target tenant/action and then use the canonical tenant returned by the service.
 - Environment-driven first-admin bootstrap should run through `AuthService` over persisted operator storage (`VALIDATOR_SQLITE_PATH` or `VALIDATOR_OPERATOR_STORE_PATH`), use `VALIDATOR_OFFICIAL_TENANT_ID` as the canonical tenant target, and stay idempotent unless `VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET=true` is set explicitly.
 - Public first-run setup routes are `GET /setup` and `POST /setup`; keep them unauthenticated in `app/api/auth.py`, backed by `AuthService`, and closed whenever any persisted operator record already exists.
 - First-run administrator setup must require persistent operator storage, store only password hashes and minimal operator metadata, use `VALIDATOR_SETUP_TOKEN` for optional published-environment protection, and use SQLite atomic insertion for cross-process single-use protection.
@@ -1038,4 +1039,22 @@ Expected architectural direction:
   - O estado público de primeiro setup deve ser derivado de operadores persistidos, não dos operadores seed em YAML; seeds continuam como bootstrap legado, mas não devem reabrir ou fechar indevidamente o setup runtime.
   - Rotas públicas novas precisam ser adicionadas explicitamente em `app/api/auth.py`, e helpers frontend correspondentes devem passar `includeAuth: false` para não vazar `X-API-Key` existente.
   - Para setup single-use com SQLite compartilhado, não basta checar cache local do `AuthService`; use transação/insert atômico no storage para proteger múltiplos processos.
+---
+
+## 2026-04-20 15:23 -02 - US-048
+- Implementado RBAC mínimo com papéis `platform_admin`, `tenant_admin` e `operator` em `OperatorRole`, persistidos em operadores seed, operadores runtime e metadados de sessões emitidas.
+- A gestão administrativa de operadores agora passa por autorização no `AuthService`: `platform_admin` pode listar tenants e criar usuários cross-tenant, `tenant_admin` gerencia apenas o próprio tenant, e `operator`/chaves legadas sem operador são bloqueados em ações administrativas.
+- Tentativas negadas registram auditoria `authorization_denied` com ação, tenant alvo, operador e papel efetivo, sem expor segredos.
+- Atualizados os contratos de API/frontend para carregar o papel efetivo em login, renovação de sessão e respostas de operadores.
+- Files changed: `app/core/tenant_config.py`, `app/core/audit.py`, `app/services/auth_service.py`, `app/api/routes.py`, `app/tenants/default/tenant.yaml`, `app/tenants/empresa_exemplo/tenant.yaml`, `app/tenants/redesim/tenant.yaml`, `frontend/src/lib/types.ts`, `frontend/src/lib/api.ts`, `tests/test_auth_service.py`, `tests/test_api.py`, `tests/test_tenant.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run lint`
+- **Learnings for future iterations:**
+  - Papéis de operadores pertencem ao contrato de auth (`OperatorRole`) e devem ser serializados junto com operadores seed/runtime para evitar inferência por nome de usuário ou tenant.
+  - Rotas administrativas devem pedir autorização ao `AuthService` antes de resolver operações cross-tenant; `resolve_request_tenant_id()` continua adequado para dados operacionais estritamente tenant-scoped.
+  - Ao migrar operadores persistidos sem `role`, preserve o primeiro administrador single-use como `platform_admin` e operadores seed sobrepostos com o papel definido no tenant YAML.
 ---

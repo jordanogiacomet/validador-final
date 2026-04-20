@@ -375,6 +375,7 @@ export async function renewApiSession(): Promise<LoginResponse> {
   const nextSession: LoginResponse = {
     tenant_id: renewal.tenant_id,
     operator_id: renewal.operator_id,
+    role: renewal.role,
     api_key_id: renewal.api_key_id,
     x_api_key: renewal.x_api_key,
     header_name: renewal.header_name,

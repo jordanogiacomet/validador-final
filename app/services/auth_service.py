@@ -24,12 +24,14 @@ from app.core.tenant_config import (
     DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
     DEFAULT_TENANT_ID,
     OperatorConfig,
+    OperatorRole,
     TenantConfig,
 )
 from app.core.tenant_loader import (
     canonicalize_tenant_id,
     list_tenants,
     load_tenant_config,
+    tenant_ids_match,
 )
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
@@ -56,6 +58,7 @@ class IssuedAPIKeyRecord(BaseModel):
     tenant_id: str
     operator_id: str
     username: str
+    role: OperatorRole = OperatorRole.OPERATOR
     key_hash: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     issued_ttl_seconds: int | None = Field(default=None, ge=1)
@@ -69,6 +72,7 @@ class StoredOperatorRecord(BaseModel):
     operator_id: str
     username: str
     password_hash: str
+    role: OperatorRole = OperatorRole.OPERATOR
     disabled: bool = False
 
 
@@ -78,6 +82,7 @@ class EffectiveOperator:
     operator_id: str
     username: str
     password_hash: str
+    role: OperatorRole
     disabled: bool
     is_seed: bool
 
@@ -93,6 +98,7 @@ class ResolvedAPIKey:
     tenant_id: str
     api_key_id: str
     operator_id: str | None = None
+    role: OperatorRole | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +264,95 @@ class AuthService:
         self._load_tenant_for_login(normalized_tenant_id)
         return self._list_effective_operators(normalized_tenant_id)
 
+    def get_operator_role(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str | None,
+    ) -> OperatorRole:
+        if operator_id is None:
+            return OperatorRole.OPERATOR
+
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
+        if operator is None or operator.disabled:
+            return OperatorRole.OPERATOR
+        return operator.role
+
+    def authorize_operator_management(
+        self,
+        *,
+        actor_tenant_id: str,
+        actor_operator_id: str | None,
+        api_key_id: str | None,
+        target_tenant_id: str,
+        action: str,
+    ) -> str:
+        normalized_actor_tenant_id = canonicalize_tenant_id(actor_tenant_id)
+        normalized_target_tenant_id = canonicalize_tenant_id(target_tenant_id)
+        actor = (
+            self._find_operator_by_id(normalized_actor_tenant_id, actor_operator_id)
+            if actor_operator_id is not None
+            else None
+        )
+
+        if actor is not None and not actor.disabled:
+            if actor.role is OperatorRole.PLATFORM_ADMIN:
+                return normalized_target_tenant_id
+
+            if actor.role is OperatorRole.TENANT_ADMIN and tenant_ids_match(
+                normalized_actor_tenant_id,
+                normalized_target_tenant_id,
+            ):
+                return normalized_target_tenant_id
+
+        self._record_authorization_denied_event(
+            tenant_id=normalized_actor_tenant_id,
+            api_key_id=api_key_id,
+            action=action,
+            target_tenant_id=normalized_target_tenant_id,
+            operator=actor,
+        )
+        raise AuthServiceError(403, "Operator is not allowed to manage this tenant")
+
+    def authorize_operator_role_assignment(
+        self,
+        *,
+        actor_tenant_id: str,
+        actor_operator_id: str | None,
+        api_key_id: str | None,
+        target_tenant_id: str,
+        requested_role: OperatorRole,
+    ) -> None:
+        if requested_role is not OperatorRole.PLATFORM_ADMIN:
+            return
+
+        normalized_actor_tenant_id = canonicalize_tenant_id(actor_tenant_id)
+        normalized_target_tenant_id = canonicalize_tenant_id(target_tenant_id)
+        actor = (
+            self._find_operator_by_id(normalized_actor_tenant_id, actor_operator_id)
+            if actor_operator_id is not None
+            else None
+        )
+        if (
+            actor is not None
+            and not actor.disabled
+            and actor.role is OperatorRole.PLATFORM_ADMIN
+        ):
+            return
+
+        self._record_authorization_denied_event(
+            tenant_id=normalized_actor_tenant_id,
+            api_key_id=api_key_id,
+            action="operators.create.platform_admin",
+            target_tenant_id=normalized_target_tenant_id,
+            operator=actor,
+        )
+        raise AuthServiceError(
+            403,
+            "Only platform_admin can create platform administrators",
+        )
+
     def bootstrap_admin_from_env(
         self,
         *,
@@ -348,6 +443,7 @@ class AuthService:
                 operator_id=f"operator-{uuid4().hex}",
                 username=normalized_username,
                 password_hash=hash_password(password),
+                role=OperatorRole.PLATFORM_ADMIN,
             )
             operator = self._persist_initial_admin_record(record)
 
@@ -406,6 +502,7 @@ class AuthService:
             tenant_id=normalized_tenant_id,
             username=normalized_username,
             password=config.password,
+            role=OperatorRole.PLATFORM_ADMIN,
         )
 
     def create_operator(
@@ -414,6 +511,7 @@ class AuthService:
         tenant_id: str,
         username: str,
         password: str,
+        role: OperatorRole = OperatorRole.OPERATOR,
         created_by_api_key_id: str | None = None,
     ) -> EffectiveOperator:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
@@ -428,6 +526,7 @@ class AuthService:
             operator_id=f"operator-{uuid4().hex}",
             username=normalized_username,
             password_hash=hash_password(password),
+            role=role,
         )
         self._operator_records[self._operator_record_key(record)] = record
         self._persist_operator_records()
@@ -548,6 +647,7 @@ class AuthService:
             tenant_id=tenant.tenant_id,
             operator_id=operator.operator_id,
             username=operator.username,
+            role=operator.role,
             key_hash=hash_api_key(raw_api_key),
             created_at=created_at,
             issued_ttl_seconds=issued_ttl_seconds,
@@ -561,6 +661,7 @@ class AuthService:
             details={
                 "operator_id": record.operator_id,
                 "username": record.username,
+                "role": record.role.value,
                 "issued_ttl_seconds": issued_ttl_seconds,
                 "expires_at": record.expires_at.isoformat()
                 if record.expires_at is not None
@@ -610,6 +711,7 @@ class AuthService:
                 tenant_id=record.tenant_id,
                 api_key_id=record.key_id,
                 operator_id=record.operator_id,
+                role=record.role,
             ),
             detail="Active API key",
         )
@@ -641,6 +743,10 @@ class AuthService:
             tenant_id=record.tenant_id,
             operator_id=record.operator_id,
             username=record.username,
+            role=self.get_operator_role(
+                tenant_id=record.tenant_id,
+                operator_id=record.operator_id,
+            ),
             key_hash=hash_api_key(new_raw_api_key),
             created_at=current_time,
             issued_ttl_seconds=issued_ttl_seconds,
@@ -835,6 +941,7 @@ class AuthService:
             operator_id=operator.operator_id,
             username=operator.username,
             password_hash=password_hash or operator.password_hash,
+            role=operator.role,
             disabled=operator.disabled if disabled is None else disabled,
         )
         self._operator_records[self._operator_record_key(stored_record)] = stored_record
@@ -887,8 +994,16 @@ class AuthService:
 
         self._operator_records = {}
         updated = False
-        for item in payload:
-            record = StoredOperatorRecord.model_validate(item)
+        payload_items = list(payload)
+        for item in payload_items:
+            item_payload = dict(item)
+            if "role" not in item_payload:
+                item_payload["role"] = self._resolve_legacy_operator_role(
+                    item_payload,
+                    is_only_persisted_operator=len(payload_items) == 1,
+                ).value
+                updated = True
+            record = StoredOperatorRecord.model_validate(item_payload)
             resolved_tenant_id = canonicalize_tenant_id(record.tenant_id)
             if record.tenant_id != resolved_tenant_id:
                 record.tenant_id = resolved_tenant_id
@@ -905,6 +1020,34 @@ class AuthService:
     def _resolve_initial_setup_tenant_id(environment: Mapping[str, str]) -> str:
         tenant_id = environment.get(OFFICIAL_TENANT_ID_ENV, "").strip()
         return canonicalize_tenant_id(tenant_id or DEFAULT_TENANT_ID)
+
+    def _resolve_legacy_operator_role(
+        self,
+        payload: dict[str, object],
+        *,
+        is_only_persisted_operator: bool,
+    ) -> OperatorRole:
+        if is_only_persisted_operator:
+            return OperatorRole.PLATFORM_ADMIN
+
+        tenant_id = str(payload.get("tenant_id", "")).strip()
+        operator_id = str(payload.get("operator_id", "")).strip()
+        try:
+            tenant = load_tenant_config(canonicalize_tenant_id(tenant_id))
+        except FileNotFoundError:
+            return OperatorRole.OPERATOR
+
+        seed_operator = next(
+            (
+                operator
+                for operator in tenant.operators
+                if operator.operator_id == operator_id
+            ),
+            None,
+        )
+        if seed_operator is not None:
+            return seed_operator.role
+        return OperatorRole.OPERATOR
 
     def _persist_records(self) -> None:
         if self._storage_path is None:
@@ -1054,6 +1197,7 @@ class AuthService:
             operator_id=operator.operator_id,
             username=operator.username,
             password_hash=operator.password_hash,
+            role=operator.role,
             disabled=operator.disabled,
             is_seed=is_seed,
         )
@@ -1069,6 +1213,7 @@ class AuthService:
             operator_id=record.operator_id,
             username=record.username,
             password_hash=record.password_hash,
+            role=record.role,
             disabled=record.disabled,
             is_seed=is_seed,
         )
@@ -1104,6 +1249,7 @@ class AuthService:
         payload = {
             "operator_id": operator.operator_id,
             "username": operator.username,
+            "role": operator.role.value,
             "disabled": operator.disabled,
             "is_seed": operator.is_seed,
         }
@@ -1115,4 +1261,30 @@ class AuthService:
             tenant_id=operator.tenant_id,
             api_key_id=api_key_id,
             details=payload,
+        )
+
+    def _record_authorization_denied_event(
+        self,
+        *,
+        tenant_id: str,
+        api_key_id: str | None,
+        action: str,
+        target_tenant_id: str,
+        operator: EffectiveOperator | None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        details: dict[str, object] = {
+            "action": action,
+            "target_tenant_id": target_tenant_id,
+            "operator_id": operator.operator_id if operator is not None else None,
+            "username": operator.username if operator is not None else None,
+            "role": operator.role.value if operator is not None else None,
+        }
+        self._audit_service.record_event(
+            AuditEventType.AUTHORIZATION_DENIED,
+            tenant_id=tenant_id,
+            api_key_id=api_key_id,
+            details=details,
         )

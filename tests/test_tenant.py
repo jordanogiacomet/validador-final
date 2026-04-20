@@ -9,6 +9,7 @@ from app.core.tenant_config import (
     LLMConfig,
     NormalizationConfig,
     OperatorConfig,
+    OperatorRole,
     SuspiciousPatternsConfig,
     TenantConfig,
 )
@@ -134,6 +135,7 @@ class TestTenantConfig:
         )
         assert config.operators[0].operator_id == "operator-1"
         assert config.operators[0].username == "operator"
+        assert config.operators[0].role is OperatorRole.TENANT_ADMIN
         assert config.operators[0].disabled is False
 
     def test_config_with_auth_policy(self) -> None:
@@ -166,6 +168,7 @@ class TestTenantLoader:
         assert config.suspicious_patterns.literal_patterns == []
         assert config.api_keys[0].key_id == "default-local"
         assert config.operators[0].operator_id == "default-local-operator"
+        assert config.operators[0].role is OperatorRole.TENANT_ADMIN
         assert config.auth.issued_api_key_ttl_seconds == 28800
 
     def test_load_default_by_id(self) -> None:

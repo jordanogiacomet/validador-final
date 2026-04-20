@@ -7,6 +7,7 @@ import pytest
 
 from app.core import tenant_loader
 from app.core.audit import AuditEventType
+from app.core.tenant_config import OperatorRole
 from app.services.audit_service import AuditService
 from app.services.auth_service import (
     BOOTSTRAP_ADMIN_FORCE_RESET_ENV,
@@ -355,6 +356,7 @@ def test_bootstrap_admin_from_env_creates_first_operator_and_supports_login_afte
             "operator_id": operator.operator_id,
             "username": "admin.operacional",
             "password_hash": payload[0]["password_hash"],
+            "role": "platform_admin",
             "disabled": False,
         }
     ]
@@ -528,6 +530,7 @@ def test_initial_setup_creates_single_persisted_admin_and_closes_public_setup(
             "operator_id": operator.operator_id,
             "username": "admin.inicial",
             "password_hash": payload[0]["password_hash"],
+            "role": "platform_admin",
             "disabled": False,
         }
     ]
@@ -666,6 +669,7 @@ def test_create_operator_persists_only_hashed_password_and_supports_login_after_
     assert payload[0]["tenant_id"] == "default"
     assert payload[0]["operator_id"] == operator.operator_id
     assert payload[0]["username"] == "novo.operador"
+    assert payload[0]["role"] == "operator"
     assert payload[0]["password_hash"] != "NovaSenha@2026"
     assert "NovaSenha@2026" not in operator_storage_path.read_text(encoding="utf-8")
 
@@ -678,6 +682,112 @@ def test_create_operator_persists_only_hashed_password_and_supports_login_after_
 
     assert issued_key.record.tenant_id == "default"
     assert issued_key.record.operator_id == operator.operator_id
+
+
+def test_create_operator_persists_requested_role_and_issues_it_after_login(tmp_path):
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+
+    operator = service.create_operator(
+        tenant_id="default",
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+        role=OperatorRole.PLATFORM_ADMIN,
+    )
+    reloaded = AuthService(operator_storage_path=operator_storage_path)
+    issued_key = reloaded.issue_api_key(
+        tenant_id="default",
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+    )
+
+    assert operator.role is OperatorRole.PLATFORM_ADMIN
+    assert issued_key.record.role is OperatorRole.PLATFORM_ADMIN
+
+
+def test_authorize_operator_management_allows_platform_admin_cross_tenant():
+    service = AuthService()
+    platform_admin = service.create_operator(
+        tenant_id="default",
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+        role=OperatorRole.PLATFORM_ADMIN,
+    )
+
+    target_tenant_id = service.authorize_operator_management(
+        actor_tenant_id="default",
+        actor_operator_id=platform_admin.operator_id,
+        api_key_id="issued-platform",
+        target_tenant_id="redesim",
+        action="operators.create",
+    )
+
+    assert target_tenant_id == "redesim"
+
+
+def test_authorize_operator_management_allows_tenant_admin_for_own_tenant():
+    service = AuthService()
+
+    target_tenant_id = service.authorize_operator_management(
+        actor_tenant_id="default",
+        actor_operator_id="default-local-operator",
+        api_key_id="issued-tenant-admin",
+        target_tenant_id="default",
+        action="operators.create",
+    )
+
+    assert target_tenant_id == "default"
+
+
+def test_authorize_operator_management_rejects_operator_and_records_audit_event():
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    operator = service.create_operator(
+        tenant_id="default",
+        username="operador.comum",
+        password="Operador@2026",
+        role=OperatorRole.OPERATOR,
+    )
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.authorize_operator_management(
+            actor_tenant_id="default",
+            actor_operator_id=operator.operator_id,
+            api_key_id="issued-operator",
+            target_tenant_id="default",
+            action="operators.create",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Operator is not allowed to manage this tenant"
+    events = audit_service.list_events(tenant_id="default")
+    assert events[0].event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert events[0].api_key_id == "issued-operator"
+    assert events[0].details["operator_id"] == operator.operator_id
+    assert events[0].details["role"] == "operator"
+    assert events[0].details["action"] == "operators.create"
+
+
+def test_authorize_operator_role_assignment_blocks_tenant_admin_platform_escalation():
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.authorize_operator_role_assignment(
+            actor_tenant_id="default",
+            actor_operator_id="default-local-operator",
+            api_key_id="issued-tenant-admin",
+            target_tenant_id="default",
+            requested_role=OperatorRole.PLATFORM_ADMIN,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Only platform_admin can create platform administrators"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["operator_id"] == "default-local-operator"
+    assert event.details["role"] == "tenant_admin"
+    assert event.details["action"] == "operators.create.platform_admin"
 
 
 def test_disable_operator_blocks_login_and_revokes_active_api_keys() -> None:

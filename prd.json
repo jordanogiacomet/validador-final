@@ -826,11 +826,11 @@
         "Registrar tentativas negadas em auditoria com tenant, usuário e ação solicitada",
         "Adicionar testes de permissão para cada papel e para tentativas cross-tenant",
         "Ruff lint e pytest passam"
-      ],
-      "priority": 48,
-      "passes": false,
-      "notes": "RBAC deve ser uma camada genérica de auth/autorização. Não introduzir lógica específica de tenant no engine de validação."
-    },
+            ],
+            "priority": 48,
+            "passes": true,
+            "notes": "Implementado com `OperatorRole` (`platform_admin`, `tenant_admin`, `operator`) em tenant config e storage runtime, emissão/renovação de sessão carregando papel efetivo, autorização de gestão de operadores delegada ao `AuthService`, `platform_admin` podendo listar tenants/criar usuários cross-tenant, `tenant_admin` limitado ao próprio tenant, `operator` bloqueado em ações administrativas e auditoria `authorization_denied` para tentativas negadas."
+        },
     {
       "id": "US-049",
       "title": "Permitir administração segura de tenants pela aplicação",

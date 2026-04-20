@@ -10,6 +10,7 @@ import app.services.validation_service as validation_service
 from app.api.routes import audit_service, auth_service, job_service
 from app.core.audit import AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
+from app.core.tenant_config import OperatorRole
 from app.main import app
 from app.services.validation_service import run_validation_job
 
@@ -307,6 +308,7 @@ def test_login_emits_tenant_scoped_api_key():
 
     assert payload["tenant_id"] == "default"
     assert payload["operator_id"] == "default-local-operator"
+    assert payload["role"] == "tenant_admin"
     assert payload["api_key_id"].startswith("issued-")
     assert payload["x_api_key"].startswith("vapi_")
     assert payload["expires_at"]
@@ -364,6 +366,7 @@ def test_renew_issued_api_key_rotates_session_and_records_audit_event():
     renew_payload = response.json()
     assert renew_payload["tenant_id"] == "default"
     assert renew_payload["operator_id"] == "default-local-operator"
+    assert renew_payload["role"] == "tenant_admin"
     assert renew_payload["previous_api_key_id"] == payload["api_key_id"]
     assert renew_payload["api_key_id"] != payload["api_key_id"]
     assert renew_payload["x_api_key"] != payload["x_api_key"]
@@ -501,11 +504,12 @@ def test_list_operators_returns_tenant_scoped_summaries_without_hashes():
         username="novo.operador",
         password="NovaSenha@2026",
     )
+    headers, _payload = login_headers()
 
     response = client.get(
         "/operators",
         params={"tenant_id": "default"},
-        headers=auth_headers(),
+        headers=headers,
     )
 
     assert response.status_code == 200
@@ -515,15 +519,18 @@ def test_list_operators_returns_tenant_scoped_summaries_without_hashes():
     )
     created_operator = next(item for item in payload if item["username"] == "novo.operador")
     assert seed_operator["is_seed"] is True
+    assert seed_operator["role"] == "tenant_admin"
     assert created_operator["disabled"] is False
+    assert created_operator["role"] == "operator"
     assert created_operator["is_seed"] is False
     assert "password_hash" not in created_operator
 
 
 def test_create_operator_endpoint_creates_tenant_scoped_operator():
+    headers, _payload = login_headers()
     response = client.post(
         "/operators",
-        headers=auth_headers(),
+        headers=headers,
         json={
             "tenant_id": "default",
             "username": "novo.operador",
@@ -535,6 +542,7 @@ def test_create_operator_endpoint_creates_tenant_scoped_operator():
     payload = response.json()
     assert payload["tenant_id"] == "default"
     assert payload["username"] == "novo.operador"
+    assert payload["role"] == "operator"
     assert payload["disabled"] is False
     assert payload["is_seed"] is False
 
@@ -551,9 +559,10 @@ def test_create_operator_endpoint_creates_tenant_scoped_operator():
 
 
 def test_disable_operator_endpoint_revokes_active_operator_session():
+    admin_headers, _admin_payload = login_headers()
     create_response = client.post(
         "/operators",
-        headers=auth_headers(),
+        headers=admin_headers,
         json={
             "tenant_id": "default",
             "username": "ativo.operador",
@@ -569,7 +578,7 @@ def test_disable_operator_endpoint_revokes_active_operator_session():
 
     response = client.post(
         f"/operators/{operator_id}/disable",
-        headers=auth_headers(),
+        headers=admin_headers,
         json={"tenant_id": "default"},
     )
 
@@ -584,9 +593,10 @@ def test_disable_operator_endpoint_revokes_active_operator_session():
 
 
 def test_seed_password_rotation_endpoint_replaces_bootstrap_password():
+    headers, _payload = login_headers()
     response = client.post(
         "/operators/seed/rotate-password",
-        headers=auth_headers(),
+        headers=headers,
         json={
             "tenant_id": "default",
             "new_password": "NovaSeed@2026",
@@ -631,9 +641,10 @@ def test_seed_password_rotation_endpoint_replaces_bootstrap_password():
 
 
 def test_operator_management_rejects_other_tenant_scope():
+    headers, _payload = login_headers()
     response = client.post(
         "/operators",
-        headers=auth_headers(),
+        headers=headers,
         json={
             "tenant_id": "redesim",
             "username": "bloqueado.operador",
@@ -642,7 +653,108 @@ def test_operator_management_rejects_other_tenant_scope():
     )
 
     assert response.status_code == 403
-    assert "redesim" in response.json()["detail"]
+    assert response.json()["detail"] == "Operator is not allowed to manage this tenant"
+
+
+def test_platform_admin_lists_tenants_and_creates_operator_in_any_tenant():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+        role=OperatorRole.PLATFORM_ADMIN,
+    )
+    headers, login_payload = login_headers(
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+    )
+
+    tenants_response = client.get("/tenants", headers=headers)
+    assert tenants_response.status_code == 200
+    tenant_ids = {tenant["tenant_id"] for tenant in tenants_response.json()}
+    assert {"default", "redesim"}.issubset(tenant_ids)
+    assert login_payload["role"] == "platform_admin"
+
+    create_response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "redesim",
+            "username": "redesim.novo",
+            "password": "RedesimNovo@2026",
+            "role": "operator",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_payload = create_response.json()
+    assert created_payload["tenant_id"] == "redesim"
+    assert created_payload["username"] == "redesim.novo"
+    assert created_payload["role"] == "operator"
+
+    login_response = client.post(
+        "/login",
+        json={
+            "tenant_id": "redesim",
+            "username": "redesim.novo",
+            "password": "RedesimNovo@2026",
+        },
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["operator_id"] == created_payload["operator_id"]
+
+
+def test_operator_role_cannot_manage_users_even_in_own_tenant():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="operador.comum",
+        password="Operador@2026",
+        role=OperatorRole.OPERATOR,
+    )
+    headers, _payload = login_headers(
+        username="operador.comum",
+        password="Operador@2026",
+    )
+
+    response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "username": "outro.operador",
+            "password": "OutroOperador@2026",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator is not allowed to manage this tenant"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["operator_id"]
+    assert event.details["role"] == "operator"
+    assert event.details["action"] == "operators.create"
+
+
+def test_tenant_admin_cannot_create_platform_admin():
+    headers, _payload = login_headers()
+
+    response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "username": "admin.global",
+            "password": "AdminGlobal@2026",
+            "role": "platform_admin",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only platform_admin can create platform administrators"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["operator_id"] == "default-local-operator"
+    assert event.details["role"] == "tenant_admin"
+    assert event.details["action"] == "operators.create.platform_admin"
 
 
 def test_jobs_are_scoped_to_issued_api_key_tenant():
