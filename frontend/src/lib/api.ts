@@ -430,6 +430,27 @@ export async function createInitialAdmin(
   return readResponse<OperatorResponse>(response);
 }
 
+export async function completePasswordSetup(params: {
+  apiKey: string;
+  newPassword: string;
+}): Promise<OperatorResponse> {
+  const response = await apiFetch(
+    "/operators/me/complete-password-setup",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [API_KEY_HEADER]: params.apiKey.trim(),
+      },
+      body: JSON.stringify({
+        new_password: params.newPassword,
+      }),
+    },
+    { includeAuth: false },
+  );
+  return readResponse<OperatorResponse>(response);
+}
+
 export async function validateFile(params: {
   file: File;
   tenantId: string;

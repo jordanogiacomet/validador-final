@@ -138,6 +138,7 @@ class TestTenantConfig:
         assert config.operators[0].username == "operator"
         assert config.operators[0].role is OperatorRole.TENANT_ADMIN
         assert config.operators[0].disabled is False
+        assert config.operators[0].must_change_password is False
 
     def test_config_with_auth_policy(self) -> None:
         config = TenantConfig(
@@ -170,6 +171,7 @@ class TestTenantLoader:
         assert config.api_keys[0].key_id == "default-local"
         assert config.operators[0].operator_id == "default-local-operator"
         assert config.operators[0].role is OperatorRole.TENANT_ADMIN
+        assert config.operators[0].must_change_password is False
         assert config.auth.issued_api_key_ttl_seconds == 28800
 
     def test_load_default_by_id(self) -> None:

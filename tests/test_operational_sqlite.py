@@ -86,6 +86,30 @@ def test_auth_service_sqlite_persists_issued_keys_and_managed_operators(tmp_path
     assert managed_login.record.operator_id == operator.operator_id
 
 
+def test_auth_service_sqlite_persists_operator_invitations(tmp_path) -> None:
+    sqlite_path = tmp_path / "state" / "operational.sqlite3"
+    service = AuthService(sqlite_path=sqlite_path)
+
+    invitation = service.create_operator_invitation(
+        tenant_id="default",
+        username="sqlite.invited",
+    )
+
+    reloaded = AuthService(sqlite_path=sqlite_path)
+    accepted = reloaded.accept_operator_invitation(
+        invite_token=invitation.raw_invite_token,
+        password="SenhaConvite@2026",
+    )
+
+    assert accepted.username == "sqlite.invited"
+    login = reloaded.issue_api_key(
+        tenant_id="default",
+        username="sqlite.invited",
+        password="SenhaConvite@2026",
+    )
+    assert login.record.operator_id == accepted.operator_id
+
+
 def test_shared_sqlite_store_keeps_audit_and_jobs_available_after_restart(tmp_path) -> None:
     sqlite_path = tmp_path / "state" / "operational.sqlite3"
     audit_service = AuditService(sqlite_path=sqlite_path)

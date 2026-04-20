@@ -41,6 +41,7 @@ export interface OperatorResponse {
   username: string;
   role?: OperatorRole;
   disabled: boolean;
+  must_change_password?: boolean;
   is_seed: boolean;
 }
 
@@ -50,6 +51,7 @@ export interface LoginResponse {
   role?: OperatorRole;
   api_key_id: string;
   x_api_key: string;
+  must_change_password?: boolean;
   header_name: string;
   expires_at?: string | null;
 }

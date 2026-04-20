@@ -150,6 +150,35 @@ class OperationalSQLiteStore:
             rows=rows,
         )
 
+    def load_operator_invites(self) -> list[dict[str, Any]]:
+        return self._load_payloads(
+            "SELECT payload FROM operator_invites ORDER BY tenant_id ASC, created_at ASC, "
+            "invite_id ASC"
+        )
+
+    def replace_operator_invites(self, payloads: Iterable[dict[str, Any]]) -> None:
+        rows = [
+            (
+                str(payload["invite_id"]),
+                str(payload["tenant_id"]),
+                str(payload["username"]).casefold(),
+                str(payload["created_at"]),
+                payload["expires_at"],
+                payload.get("used_at"),
+                _serialize_payload(payload),
+            )
+            for payload in payloads
+        ]
+        self._replace_rows(
+            table_name="operator_invites",
+            insert_sql=(
+                "INSERT INTO operator_invites "
+                "(invite_id, tenant_id, username_key, created_at, expires_at, used_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            rows=rows,
+        )
+
     def load_runtime_tenants(self) -> list[dict[str, Any]]:
         return self._load_payloads(
             "SELECT payload FROM runtime_tenants ORDER BY tenant_id ASC"
@@ -258,6 +287,22 @@ class OperationalSQLiteStore:
             payload TEXT NOT NULL,
             PRIMARY KEY (tenant_id, operator_id)
         );
+        CREATE INDEX IF NOT EXISTS operators_tenant_username_idx
+            ON operators (tenant_id, username_key);
+
+        CREATE TABLE IF NOT EXISTS operator_invites (
+            invite_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            username_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS operator_invites_tenant_created_idx
+            ON operator_invites (tenant_id, created_at);
+        CREATE INDEX IF NOT EXISTS operator_invites_tenant_username_idx
+            ON operator_invites (tenant_id, username_key);
 
         CREATE TABLE IF NOT EXISTS runtime_tenants (
             tenant_id TEXT PRIMARY KEY,

@@ -194,8 +194,10 @@ If there are still stories with passes: false, end your response normally (anoth
 - API code should not contain validation business rules
 - API code should not know tenant-specific rule details beyond selecting the tenant/config
 - Public setup/auth bootstrap routes must be explicitly allowlisted in `app/api/auth.py` and should still delegate all state changes to services.
+- First-login password-setup enforcement also lives in `app/api/auth.py`; if you add invite/setup/auth exception paths, update the centralized allowlists there instead of bypassing auth in individual routes.
 - Frontend helpers for public API routes must opt out of auth header injection instead of relying on callers to clear the current session.
 - Role/permission decisions belong in `AuthService`; routes should pass authenticated tenant/operator/API-key context plus the target tenant and use the service-returned canonical tenant for admin actions.
+- Managed-user auth state belongs in persisted operator records (`must_change_password`), and invitation tokens must stay hashed-only in the operational store and audit trail; never persist raw invite tokens.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows

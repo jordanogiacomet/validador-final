@@ -78,6 +78,7 @@ class OperatorConfig(BaseModel):
     password_hash: str = Field(min_length=1)
     role: OperatorRole = OperatorRole.TENANT_ADMIN
     disabled: bool = False
+    must_change_password: bool = False
 
 
 class TenantConfig(BaseModel):

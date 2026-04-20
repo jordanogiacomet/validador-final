@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -135,6 +135,7 @@ class LoginResponse(BaseModel):
     api_key_id: str
     x_api_key: str
     expires_at: datetime
+    must_change_password: bool = False
     header_name: str = API_KEY_HEADER
 
 
@@ -165,6 +166,7 @@ class OperatorResponse(BaseModel):
     username: str
     role: OperatorRole
     disabled: bool
+    must_change_password: bool = False
     is_seed: bool
 
 
@@ -192,6 +194,7 @@ class OperatorCreateRequest(TenantScopedRequest):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
     role: OperatorRole = OperatorRole.OPERATOR
+    require_password_change: bool = True
 
     @field_validator("username")
     @classmethod
@@ -204,6 +207,47 @@ class OperatorCreateRequest(TenantScopedRequest):
 
 class OperatorDisableRequest(TenantScopedRequest):
     pass
+
+
+class OperatorRoleUpdateRequest(TenantScopedRequest):
+    role: OperatorRole
+
+
+class OperatorPasswordResetRequest(TenantScopedRequest):
+    new_password: str = Field(min_length=1)
+    require_password_change: bool = True
+
+
+class PasswordSetupCompletionRequest(BaseModel):
+    new_password: str = Field(min_length=1)
+
+
+class OperatorInvitationCreateRequest(TenantScopedRequest):
+    username: str = Field(min_length=1)
+    role: OperatorRole = OperatorRole.OPERATOR
+    expires_in_hours: int = Field(default=48, ge=1, le=24 * 30)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not LOGIN_USERNAME_PATTERN.fullmatch(normalized_value):
+            raise ValueError("username contains invalid characters")
+        return normalized_value
+
+
+class OperatorInvitationAcceptRequest(BaseModel):
+    invite_token: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class OperatorInvitationResponse(BaseModel):
+    tenant_id: str
+    invite_id: str
+    username: str
+    role: OperatorRole
+    expires_at: datetime
+    invite_token: str
 
 
 class SeedOperatorPasswordRotationRequest(TenantScopedRequest):
@@ -416,6 +460,7 @@ def _build_operator_response(operator: EffectiveOperator) -> OperatorResponse:
         username=operator.username,
         role=operator.role,
         disabled=operator.disabled,
+        must_change_password=operator.must_change_password,
         is_seed=operator.is_seed,
     )
 
@@ -544,6 +589,7 @@ async def login(payload: LoginRequest) -> LoginResponse:
         api_key_id=issued_key.record.key_id,
         x_api_key=issued_key.raw_api_key,
         expires_at=issued_key.record.expires_at or issued_key.record.created_at,
+        must_change_password=issued_key.must_change_password,
     )
 
 
@@ -758,6 +804,129 @@ async def create_operator(
             password=payload.password,
             role=payload.role,
             created_by_api_key_id=auth.api_key_id,
+            require_password_change=payload.require_password_change,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post(
+    "/operators/invitations",
+    response_model=OperatorInvitationResponse,
+    status_code=201,
+)
+async def create_operator_invitation(
+    request: Request,
+    payload: OperatorInvitationCreateRequest,
+) -> OperatorInvitationResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.invite",
+    )
+    try:
+        auth_service.authorize_operator_role_assignment(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            target_tenant_id=resolved_tenant_id,
+            requested_role=payload.role,
+            action="operators.invite.platform_admin",
+        )
+        invitation = auth_service.create_operator_invitation(
+            tenant_id=resolved_tenant_id,
+            username=payload.username,
+            role=payload.role,
+            expires_in=timedelta(hours=payload.expires_in_hours),
+            created_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    return OperatorInvitationResponse(
+        tenant_id=invitation.record.tenant_id,
+        invite_id=invitation.record.invite_id,
+        username=invitation.record.username,
+        role=invitation.record.role,
+        expires_at=invitation.record.expires_at,
+        invite_token=invitation.raw_invite_token,
+    )
+
+
+@router.post(
+    "/operators/invitations/accept",
+    response_model=OperatorResponse,
+    status_code=201,
+)
+async def accept_operator_invitation(
+    payload: OperatorInvitationAcceptRequest,
+) -> OperatorResponse:
+    try:
+        operator = auth_service.accept_operator_invitation(
+            invite_token=payload.invite_token,
+            password=payload.password,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.patch("/operators/{operator_id}", response_model=OperatorResponse)
+async def update_operator_role(
+    request: Request,
+    operator_id: str,
+    payload: OperatorRoleUpdateRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.update_role",
+    )
+    try:
+        auth_service.authorize_operator_role_assignment(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            target_tenant_id=resolved_tenant_id,
+            requested_role=payload.role,
+            action="operators.update_role.platform_admin",
+        )
+        operator = auth_service.change_operator_role(
+            tenant_id=resolved_tenant_id,
+            operator_id=operator_id,
+            role=payload.role,
+            changed_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post(
+    "/operators/{operator_id}/reset-password",
+    response_model=OperatorResponse,
+)
+async def reset_operator_password(
+    request: Request,
+    operator_id: str,
+    payload: OperatorPasswordResetRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = _authorize_operator_management(
+        request,
+        target_tenant_id=payload.tenant_id,
+        action="operators.reset_password",
+    )
+    try:
+        operator = auth_service.reset_operator_password(
+            tenant_id=resolved_tenant_id,
+            operator_id=operator_id,
+            new_password=payload.new_password,
+            reset_by_api_key_id=auth.api_key_id,
+            require_password_change=payload.require_password_change,
         )
     except AuthServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -781,6 +950,29 @@ async def disable_operator(
             tenant_id=resolved_tenant_id,
             operator_id=operator_id,
             disabled_by_api_key_id=auth.api_key_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_operator_response(operator)
+
+
+@router.post(
+    "/operators/me/complete-password-setup",
+    response_model=OperatorResponse,
+)
+async def complete_password_setup(
+    request: Request,
+    payload: PasswordSetupCompletionRequest,
+) -> OperatorResponse:
+    auth = get_authenticated_tenant(request)
+    if auth.operator_id is None:
+        raise HTTPException(status_code=403, detail="Password setup requires an operator session")
+    try:
+        operator = auth_service.complete_password_setup(
+            tenant_id=auth.tenant_id,
+            operator_id=auth.operator_id,
+            new_password=payload.new_password,
+            completed_by_api_key_id=auth.api_key_id,
         )
     except AuthServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None

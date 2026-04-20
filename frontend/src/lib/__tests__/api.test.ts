@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearApiSession,
+  completePasswordSetup,
   createInitialAdmin,
   downloadGeneratedFile,
   downloadApiFile,
@@ -129,6 +130,41 @@ describe("api auth session helpers", () => {
       setup_token: "token-publicado",
     });
     expect(operator.username).toBe("admin.inicial");
+  });
+
+  it("completes mandatory password setup with the provided temporary API key", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          tenant_id: "default",
+          operator_id: "operator-1",
+          username: "temporario.operador",
+          disabled: false,
+          must_change_password: false,
+          is_seed: false,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    const operator = await completePasswordSetup({
+      apiKey: " vapi_temp_setup ",
+      newPassword: "SenhaFinal@2026",
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    const body = JSON.parse(String(requestInit?.body));
+    expect(headers.get("X-API-Key")).toBe("vapi_temp_setup");
+    expect(body).toEqual({ new_password: "SenhaFinal@2026" });
+    expect(operator.must_change_password).toBe(false);
   });
 
   it("attaches the issued X-API-Key to authenticated requests", async () => {

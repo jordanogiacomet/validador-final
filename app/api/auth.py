@@ -21,8 +21,20 @@ from app.services.auth_service import AuthService, IssuedAPIKeyStatus
 
 API_KEY_HEADER = "X-API-Key"
 _AUTH_STATE_KEY = "tenant_auth"
-_PUBLIC_EXACT_PATHS = {"/", "/health", "/login", "/metrics", "/openapi.json", "/setup"}
+_PUBLIC_EXACT_PATHS = {
+    "/",
+    "/health",
+    "/login",
+    "/metrics",
+    "/openapi.json",
+    "/setup",
+    "/operators/invitations/accept",
+}
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
+_PASSWORD_SETUP_EXACT_PATHS = {
+    "/operators/me/complete-password-setup",
+    "/api-keys/revoke",
+}
 
 
 def _build_auth_service() -> AuthService:
@@ -65,6 +77,11 @@ def _is_public_request(request: Request) -> bool:
 
 def _auth_error(status_code: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail})
+
+
+def _allows_password_setup_only_request(request: Request) -> bool:
+    normalized_path = _normalize_path(request.url.path)
+    return normalized_path in _PASSWORD_SETUP_EXACT_PATHS
 
 
 async def api_key_auth_middleware(
@@ -116,6 +133,20 @@ async def api_key_auth_middleware(
         return _auth_error(401, "Invalid API key")
     except ValueError as exc:
         return _auth_error(500, str(exc))
+
+    if authenticated_tenant.operator_id is not None:
+        operator = auth_service.get_operator(
+            tenant_id=authenticated_tenant.tenant_id,
+            operator_id=authenticated_tenant.operator_id,
+        )
+        if operator is None:
+            return _auth_error(401, "Invalid API key")
+        if operator.disabled:
+            return _auth_error(403, "Operator is disabled")
+        if operator.must_change_password and not _allows_password_setup_only_request(
+            request
+        ):
+            return _auth_error(403, "Password change required")
 
     setattr(
         request.state,

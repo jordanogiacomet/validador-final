@@ -868,8 +868,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 50,
-      "passes": false,
-      "notes": "Se não houver infraestrutura de e-mail, o token de convite pode ser gerado e exibido uma única vez ao administrador para entrega fora do sistema. Nunca persistir token bruto."
+      "passes": true,
+      "notes": "Implementado em `AuthService`/API com convites hashed single-use, criação administrativa com senha temporária e troca obrigatória no primeiro login, reset de senha com revogação de API keys, troca de papel com auditoria e persistência de convites via SQLite/JSON. A tela de login conclui a troca obrigatória de senha antes de abrir o workspace."
     },
     {
       "id": "US-051",

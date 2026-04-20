@@ -358,6 +358,7 @@ def test_bootstrap_admin_from_env_creates_first_operator_and_supports_login_afte
             "password_hash": payload[0]["password_hash"],
             "role": "platform_admin",
             "disabled": False,
+            "must_change_password": False,
         }
     ]
     assert payload[0]["password_hash"] != "Bootstrap@2026"
@@ -532,6 +533,7 @@ def test_initial_setup_creates_single_persisted_admin_and_closes_public_setup(
             "password_hash": payload[0]["password_hash"],
             "role": "platform_admin",
             "disabled": False,
+            "must_change_password": False,
         }
     ]
     assert payload[0]["password_hash"] != "Setup@2026"
@@ -703,6 +705,164 @@ def test_create_operator_persists_requested_role_and_issues_it_after_login(tmp_p
 
     assert operator.role is OperatorRole.PLATFORM_ADMIN
     assert issued_key.record.role is OperatorRole.PLATFORM_ADMIN
+
+
+def test_temporary_admin_password_requires_rotation_and_revokes_issued_key() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    operator = service.create_operator(
+        tenant_id="default",
+        username="temporario.operador",
+        password="Temp@2026",
+        require_password_change=True,
+    )
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="temporario.operador",
+        password="Temp@2026",
+    )
+
+    assert issued_key.must_change_password is True
+
+    rotated = service.complete_password_setup(
+        tenant_id="default",
+        operator_id=operator.operator_id,
+        new_password="SenhaFinal@2026",
+        completed_by_api_key_id=issued_key.record.key_id,
+    )
+
+    assert rotated.must_change_password is False
+    resolution = service.inspect_issued_api_key(issued_key.raw_api_key)
+    assert resolution.status is IssuedAPIKeyStatus.REVOKED
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.issue_api_key(
+            tenant_id="default",
+            username="temporario.operador",
+            password="Temp@2026",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid credentials"
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.OPERATOR_PASSWORD_ROTATED,
+        AuditEventType.API_KEY_REVOKED,
+    ]
+    assert events[0].details["completed_password_setup"] is True
+
+    final_login = service.issue_api_key(
+        tenant_id="default",
+        username="temporario.operador",
+        password="SenhaFinal@2026",
+    )
+    assert final_login.must_change_password is False
+    assert final_login.record.operator_id == operator.operator_id
+
+
+def test_operator_invitation_is_single_use_and_does_not_persist_raw_token(tmp_path) -> None:
+    operator_storage_path = tmp_path / "operators.json"
+    service = AuthService(operator_storage_path=operator_storage_path)
+
+    invitation = service.create_operator_invitation(
+        tenant_id="default",
+        username="convidado.operador",
+        role=OperatorRole.OPERATOR,
+    )
+    invite_storage_path = tmp_path / "operators.invites.json"
+
+    assert invite_storage_path.exists()
+    assert invitation.raw_invite_token not in invite_storage_path.read_text(encoding="utf-8")
+
+    operator = service.accept_operator_invitation(
+        invite_token=invitation.raw_invite_token,
+        password="Convite@2026",
+    )
+
+    assert operator.username == "convidado.operador"
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.accept_operator_invitation(
+            invite_token=invitation.raw_invite_token,
+            password="Outra@2026",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Invitation token already used"
+
+
+def test_operator_invitation_rejects_expired_token() -> None:
+    service = AuthService()
+    issued_at = datetime.now(UTC)
+    invitation = service.create_operator_invitation(
+        tenant_id="default",
+        username="convite.expirado",
+        expires_in=timedelta(minutes=15),
+        now=issued_at,
+    )
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.accept_operator_invitation(
+            invite_token=invitation.raw_invite_token,
+            password="Convite@2026",
+            now=issued_at + timedelta(minutes=16),
+        )
+
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.detail == "Invitation token expired"
+
+
+def test_reset_operator_password_revokes_active_api_keys_and_requires_new_rotation() -> None:
+    audit_service = AuditService()
+    service = AuthService(audit_service=audit_service)
+    operator = service.create_operator(
+        tenant_id="default",
+        username="reset.operador",
+        password="SenhaAtual@2026",
+    )
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="reset.operador",
+        password="SenhaAtual@2026",
+    )
+
+    reset_operator = service.reset_operator_password(
+        tenant_id="default",
+        operator_id=operator.operator_id,
+        new_password="SenhaResetada@2026",
+        reset_by_api_key_id="issued-admin",
+        require_password_change=True,
+    )
+
+    assert reset_operator.must_change_password is True
+    resolution = service.inspect_issued_api_key(issued_key.raw_api_key)
+    assert resolution.status is IssuedAPIKeyStatus.REVOKED
+
+    with pytest.raises(AuthServiceError) as old_password_exc:
+        service.issue_api_key(
+            tenant_id="default",
+            username="reset.operador",
+            password="SenhaAtual@2026",
+        )
+
+    assert old_password_exc.value.status_code == 401
+    assert old_password_exc.value.detail == "Invalid credentials"
+
+    events = audit_service.list_events(tenant_id="default")
+    assert [event.event_type for event in events[:2]] == [
+        AuditEventType.OPERATOR_PASSWORD_RESET,
+        AuditEventType.API_KEY_REVOKED,
+    ]
+    assert events[0].details["revoked_api_key_count"] == 1
+
+    reset_login = service.issue_api_key(
+        tenant_id="default",
+        username="reset.operador",
+        password="SenhaResetada@2026",
+    )
+    assert reset_login.must_change_password is True
 
 
 def test_authorize_operator_management_allows_platform_admin_cross_tenant():

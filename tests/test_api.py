@@ -591,6 +591,130 @@ def test_create_operator_endpoint_creates_tenant_scoped_operator():
     assert login_response.json()["operator_id"] == payload["operator_id"]
 
 
+def test_temporary_operator_password_requires_completion_before_other_api_calls():
+    headers, _payload = login_headers()
+    create_response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "username": "temporario.operador",
+            "password": "Temp@2026",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_payload = create_response.json()
+    assert created_payload["must_change_password"] is True
+
+    login_response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "temporario.operador",
+            "password": "Temp@2026",
+        },
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()
+    assert login_payload["must_change_password"] is True
+    temp_headers = auth_headers(login_payload["x_api_key"])
+
+    blocked = client.get("/tenants", headers=temp_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "Password change required"
+
+    completion = client.post(
+        "/operators/me/complete-password-setup",
+        headers=temp_headers,
+        json={"new_password": "SenhaFinal@2026"},
+    )
+    assert completion.status_code == 200
+    assert completion.json()["must_change_password"] is False
+
+    revoked = client.get("/tenants", headers=temp_headers)
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"] == "Revoked API key"
+
+    old_password = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "temporario.operador",
+            "password": "Temp@2026",
+        },
+    )
+    assert old_password.status_code == 401
+
+    final_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "temporario.operador",
+            "password": "SenhaFinal@2026",
+        },
+    )
+    assert final_login.status_code == 200
+    assert final_login.json()["must_change_password"] is False
+
+
+def test_create_operator_invitation_accepts_once_and_does_not_persist_raw_token(
+    tmp_path,
+    monkeypatch,
+):
+    operator_storage_path = enable_initial_setup_storage(monkeypatch, tmp_path)
+    admin_headers, _admin_payload = login_headers()
+
+    create_response = client.post(
+        "/operators/invitations",
+        headers=admin_headers,
+        json={
+            "tenant_id": "default",
+            "username": "convite.operador",
+            "role": "operator",
+            "expires_in_hours": 24,
+        },
+    )
+
+    assert create_response.status_code == 201
+    invitation_payload = create_response.json()
+    invite_token = invitation_payload["invite_token"]
+    invite_store_path = operator_storage_path.with_name("operators.invites.json")
+    assert invite_store_path.exists()
+    assert invite_token not in invite_store_path.read_text(encoding="utf-8")
+
+    accept_response = client.post(
+        "/operators/invitations/accept",
+        json={
+            "invite_token": invite_token,
+            "password": "Convite@2026",
+        },
+    )
+    assert accept_response.status_code == 201
+    assert accept_response.json()["username"] == "convite.operador"
+
+    second_accept = client.post(
+        "/operators/invitations/accept",
+        json={
+            "invite_token": invite_token,
+            "password": "OutraSenha@2026",
+        },
+    )
+    assert second_accept.status_code == 409
+    assert second_accept.json()["detail"] == "Invitation token already used"
+
+    login_response = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "convite.operador",
+            "password": "Convite@2026",
+        },
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["must_change_password"] is False
+
+
 def test_disable_operator_endpoint_revokes_active_operator_session():
     admin_headers, _admin_payload = login_headers()
     create_response = client.post(
@@ -623,6 +747,66 @@ def test_disable_operator_endpoint_revokes_active_operator_session():
     denied = client.get("/tenants", headers=operator_headers)
     assert denied.status_code == 401
     assert denied.json()["detail"] == "Revoked API key"
+
+
+def test_reset_operator_password_endpoint_revokes_active_operator_session():
+    admin_headers, _admin_payload = login_headers()
+    create_response = client.post(
+        "/operators",
+        headers=admin_headers,
+        json={
+            "tenant_id": "default",
+            "username": "reset.operador",
+            "password": "SenhaAtual@2026",
+            "require_password_change": False,
+        },
+    )
+    assert create_response.status_code == 201
+    operator_id = create_response.json()["operator_id"]
+
+    operator_headers, _login_payload = login_headers(
+        tenant_id="default",
+        username="reset.operador",
+        password="SenhaAtual@2026",
+    )
+    allowed_before_reset = client.get("/tenants", headers=operator_headers)
+    assert allowed_before_reset.status_code == 200
+
+    reset_response = client.post(
+        f"/operators/{operator_id}/reset-password",
+        headers=admin_headers,
+        json={
+            "tenant_id": "default",
+            "new_password": "SenhaResetada@2026",
+        },
+    )
+    assert reset_response.status_code == 200
+    assert reset_response.json()["must_change_password"] is True
+
+    revoked = client.get("/tenants", headers=operator_headers)
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"] == "Revoked API key"
+
+    old_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "reset.operador",
+            "password": "SenhaAtual@2026",
+        },
+    )
+    assert old_login.status_code == 401
+
+    reset_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "default",
+            "username": "reset.operador",
+            "password": "SenhaResetada@2026",
+        },
+    )
+    assert reset_login.status_code == 200
+    assert reset_login.json()["must_change_password"] is True
 
 
 def test_seed_password_rotation_endpoint_replaces_bootstrap_password():
@@ -689,6 +873,22 @@ def test_operator_management_rejects_other_tenant_scope():
     assert response.json()["detail"] == "Operator is not allowed to manage this tenant"
 
 
+def test_operator_invitation_rejects_other_tenant_scope():
+    headers, _payload = login_headers()
+    response = client.post(
+        "/operators/invitations",
+        headers=headers,
+        json={
+            "tenant_id": "redesim",
+            "username": "bloqueado.convite",
+            "role": "operator",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Operator is not allowed to manage this tenant"
+
+
 def test_platform_admin_lists_tenants_and_creates_operator_in_any_tenant():
     auth_service.create_operator(
         tenant_id="default",
@@ -734,6 +934,40 @@ def test_platform_admin_lists_tenants_and_creates_operator_in_any_tenant():
     )
     assert login_response.status_code == 200
     assert login_response.json()["operator_id"] == created_payload["operator_id"]
+
+
+def test_platform_admin_can_change_operator_role_and_audit_it():
+    headers = platform_admin_headers()
+    create_response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "redesim",
+            "username": "redesim.promovido",
+            "password": "Senha@2026",
+            "require_password_change": False,
+        },
+    )
+    assert create_response.status_code == 201
+    operator_id = create_response.json()["operator_id"]
+
+    update_response = client.patch(
+        f"/operators/{operator_id}",
+        headers=headers,
+        json={
+            "tenant_id": "redesim",
+            "role": "tenant_admin",
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["role"] == "tenant_admin"
+
+    event = audit_service.list_events(tenant_id="redesim")[0]
+    assert event.event_type is AuditEventType.OPERATOR_ROLE_CHANGED
+    assert event.details["operator_id"] == operator_id
+    assert event.details["previous_role"] == "operator"
+    assert event.details["new_role"] == "tenant_admin"
 
 
 def test_operator_role_cannot_manage_users_even_in_own_tenant():
@@ -788,6 +1022,37 @@ def test_tenant_admin_cannot_create_platform_admin():
     assert event.details["operator_id"] == "default-local-operator"
     assert event.details["role"] == "tenant_admin"
     assert event.details["action"] == "operators.create.platform_admin"
+
+
+def test_tenant_admin_cannot_promote_operator_to_platform_admin():
+    headers, _payload = login_headers()
+    create_response = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "username": "promocao.negada",
+            "password": "Senha@2026",
+            "require_password_change": False,
+        },
+    )
+    assert create_response.status_code == 201
+    operator_id = create_response.json()["operator_id"]
+
+    response = client.patch(
+        f"/operators/{operator_id}",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "role": "platform_admin",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only platform_admin can create platform administrators"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["action"] == "operators.update_role.platform_admin"
 
 
 def test_admin_tenant_routes_require_platform_admin(tmp_path, monkeypatch):
@@ -1012,6 +1277,39 @@ def test_disabled_tenant_blocks_login_and_existing_issued_keys(tmp_path, monkeyp
         },
     )
     assert restored_login.status_code == 200
+
+
+def test_disabled_tenant_rejects_new_operator_creation(tmp_path, monkeypatch):
+    enable_tenant_admin_storage(monkeypatch, tmp_path)
+    headers = platform_admin_headers()
+
+    create_tenant = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "cliente_sem_acesso",
+            "display_name": "Cliente Sem Acesso",
+        },
+    )
+    assert create_tenant.status_code == 201
+
+    disable_tenant = client.post(
+        "/admin/tenants/cliente_sem_acesso/disable",
+        headers=headers,
+    )
+    assert disable_tenant.status_code == 200
+
+    create_operator = client.post(
+        "/operators",
+        headers=headers,
+        json={
+            "tenant_id": "cliente_sem_acesso",
+            "username": "novo.usuario",
+            "password": "Senha@2026",
+        },
+    )
+    assert create_operator.status_code == 403
+    assert create_operator.json()["detail"] == "Tenant is disabled"
 
 
 def test_jobs_are_scoped_to_issued_api_key_tenant():

@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-20 15:05 -02
+Last Updated: 2026-04-20 16:46 -02
 
 ---
 
@@ -75,6 +75,8 @@ Last Updated: 2026-04-20 15:05 -02
 - Public first-run setup routes are `GET /setup` and `POST /setup`; keep them unauthenticated in `app/api/auth.py`, backed by `AuthService`, and closed whenever any persisted operator record already exists.
 - First-run administrator setup must require persistent operator storage, store only password hashes and minimal operator metadata, use `VALIDATOR_SETUP_TOKEN` for optional published-environment protection, and use SQLite atomic insertion for cross-process single-use protection.
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
+- First-login password-setup enforcement should stay centralized in `app/api/auth.py`; allowlist only the public invite/setup routes and the password-setup completion route instead of sprinkling auth exceptions across handlers.
+- Persist managed-user auth state on operator records (`must_change_password`) and store invitation tokens hashed-only in the operational store/SQLite; never persist raw invite tokens or mix invite payloads into the operator JSON schema.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 - Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
@@ -1075,4 +1077,22 @@ Expected architectural direction:
   - Tenant admin should only persist administrative metadata in runtime storage; keep validation columns/rules/categories in YAML or a future dedicated config workflow.
   - Runtime-created tenants should not inherit seed credentials from `default`, even when they inherit the default validation profile.
   - Use disabled-tenant visibility deliberately: admin/history paths need `include_disabled=True`, but normal auth and validation paths should reject disabled tenants.
+---
+
+## 2026-04-20 16:46 -02 - US-050
+- Implementado o ciclo de gestão de usuários no `AuthService` e na API: criação administrativa com senha temporária obrigando troca no primeiro login, convites single-use com expiração e hash persistido, reset administrativo de senha com revogação de sessões, e troca administrativa de papel com auditoria.
+- Persistidos convites no storage operacional compartilhado (SQLite ou JSON derivado do operator store), adicionados eventos de auditoria (`operator_invited`, `operator_invite_accepted`, `operator_password_reset`, `operator_role_changed`) e reforçado o middleware para limitar sessões temporárias apenas ao fluxo de conclusão da senha.
+- Atualizada a tela de login para concluir a troca obrigatória de senha antes de abrir o workspace, sem vazar a sessão temporária para o fluxo operacional normal.
+- Files changed: `app/api/auth.py`, `app/api/routes.py`, `app/core/audit.py`, `app/core/operational_sqlite.py`, `app/core/tenant_config.py`, `app/services/auth_service.py`, `frontend/src/components/login-screen.tsx`, `frontend/src/components/login-screen.test.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/lib/__tests__/api.test.ts`, `tests/test_api.py`, `tests/test_auth_service.py`, `tests/test_operational_sqlite.py`, `tests/test_tenant.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the forced password-setup flow is still recommended before publishing further auth changes.
+- **Learnings for future iterations:**
+  - A criação administrativa com senha temporária e o reset administrativo devem convergir no mesmo `must_change_password` + revogação de API keys para manter middleware, auditoria e frontend alinhados.
+  - Tokens de convite precisam continuar hash-only no storage compartilhado; o fallback JSON deve usar um arquivo irmão do operator store em vez de misturar convites e operadores no mesmo schema.
+  - Se o frontend interceptar uma sessão com `must_change_password=true`, ele deve concluir a troca antes de chamar rotas operacionais; deixar o workspace tentar carregar só gera `403 Password change required`.
 ---

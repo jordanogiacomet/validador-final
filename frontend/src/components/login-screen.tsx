@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import {
   ApiError,
+  completePasswordSetup,
   createInitialAdmin,
   getInitialSetupState,
   loginOperator,
@@ -14,6 +15,7 @@ import type { InitialSetupState, LoginResponse } from "@/lib/types";
 
 type LoginFieldName = "tenantId" | "username" | "password";
 type SetupFieldName = "username" | "password" | "setupToken";
+type PasswordSetupFieldName = "newPassword";
 
 interface LoginScreenProps {
   onAuthenticated: (session: LoginResponse) => void;
@@ -31,8 +33,13 @@ interface SetupFormState {
   setupToken: string;
 }
 
+interface PasswordSetupFormState {
+  newPassword: string;
+}
+
 type LoginFieldErrors = Partial<Record<LoginFieldName, string>>;
 type SetupFieldErrors = Partial<Record<SetupFieldName, string>>;
+type PasswordSetupFieldErrors = Partial<Record<PasswordSetupFieldName, string>>;
 
 const INITIAL_FORM_STATE: LoginFormState = {
   tenantId: "",
@@ -44,6 +51,10 @@ const INITIAL_SETUP_FORM_STATE: SetupFormState = {
   username: "",
   password: "",
   setupToken: "",
+};
+
+const INITIAL_PASSWORD_SETUP_FORM_STATE: PasswordSetupFormState = {
+  newPassword: "",
 };
 
 const INITIAL_ACCESS = {
@@ -173,6 +184,46 @@ function getSetupErrorMessage(error: unknown): string {
   return "Não foi possível criar o administrador inicial.";
 }
 
+function validatePasswordSetupForm(
+  values: PasswordSetupFormState,
+): PasswordSetupFieldErrors {
+  const errors: PasswordSetupFieldErrors = {};
+  if (!values.newPassword.trim()) {
+    errors.newPassword = "Informe a nova senha para concluir o acesso.";
+  }
+  return errors;
+}
+
+function getPasswordSetupErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return appendSupportCode("A sessão temporária expirou. Entre novamente.", error);
+    }
+
+    if (error.status === 403) {
+      return appendSupportCode(
+        "Esta sessão exige a troca imediata de senha antes do acesso.",
+        error,
+      );
+    }
+
+    if (error.status === 409) {
+      return appendSupportCode(
+        "A troca obrigatória de senha já foi concluída para este usuário.",
+        error,
+      );
+    }
+
+    return error.message;
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return "Não foi possível concluir a troca obrigatória de senha.";
+}
+
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
   const showDevLoginHints = shouldShowDevLoginHints();
   const [formValues, setFormValues] = useState<LoginFormState>(INITIAL_FORM_STATE);
@@ -187,6 +238,16 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupSuccess, setSetupSuccess] = useState<string | null>(null);
   const [isSetupSubmitting, setIsSetupSubmitting] = useState(false);
+  const [pendingPasswordSetupSession, setPendingPasswordSetupSession] =
+    useState<LoginResponse | null>(null);
+  const [passwordSetupValues, setPasswordSetupValues] = useState<PasswordSetupFormState>(
+    INITIAL_PASSWORD_SETUP_FORM_STATE,
+  );
+  const [passwordSetupFieldErrors, setPasswordSetupFieldErrors] =
+    useState<PasswordSetupFieldErrors>({});
+  const [passwordSetupError, setPasswordSetupError] = useState<string | null>(null);
+  const [passwordSetupSuccess, setPasswordSetupSuccess] = useState<string | null>(null);
+  const [isPasswordSetupSubmitting, setIsPasswordSetupSubmitting] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -256,6 +317,30 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     };
   }
 
+  function handlePasswordSetupFieldChange(field: PasswordSetupFieldName) {
+    return (event: ChangeEvent<HTMLInputElement>) => {
+      const nextValue = event.target.value;
+      setPasswordSetupValues((currentValue) => ({
+        ...currentValue,
+        [field]: nextValue,
+      }));
+
+      setPasswordSetupFieldErrors((currentValue) => {
+        if (!currentValue[field]) {
+          return currentValue;
+        }
+
+        const nextErrors = { ...currentValue };
+        delete nextErrors[field];
+        return nextErrors;
+      });
+
+      if (passwordSetupError) {
+        setPasswordSetupError(null);
+      }
+    };
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -274,6 +359,16 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
         ...currentValue,
         password: "",
       }));
+      if (session.must_change_password) {
+        setPendingPasswordSetupSession(session);
+        setPasswordSetupValues(INITIAL_PASSWORD_SETUP_FORM_STATE);
+        setPasswordSetupFieldErrors({});
+        setPasswordSetupError(null);
+        setPasswordSetupSuccess(null);
+        return;
+      }
+      setPendingPasswordSetupSession(null);
+      setPasswordSetupSuccess(null);
       onAuthenticated(session);
     } catch (error) {
       setSubmitError(getLoginErrorMessage(error));
@@ -321,6 +416,46 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     } finally {
       setIsSetupSubmitting(false);
     }
+  }
+
+  async function handlePasswordSetupSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextErrors = validatePasswordSetupForm(passwordSetupValues);
+    setPasswordSetupFieldErrors(nextErrors);
+    setPasswordSetupError(null);
+
+    if (Object.keys(nextErrors).length > 0 || !pendingPasswordSetupSession) {
+      return;
+    }
+
+    setIsPasswordSetupSubmitting(true);
+    try {
+      await completePasswordSetup({
+        apiKey: pendingPasswordSetupSession.x_api_key,
+        newPassword: passwordSetupValues.newPassword,
+      });
+      setPendingPasswordSetupSession(null);
+      setPasswordSetupValues(INITIAL_PASSWORD_SETUP_FORM_STATE);
+      setPasswordSetupSuccess(
+        "Senha temporária atualizada. Entre novamente com a nova senha.",
+      );
+      setFormValues((currentValue) => ({
+        ...currentValue,
+        password: "",
+      }));
+    } catch (error) {
+      setPasswordSetupError(getPasswordSetupErrorMessage(error));
+    } finally {
+      setIsPasswordSetupSubmitting(false);
+    }
+  }
+
+  function handlePasswordSetupCancel() {
+    setPendingPasswordSetupSession(null);
+    setPasswordSetupValues(INITIAL_PASSWORD_SETUP_FORM_STATE);
+    setPasswordSetupFieldErrors({});
+    setPasswordSetupError(null);
   }
 
   return (
@@ -479,73 +614,149 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
             </div>
           ) : null}
 
-          <form className="form-grid" noValidate onSubmit={handleSubmit}>
-            <div className="field">
-              <label htmlFor="tenant-id">Código da empresa</label>
-              <input
-                id="tenant-id"
-                name="tenant_id"
-                type="text"
-                autoComplete="organization"
-                inputMode="text"
-                value={formValues.tenantId}
-                aria-invalid={Boolean(fieldErrors.tenantId)}
-                onChange={handleFieldChange("tenantId")}
-              />
-              {fieldErrors.tenantId ? (
-                <p className="inline-error">{fieldErrors.tenantId}</p>
-              ) : (
-                <small>Use o código informado pela sua equipe operacional.</small>
-              )}
+          {passwordSetupSuccess ? (
+            <div className="auth-bootstrap-card auth-setup-success" role="status">
+              <div className="auth-bootstrap-head">
+                <div>
+                  <span className="auth-bootstrap-label">Senha temporária</span>
+                  <strong>{passwordSetupSuccess}</strong>
+                </div>
+                <span className="auth-bootstrap-badge">concluído</span>
+              </div>
             </div>
+          ) : null}
 
-            <div className="field">
-              <label htmlFor="username">Usuário</label>
-              <input
-                id="username"
-                name="username"
-                type="text"
-                autoComplete="username"
-                inputMode="email"
-                value={formValues.username}
-                aria-invalid={Boolean(fieldErrors.username)}
-                onChange={handleFieldChange("username")}
-              />
-              {fieldErrors.username ? (
-                <p className="inline-error">{fieldErrors.username}</p>
-              ) : (
-                <small>Use o mesmo usuário autorizado para essa empresa.</small>
-              )}
+          {pendingPasswordSetupSession ? (
+            <div className="auth-bootstrap-card auth-setup-card">
+              <div className="auth-bootstrap-head">
+                <div>
+                  <span className="auth-bootstrap-label">Troca obrigatória</span>
+                  <strong>Defina a nova senha antes de acessar a área operacional</strong>
+                </div>
+                <span className="auth-bootstrap-badge">primeiro login</span>
+              </div>
+              <form className="form-grid auth-setup-form" noValidate onSubmit={handlePasswordSetupSubmit}>
+                <div className="field">
+                  <label htmlFor="password-setup-tenant">Empresa</label>
+                  <input
+                    id="password-setup-tenant"
+                    type="text"
+                    value={pendingPasswordSetupSession.tenant_id}
+                    readOnly
+                  />
+                  <small>Usuário {formValues.username.trim() || pendingPasswordSetupSession.operator_id}.</small>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="password-setup-new-password">Nova senha</label>
+                  <input
+                    id="password-setup-new-password"
+                    name="password_setup_new_password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={passwordSetupValues.newPassword}
+                    aria-invalid={Boolean(passwordSetupFieldErrors.newPassword)}
+                    onChange={handlePasswordSetupFieldChange("newPassword")}
+                  />
+                  {passwordSetupFieldErrors.newPassword ? (
+                    <p className="inline-error">{passwordSetupFieldErrors.newPassword}</p>
+                  ) : (
+                    <small>Após concluir, faça login novamente com a nova senha.</small>
+                  )}
+                </div>
+
+                {passwordSetupError ? (
+                  <p className="inline-error auth-submit-error" role="alert">
+                    {passwordSetupError}
+                  </p>
+                ) : null}
+
+                <button
+                  className="cta auth-cta"
+                  type="submit"
+                  disabled={isPasswordSetupSubmitting}
+                >
+                  {isPasswordSetupSubmitting ? "Atualizando..." : "Concluir troca de senha"}
+                </button>
+                <button
+                  className="action-button"
+                  type="button"
+                  onClick={handlePasswordSetupCancel}
+                  disabled={isPasswordSetupSubmitting}
+                >
+                  Voltar ao login
+                </button>
+              </form>
             </div>
+          ) : (
+            <form className="form-grid" noValidate onSubmit={handleSubmit}>
+              <div className="field">
+                <label htmlFor="tenant-id">Código da empresa</label>
+                <input
+                  id="tenant-id"
+                  name="tenant_id"
+                  type="text"
+                  autoComplete="organization"
+                  inputMode="text"
+                  value={formValues.tenantId}
+                  aria-invalid={Boolean(fieldErrors.tenantId)}
+                  onChange={handleFieldChange("tenantId")}
+                />
+                {fieldErrors.tenantId ? (
+                  <p className="inline-error">{fieldErrors.tenantId}</p>
+                ) : (
+                  <small>Use o código informado pela sua equipe operacional.</small>
+                )}
+              </div>
 
-            <div className="field">
-              <label htmlFor="password">Senha</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                value={formValues.password}
-                aria-invalid={Boolean(fieldErrors.password)}
-                onChange={handleFieldChange("password")}
-              />
-              {fieldErrors.password ? (
-                <p className="inline-error">{fieldErrors.password}</p>
-              ) : (
-                <small>Use a senha informada para a operação.</small>
-              )}
-            </div>
+              <div className="field">
+                <label htmlFor="username">Usuário</label>
+                <input
+                  id="username"
+                  name="username"
+                  type="text"
+                  autoComplete="username"
+                  inputMode="email"
+                  value={formValues.username}
+                  aria-invalid={Boolean(fieldErrors.username)}
+                  onChange={handleFieldChange("username")}
+                />
+                {fieldErrors.username ? (
+                  <p className="inline-error">{fieldErrors.username}</p>
+                ) : (
+                  <small>Use o mesmo usuário autorizado para essa empresa.</small>
+                )}
+              </div>
 
-            {submitError ? (
-              <p className="inline-error auth-submit-error" role="alert">
-                {submitError}
-              </p>
-            ) : null}
+              <div className="field">
+                <label htmlFor="password">Senha</label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={formValues.password}
+                  aria-invalid={Boolean(fieldErrors.password)}
+                  onChange={handleFieldChange("password")}
+                />
+                {fieldErrors.password ? (
+                  <p className="inline-error">{fieldErrors.password}</p>
+                ) : (
+                  <small>Use a senha informada para a operação.</small>
+                )}
+              </div>
 
-            <button className="cta auth-cta" type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Entrando..." : "Entrar"}
-            </button>
-          </form>
+              {submitError ? (
+                <p className="inline-error auth-submit-error" role="alert">
+                  {submitError}
+                </p>
+              ) : null}
+
+              <button className="cta auth-cta" type="submit" disabled={isSubmitting}>
+                {isSubmitting ? "Entrando..." : "Entrar"}
+              </button>
+            </form>
+          )}
         </section>
       </section>
     </div>

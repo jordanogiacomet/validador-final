@@ -37,6 +37,7 @@ from app.core.tenant_loader import (
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 120_000
+DEFAULT_OPERATOR_INVITE_TTL_HOURS = 48
 OFFICIAL_TENANT_ID_ENV = "VALIDATOR_OFFICIAL_TENANT_ID"
 BOOTSTRAP_ADMIN_USERNAME_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD"
@@ -75,6 +76,20 @@ class StoredOperatorRecord(BaseModel):
     password_hash: str
     role: OperatorRole = OperatorRole.OPERATOR
     disabled: bool = False
+    must_change_password: bool = False
+
+
+class OperatorInvitationRecord(BaseModel):
+    invite_id: str = Field(default_factory=lambda: f"invite-{uuid4().hex}")
+    tenant_id: str
+    username: str
+    role: OperatorRole = OperatorRole.OPERATOR
+    token_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    expires_at: datetime
+    created_by_api_key_id: str | None = None
+    used_at: datetime | None = None
+    accepted_operator_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +100,7 @@ class EffectiveOperator:
     password_hash: str
     role: OperatorRole
     disabled: bool
+    must_change_password: bool
     is_seed: bool
 
 
@@ -92,6 +108,13 @@ class EffectiveOperator:
 class IssuedAPIKey:
     raw_api_key: str
     record: IssuedAPIKeyRecord
+    must_change_password: bool = False
+
+
+@dataclass(frozen=True)
+class OperatorInvitation:
+    raw_invite_token: str
+    record: OperatorInvitationRecord
 
 
 @dataclass(frozen=True)
@@ -134,6 +157,12 @@ class IssuedAPIKeyResolution:
 
 def hash_api_key(raw_api_key: str) -> str:
     return hashlib.sha256(raw_api_key.encode("utf-8")).hexdigest()
+
+
+def _derive_invite_storage_path(operator_storage_path: Path) -> Path:
+    return operator_storage_path.with_name(
+        f"{operator_storage_path.stem}.invites{operator_storage_path.suffix}"
+    )
 
 
 def hash_password(
@@ -215,6 +244,7 @@ class AuthService:
         self,
         storage_path: Path | str | None = None,
         operator_storage_path: Path | str | None = None,
+        invite_storage_path: Path | str | None = None,
         sqlite_path: Path | str | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
@@ -222,6 +252,7 @@ class AuthService:
             sqlite_path,
             storage_path,
             operator_storage_path,
+            invite_storage_path,
         )
         self._sqlite_store = (
             OperationalSQLiteStore(resolved_sqlite_path)
@@ -242,12 +273,21 @@ class AuthService:
             if operator_storage_path is not None
             else None
         )
+        self._invite_storage_path = (
+            resolved_sqlite_path
+            if resolved_sqlite_path is not None
+            else Path(invite_storage_path)
+            if invite_storage_path is not None
+            else None
+        )
         self._audit_service = audit_service
         self._records: dict[str, IssuedAPIKeyRecord] = {}
         self._operator_records: dict[tuple[str, str], StoredOperatorRecord] = {}
+        self._invite_records: dict[str, OperatorInvitationRecord] = {}
         self._initial_setup_lock = Lock()
         self._load_records()
         self._load_operator_records()
+        self._load_invite_records()
 
     @property
     def storage_path(self) -> Path | None:
@@ -257,6 +297,10 @@ class AuthService:
     def operator_storage_path(self) -> Path | None:
         return self._operator_storage_path
 
+    @property
+    def invite_storage_path(self) -> Path | None:
+        return self._resolve_invite_storage_path()
+
     def set_audit_service(self, audit_service: AuditService | None) -> None:
         self._audit_service = audit_service
 
@@ -264,6 +308,16 @@ class AuthService:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         self._load_tenant_for_login(normalized_tenant_id)
         return self._list_effective_operators(normalized_tenant_id)
+
+    def get_operator(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+    ) -> EffectiveOperator | None:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        self._load_tenant_for_login(normalized_tenant_id)
+        return self._find_operator_by_id(normalized_tenant_id, operator_id)
 
     def get_operator_role(
         self,
@@ -361,6 +415,7 @@ class AuthService:
         api_key_id: str | None,
         target_tenant_id: str,
         requested_role: OperatorRole,
+        action: str = "operators.create.platform_admin",
     ) -> None:
         if requested_role is not OperatorRole.PLATFORM_ADMIN:
             return
@@ -382,7 +437,7 @@ class AuthService:
         self._record_authorization_denied_event(
             tenant_id=normalized_actor_tenant_id,
             api_key_id=api_key_id,
-            action="operators.create.platform_admin",
+            action=action,
             target_tenant_id=normalized_target_tenant_id,
             operator=actor,
         )
@@ -520,12 +575,20 @@ class AuthService:
             updated_operator = self._store_effective_operator(
                 existing_operator,
                 password_hash=hash_password(config.password),
+                must_change_password=False,
+            )
+            revoked_count = self._revoke_active_keys_for_operator(
+                tenant_id=normalized_tenant_id,
+                operator_id=existing_operator.operator_id,
             )
             self._record_operator_audit_event(
                 AuditEventType.OPERATOR_PASSWORD_ROTATED,
                 operator=updated_operator,
                 api_key_id=None,
-                details={"bootstrap": True},
+                details={
+                    "bootstrap": True,
+                    "revoked_api_key_count": revoked_count,
+                },
             )
             return updated_operator
 
@@ -551,10 +614,12 @@ class AuthService:
         password: str,
         role: OperatorRole = OperatorRole.OPERATOR,
         created_by_api_key_id: str | None = None,
+        require_password_change: bool = False,
     ) -> EffectiveOperator:
         normalized_tenant_id = canonicalize_tenant_id(tenant_id)
         normalized_username = username.strip()
         self._load_tenant_for_login(normalized_tenant_id)
+        self._load_operator_records()
 
         if self._find_operator_by_username(normalized_tenant_id, normalized_username):
             raise AuthServiceError(409, "Operator username already exists")
@@ -565,6 +630,7 @@ class AuthService:
             username=normalized_username,
             password_hash=hash_password(password),
             role=role,
+            must_change_password=require_password_change,
         )
         self._operator_records[self._operator_record_key(record)] = record
         self._persist_operator_records()
@@ -574,8 +640,210 @@ class AuthService:
             AuditEventType.OPERATOR_CREATED,
             operator=operator,
             api_key_id=created_by_api_key_id,
+            details={"must_change_password": require_password_change},
         )
         return operator
+
+    def create_operator_invitation(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        role: OperatorRole = OperatorRole.OPERATOR,
+        expires_in: timedelta | None = None,
+        created_by_api_key_id: str | None = None,
+        now: datetime | None = None,
+    ) -> OperatorInvitation:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        normalized_username = username.strip()
+        self._load_tenant_for_login(normalized_tenant_id)
+        self._load_operator_records()
+        self._load_invite_records()
+
+        if self._find_operator_by_username(normalized_tenant_id, normalized_username):
+            raise AuthServiceError(409, "Operator username already exists")
+
+        current_time = now or datetime.now(UTC)
+        if self._find_pending_invitation_by_username(
+            normalized_tenant_id,
+            normalized_username,
+            now=current_time,
+        ):
+            raise AuthServiceError(409, "Operator invitation already exists")
+
+        ttl = expires_in or timedelta(hours=DEFAULT_OPERATOR_INVITE_TTL_HOURS)
+        if ttl <= timedelta(0):
+            raise AuthServiceError(400, "Invitation expiration must be greater than zero")
+
+        raw_invite_token = f"vinv_{secrets.token_urlsafe(32)}"
+        record = OperatorInvitationRecord(
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            role=role,
+            token_hash=hash_api_key(raw_invite_token),
+            created_at=current_time,
+            expires_at=current_time + ttl,
+            created_by_api_key_id=created_by_api_key_id,
+        )
+        self._invite_records[record.invite_id] = record
+        self._persist_invite_records()
+        self._record_invitation_audit_event(
+            AuditEventType.OPERATOR_INVITED,
+            invite=record,
+            api_key_id=created_by_api_key_id,
+        )
+        return OperatorInvitation(raw_invite_token=raw_invite_token, record=record)
+
+    def accept_operator_invitation(
+        self,
+        *,
+        invite_token: str,
+        password: str,
+        now: datetime | None = None,
+    ) -> EffectiveOperator:
+        current_time = now or datetime.now(UTC)
+        invite = self._find_invitation_by_token(invite_token.strip())
+        if invite is None:
+            raise AuthServiceError(404, "Invitation token not found")
+
+        if invite.used_at is not None:
+            raise AuthServiceError(409, "Invitation token already used")
+
+        if current_time >= invite.expires_at:
+            raise AuthServiceError(410, "Invitation token expired")
+
+        normalized_tenant_id = canonicalize_tenant_id(invite.tenant_id)
+        self._load_tenant_for_login(normalized_tenant_id)
+        self._load_operator_records()
+        if self._find_operator_by_username(normalized_tenant_id, invite.username):
+            raise AuthServiceError(409, "Operator username already exists")
+
+        operator_record = StoredOperatorRecord(
+            tenant_id=normalized_tenant_id,
+            operator_id=f"operator-{uuid4().hex}",
+            username=invite.username,
+            password_hash=hash_password(password),
+            role=invite.role,
+        )
+        self._operator_records[self._operator_record_key(operator_record)] = operator_record
+        self._persist_operator_records()
+
+        invite.used_at = current_time
+        invite.accepted_operator_id = operator_record.operator_id
+        self._persist_invite_records()
+
+        operator = self._operator_from_record(operator_record, is_seed=False)
+        self._record_invitation_audit_event(
+            AuditEventType.OPERATOR_INVITE_ACCEPTED,
+            invite=invite,
+            api_key_id=None,
+            details={"operator_id": operator.operator_id},
+        )
+        return operator
+
+    def change_operator_role(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        role: OperatorRole,
+        changed_by_api_key_id: str | None = None,
+    ) -> EffectiveOperator:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
+        if operator is None:
+            raise AuthServiceError(404, "Operator not found")
+
+        if operator.role is role:
+            return operator
+
+        updated_operator = self._store_effective_operator(
+            operator,
+            role=role,
+        )
+        self._record_operator_audit_event(
+            AuditEventType.OPERATOR_ROLE_CHANGED,
+            operator=updated_operator,
+            api_key_id=changed_by_api_key_id,
+            details={
+                "previous_role": operator.role.value,
+                "new_role": role.value,
+            },
+        )
+        return updated_operator
+
+    def reset_operator_password(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        new_password: str,
+        reset_by_api_key_id: str | None = None,
+        require_password_change: bool = True,
+    ) -> EffectiveOperator:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
+        if operator is None:
+            raise AuthServiceError(404, "Operator not found")
+
+        updated_operator = self._store_effective_operator(
+            operator,
+            password_hash=hash_password(new_password),
+            must_change_password=require_password_change,
+        )
+        revoked_count = self._revoke_active_keys_for_operator(
+            tenant_id=normalized_tenant_id,
+            operator_id=operator.operator_id,
+            revoked_by_api_key_id=reset_by_api_key_id,
+        )
+        self._record_operator_audit_event(
+            AuditEventType.OPERATOR_PASSWORD_RESET,
+            operator=updated_operator,
+            api_key_id=reset_by_api_key_id,
+            details={
+                "require_password_change": require_password_change,
+                "revoked_api_key_count": revoked_count,
+            },
+        )
+        return updated_operator
+
+    def complete_password_setup(
+        self,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        new_password: str,
+        completed_by_api_key_id: str | None = None,
+    ) -> EffectiveOperator:
+        normalized_tenant_id = canonicalize_tenant_id(tenant_id)
+        operator = self._find_operator_by_id(normalized_tenant_id, operator_id)
+        if operator is None:
+            raise AuthServiceError(404, "Operator not found")
+        if operator.disabled:
+            raise AuthServiceError(403, "Operator is disabled")
+        if not operator.must_change_password:
+            raise AuthServiceError(409, "Password setup is not required")
+
+        updated_operator = self._store_effective_operator(
+            operator,
+            password_hash=hash_password(new_password),
+            must_change_password=False,
+        )
+        revoked_count = self._revoke_active_keys_for_operator(
+            tenant_id=normalized_tenant_id,
+            operator_id=operator.operator_id,
+            revoked_by_api_key_id=completed_by_api_key_id,
+        )
+        self._record_operator_audit_event(
+            AuditEventType.OPERATOR_PASSWORD_ROTATED,
+            operator=updated_operator,
+            api_key_id=completed_by_api_key_id,
+            details={
+                "completed_password_setup": True,
+                "revoked_api_key_count": revoked_count,
+            },
+        )
+        return updated_operator
 
     def disable_operator(
         self,
@@ -640,12 +908,21 @@ class AuthService:
         updated_operator = self._store_effective_operator(
             seed_operators[0],
             password_hash=hash_password(new_password),
+            must_change_password=False,
+        )
+        revoked_count = self._revoke_active_keys_for_operator(
+            tenant_id=normalized_tenant_id,
+            operator_id=seed_operators[0].operator_id,
+            revoked_by_api_key_id=rotated_by_api_key_id,
         )
         self._record_operator_audit_event(
             AuditEventType.OPERATOR_PASSWORD_ROTATED,
             operator=updated_operator,
             api_key_id=rotated_by_api_key_id,
-            details={"is_seed": True},
+            details={
+                "is_seed": True,
+                "revoked_api_key_count": revoked_count,
+            },
         )
         return updated_operator
 
@@ -706,7 +983,11 @@ class AuthService:
                 else None,
             },
         )
-        return IssuedAPIKey(raw_api_key=raw_api_key, record=record)
+        return IssuedAPIKey(
+            raw_api_key=raw_api_key,
+            record=record,
+            must_change_password=operator.must_change_password,
+        )
 
     def resolve_api_key(self, raw_api_key: str) -> ResolvedAPIKey | None:
         resolution = self.inspect_issued_api_key(raw_api_key)
@@ -808,7 +1089,12 @@ class AuthService:
             },
         )
 
-        return IssuedAPIKey(raw_api_key=new_raw_api_key, record=new_record)
+        operator = self._find_operator_by_id(record.tenant_id, record.operator_id)
+        return IssuedAPIKey(
+            raw_api_key=new_raw_api_key,
+            record=new_record,
+            must_change_password=operator.must_change_password if operator else False,
+        )
 
     def revoke_api_key(
         self,
@@ -853,8 +1139,10 @@ class AuthService:
     def clear(self) -> None:
         self._records.clear()
         self._operator_records.clear()
+        self._invite_records.clear()
         self._persist_records()
         self._persist_operator_records()
+        self._persist_invite_records()
 
     def list_records(self) -> list[IssuedAPIKeyRecord]:
         return sorted(self._records.values(), key=lambda item: item.created_at)
@@ -913,6 +1201,9 @@ class AuthService:
         )
 
     def _list_effective_operators(self, tenant_id: str) -> list[EffectiveOperator]:
+        if self._operator_storage_path is not None:
+            self._load_operator_records()
+
         tenant = self._load_tenant_for_login(tenant_id)
         stored_by_id = {
             record.operator_id: record
@@ -975,14 +1266,21 @@ class AuthService:
         *,
         password_hash: str | None = None,
         disabled: bool | None = None,
+        role: OperatorRole | None = None,
+        must_change_password: bool | None = None,
     ) -> EffectiveOperator:
         stored_record = StoredOperatorRecord(
             tenant_id=operator.tenant_id,
             operator_id=operator.operator_id,
             username=operator.username,
             password_hash=password_hash or operator.password_hash,
-            role=operator.role,
+            role=role or operator.role,
             disabled=operator.disabled if disabled is None else disabled,
+            must_change_password=(
+                operator.must_change_password
+                if must_change_password is None
+                else must_change_password
+            ),
         )
         self._operator_records[self._operator_record_key(stored_record)] = stored_record
         self._persist_operator_records()
@@ -1053,6 +1351,35 @@ class AuthService:
         if updated:
             self._persist_operator_records()
 
+    def _load_invite_records(self) -> None:
+        invite_storage_path = self._resolve_invite_storage_path()
+        if invite_storage_path is None:
+            return
+
+        if self._sqlite_store is not None:
+            payload = self._sqlite_store.load_operator_invites()
+        else:
+            if not invite_storage_path.exists():
+                return
+            import json
+
+            payload = json.loads(invite_storage_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise ValueError("Invite storage payload must be a list")
+
+        self._invite_records = {}
+        updated = False
+        for item in payload:
+            record = OperatorInvitationRecord.model_validate(item)
+            resolved_tenant_id = canonicalize_tenant_id(record.tenant_id)
+            if record.tenant_id != resolved_tenant_id:
+                record.tenant_id = resolved_tenant_id
+                updated = True
+            self._invite_records[record.invite_id] = record
+
+        if updated:
+            self._persist_invite_records()
+
     def _has_persisted_operator_records(self) -> bool:
         return bool(self._operator_records)
 
@@ -1088,6 +1415,15 @@ class AuthService:
         if seed_operator is not None:
             return seed_operator.role
         return OperatorRole.OPERATOR
+
+    def _resolve_invite_storage_path(self) -> Path | None:
+        if self._sqlite_store is not None:
+            return self._invite_storage_path
+        if self._invite_storage_path is not None:
+            return self._invite_storage_path
+        if self._operator_storage_path is None:
+            return None
+        return _derive_invite_storage_path(self._operator_storage_path)
 
     def _persist_records(self) -> None:
         if self._storage_path is None:
@@ -1137,6 +1473,78 @@ class AuthService:
             encoding="utf-8",
         )
         temp_path.replace(self._operator_storage_path)
+
+    def _persist_invite_records(self) -> None:
+        invite_storage_path = self._resolve_invite_storage_path()
+        if invite_storage_path is None:
+            return
+
+        payload = [
+            record.model_dump(mode="json")
+            for record in sorted(
+                self._invite_records.values(),
+                key=lambda item: (item.tenant_id, item.created_at, item.invite_id),
+            )
+        ]
+        if self._sqlite_store is not None:
+            self._sqlite_store.replace_operator_invites(payload)
+            return
+
+        import json
+
+        invite_storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = invite_storage_path.with_suffix(f"{invite_storage_path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_path.replace(invite_storage_path)
+
+    def _find_pending_invitation_by_username(
+        self,
+        tenant_id: str,
+        username: str,
+        *,
+        now: datetime | None = None,
+    ) -> OperatorInvitationRecord | None:
+        current_time = now or datetime.now(UTC)
+        return next(
+            (
+                invite
+                for invite in self._invite_records.values()
+                if invite.tenant_id == tenant_id
+                and invite.username == username
+                and invite.used_at is None
+                and current_time < invite.expires_at
+            ),
+            None,
+        )
+
+    def _find_invitation_by_token(self, raw_invite_token: str) -> OperatorInvitationRecord | None:
+        invite_token_hash = hash_api_key(raw_invite_token)
+        invite = next(
+            (
+                candidate
+                for candidate in self._invite_records.values()
+                if hmac.compare_digest(candidate.token_hash, invite_token_hash)
+            ),
+            None,
+        )
+        if invite is not None:
+            return invite
+
+        if self._resolve_invite_storage_path() is None:
+            return None
+
+        self._load_invite_records()
+        return next(
+            (
+                candidate
+                for candidate in self._invite_records.values()
+                if hmac.compare_digest(candidate.token_hash, invite_token_hash)
+            ),
+            None,
+        )
 
     def _find_record_by_hash(self, api_key_hash: str) -> IssuedAPIKeyRecord | None:
         return next(
@@ -1239,6 +1647,7 @@ class AuthService:
             password_hash=operator.password_hash,
             role=operator.role,
             disabled=operator.disabled,
+            must_change_password=operator.must_change_password,
             is_seed=is_seed,
         )
 
@@ -1255,6 +1664,7 @@ class AuthService:
             password_hash=record.password_hash,
             role=record.role,
             disabled=record.disabled,
+            must_change_password=record.must_change_password,
             is_seed=is_seed,
         )
 
@@ -1291,6 +1701,7 @@ class AuthService:
             "username": operator.username,
             "role": operator.role.value,
             "disabled": operator.disabled,
+            "must_change_password": operator.must_change_password,
             "is_seed": operator.is_seed,
         }
         if details:
@@ -1299,6 +1710,34 @@ class AuthService:
         self._audit_service.record_event(
             event_type,
             tenant_id=operator.tenant_id,
+            api_key_id=api_key_id,
+            details=payload,
+        )
+
+    def _record_invitation_audit_event(
+        self,
+        event_type: AuditEventType,
+        *,
+        invite: OperatorInvitationRecord,
+        api_key_id: str | None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        payload: dict[str, object] = {
+            "invite_id": invite.invite_id,
+            "username": invite.username,
+            "role": invite.role.value,
+            "expires_at": invite.expires_at.isoformat(),
+            "used_at": invite.used_at.isoformat() if invite.used_at is not None else None,
+        }
+        if details:
+            payload.update(details)
+
+        self._audit_service.record_event(
+            event_type,
+            tenant_id=invite.tenant_id,
             api_key_id=api_key_id,
             details=payload,
         )

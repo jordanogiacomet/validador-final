@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  completePasswordSetup,
   createInitialAdmin,
   getInitialSetupState,
   loginOperator,
@@ -15,18 +16,21 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    completePasswordSetup: vi.fn(),
     createInitialAdmin: vi.fn(),
     getInitialSetupState: vi.fn(),
     loginOperator: vi.fn(),
   };
 });
 
+const completePasswordSetupMock = vi.mocked(completePasswordSetup);
 const createInitialAdminMock = vi.mocked(createInitialAdmin);
 const getInitialSetupStateMock = vi.mocked(getInitialSetupState);
 const loginOperatorMock = vi.mocked(loginOperator);
 
 describe("LoginScreen", () => {
   beforeEach(() => {
+    completePasswordSetupMock.mockReset();
     createInitialAdminMock.mockReset();
     getInitialSetupStateMock.mockReset();
     loginOperatorMock.mockReset();
@@ -207,6 +211,60 @@ describe("LoginScreen", () => {
       x_api_key: "vapi_example",
       header_name: "X-API-Key",
     });
+  });
+
+  it("keeps the user on the auth screen when the login requires password setup", async () => {
+    const onAuthenticated = vi.fn();
+    loginOperatorMock.mockResolvedValueOnce({
+      tenant_id: "default",
+      operator_id: "op-1",
+      api_key_id: "issued-1",
+      x_api_key: "vapi_temp",
+      must_change_password: true,
+      header_name: "X-API-Key",
+    });
+    completePasswordSetupMock.mockResolvedValueOnce({
+      tenant_id: "default",
+      operator_id: "op-1",
+      username: "operador",
+      disabled: false,
+      must_change_password: false,
+      is_seed: false,
+    });
+
+    render(<LoginScreen onAuthenticated={onAuthenticated} />);
+
+    fireEvent.change(screen.getByLabelText("Código da empresa"), {
+      target: { value: "default" },
+    });
+    fireEvent.change(screen.getByLabelText("Usuário"), {
+      target: { value: "operador" },
+    });
+    fireEvent.change(screen.getByLabelText("Senha"), {
+      target: { value: "Temp@2026" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByText("Defina a nova senha antes de acessar a área operacional"),
+    ).toBeDefined();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Nova senha"), {
+      target: { value: "SenhaFinal@2026" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Concluir troca de senha" }));
+
+    await waitFor(() => {
+      expect(completePasswordSetupMock).toHaveBeenCalledWith({
+        apiKey: "vapi_temp",
+        newPassword: "SenhaFinal@2026",
+      });
+    });
+    expect(
+      await screen.findByText("Senha temporária atualizada. Entre novamente com a nova senha."),
+    ).toBeDefined();
+    expect(onAuthenticated).not.toHaveBeenCalled();
   });
 
   it.each([
