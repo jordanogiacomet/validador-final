@@ -26,6 +26,7 @@ class TestTenantConfig:
         config = TenantConfig(tenant_id="test", display_name="Test")
         assert config.tenant_id == "test"
         assert config.aliases == []
+        assert config.disabled is False
         assert config.columns == {}
         assert config.enabled_rules == []
         assert config.disabled_rules == []

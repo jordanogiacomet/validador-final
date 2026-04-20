@@ -1,6 +1,11 @@
 from app.core.audit import AuditEventType
 from app.core.health import probe_job_store_storage
 from app.core.job import JobStatus
+from app.core.tenant_runtime import (
+    RuntimeTenantRecord,
+    load_runtime_tenant_records,
+    replace_runtime_tenant_records,
+)
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthService
 from app.services.job_service import JobService
@@ -125,3 +130,22 @@ def test_probe_job_store_storage_accepts_sqlite_files(tmp_path) -> None:
     JobService(sqlite_path=sqlite_path).create_job(tenant_id="default")
 
     assert probe_job_store_storage(sqlite_path) == str(sqlite_path)
+
+
+def test_runtime_tenant_records_sqlite_persist_runtime_metadata(tmp_path) -> None:
+    sqlite_path = tmp_path / "state" / "operational.sqlite3"
+    record = RuntimeTenantRecord(
+        tenant_id="cliente_sqlite",
+        display_name="Cliente SQLite",
+        aliases=["cliente-sqlite"],
+        disabled=True,
+    )
+
+    replace_runtime_tenant_records([record], sqlite_path=sqlite_path)
+    reloaded = load_runtime_tenant_records(sqlite_path=sqlite_path)
+
+    assert len(reloaded) == 1
+    assert reloaded[0].tenant_id == "cliente_sqlite"
+    assert reloaded[0].display_name == "Cliente SQLite"
+    assert reloaded[0].aliases == ["cliente-sqlite"]
+    assert reloaded[0].disabled is True

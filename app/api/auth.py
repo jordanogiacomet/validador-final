@@ -11,7 +11,9 @@ from starlette.responses import Response
 
 from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_loader import (
+    TenantDisabledError,
     canonicalize_tenant_id,
+    load_tenant_config,
     resolve_tenant_api_key,
     tenant_ids_match,
 )
@@ -105,6 +107,15 @@ async def api_key_auth_middleware(
             tenant_id=match.tenant.tenant_id,
             api_key_id=match.api_key.key_id,
         )
+
+    try:
+        load_tenant_config(authenticated_tenant.tenant_id)
+    except TenantDisabledError:
+        return _auth_error(403, "Tenant is disabled")
+    except FileNotFoundError:
+        return _auth_error(401, "Invalid API key")
+    except ValueError as exc:
+        return _auth_error(500, str(exc))
 
     setattr(
         request.state,

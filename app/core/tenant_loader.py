@@ -4,8 +4,15 @@ from pathlib import Path
 import yaml
 
 from app.core.tenant_config import DEFAULT_TENANT_ID, APIKeyConfig, TenantConfig
+from app.core.tenant_runtime import RuntimeTenantRecord, load_runtime_tenant_records
 
 TENANTS_DIR = Path(__file__).resolve().parent.parent / "tenants"
+
+
+class TenantDisabledError(Exception):
+    def __init__(self, tenant_id: str) -> None:
+        super().__init__(f"Tenant is disabled: {tenant_id}")
+        self.tenant_id = tenant_id
 
 
 @dataclass(frozen=True)
@@ -30,13 +37,89 @@ def _read_tenant_config(tenant_file: Path) -> TenantConfig:
     return TenantConfig.model_validate(raw_data)
 
 
-def load_tenant_config(tenant_id: str) -> TenantConfig:
+def _runtime_record_map(
+    runtime_records: list[RuntimeTenantRecord] | None = None,
+) -> dict[str, RuntimeTenantRecord]:
+    records = load_runtime_tenant_records() if runtime_records is None else runtime_records
+    return {
+        record.tenant_id: record
+        for record in records
+    }
+
+
+def _apply_runtime_record(
+    config: TenantConfig,
+    record: RuntimeTenantRecord | None,
+) -> TenantConfig:
+    if record is None:
+        return config
+    return config.model_copy(
+        deep=True,
+        update={
+            "display_name": record.display_name,
+            "aliases": record.aliases,
+            "disabled": record.disabled,
+        },
+    )
+
+
+def _build_runtime_tenant_config(record: RuntimeTenantRecord) -> TenantConfig:
+    default_path = TENANTS_DIR / DEFAULT_TENANT_ID / "tenant.yaml"
+    if default_path.exists():
+        base_config = _read_tenant_config(default_path)
+        return base_config.model_copy(
+            deep=True,
+            update={
+                "tenant_id": record.tenant_id,
+                "display_name": record.display_name,
+                "aliases": record.aliases,
+                "disabled": record.disabled,
+                "api_keys": [],
+                "operators": [],
+            },
+        )
+
+    return TenantConfig(
+        tenant_id=record.tenant_id,
+        display_name=record.display_name,
+        aliases=record.aliases,
+        disabled=record.disabled,
+    )
+
+
+def _iter_effective_tenant_configs(
+    runtime_records: list[RuntimeTenantRecord] | None = None,
+) -> list[TenantConfig]:
+    runtime_records_by_id = _runtime_record_map(runtime_records)
+    file_configs = {
+        config.tenant_id: config
+        for config in (_read_tenant_config(tenant_file) for tenant_file in _iter_tenant_files())
+    }
+
+    configs = [
+        _apply_runtime_record(config, runtime_records_by_id.get(config.tenant_id))
+        for config in file_configs.values()
+    ]
+    runtime_only_records = [
+        record
+        for record in runtime_records_by_id.values()
+        if record.tenant_id not in file_configs
+    ]
+    configs.extend(_build_runtime_tenant_config(record) for record in runtime_only_records)
+    return configs
+
+
+def load_tenant_config(
+    tenant_id: str,
+    *,
+    include_disabled: bool = False,
+    runtime_records: list[RuntimeTenantRecord] | None = None,
+) -> TenantConfig:
     normalized_tenant_id = tenant_id.strip()
     matches: list[TenantConfig] = []
     missing_path = TENANTS_DIR / normalized_tenant_id / "tenant.yaml"
 
-    for tenant_file in _iter_tenant_files():
-        config = _read_tenant_config(tenant_file)
+    for config in _iter_effective_tenant_configs(runtime_records):
         if (
             normalized_tenant_id == config.tenant_id
             or normalized_tenant_id in config.aliases
@@ -49,21 +132,38 @@ def load_tenant_config(tenant_id: str) -> TenantConfig:
     if len(matches) > 1:
         raise ValueError(f"Multiple tenant configs match identifier '{normalized_tenant_id}'")
 
-    return matches[0]
+    match = matches[0]
+    if match.disabled and not include_disabled:
+        raise TenantDisabledError(match.tenant_id)
+
+    return match
 
 
 def load_default_tenant_config() -> TenantConfig:
     return load_tenant_config(DEFAULT_TENANT_ID)
 
 
-def list_tenants() -> list[str]:
-    return sorted({config.tenant_id for config in map(_read_tenant_config, _iter_tenant_files())})
+def list_tenants(
+    *,
+    include_disabled: bool = False,
+    runtime_records: list[RuntimeTenantRecord] | None = None,
+) -> list[str]:
+    return sorted(
+        {
+            config.tenant_id
+            for config in _iter_effective_tenant_configs(runtime_records)
+            if include_disabled or not config.disabled
+        }
+    )
 
 
 def canonicalize_tenant_id(tenant_id: str) -> str:
     normalized_tenant_id = tenant_id.strip()
     try:
-        return load_tenant_config(normalized_tenant_id).tenant_id
+        return load_tenant_config(
+            normalized_tenant_id,
+            include_disabled=True,
+        ).tenant_id
     except FileNotFoundError:
         return normalized_tenant_id
 

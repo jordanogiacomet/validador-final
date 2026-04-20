@@ -76,6 +76,8 @@ Last Updated: 2026-04-20 15:05 -02
 - First-run administrator setup must require persistent operator storage, store only password hashes and minimal operator metadata, use `VALIDATOR_SETUP_TOKEN` for optional published-environment protection, and use SQLite atomic insertion for cross-process single-use protection.
 - Disabling an operator should revoke that operator's active issued API keys inside the same auth-service flow so middleware and audit behavior stay consistent immediately.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
+- Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
+- Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
 
 ---
 
@@ -1057,4 +1059,20 @@ Expected architectural direction:
   - Papéis de operadores pertencem ao contrato de auth (`OperatorRole`) e devem ser serializados junto com operadores seed/runtime para evitar inferência por nome de usuário ou tenant.
   - Rotas administrativas devem pedir autorização ao `AuthService` antes de resolver operações cross-tenant; `resolve_request_tenant_id()` continua adequado para dados operacionais estritamente tenant-scoped.
   - Ao migrar operadores persistidos sem `role`, preserve o primeiro administrador single-use como `platform_admin` e operadores seed sobrepostos com o papel definido no tenant YAML.
+---
+
+## 2026-04-20 15:43 -02 - US-049
+- Implementadas APIs administrativas para listar, criar, editar, desabilitar e reativar tenants em `/admin/tenants`, todas restritas a `platform_admin` via autorização no `AuthService`.
+- Criado overlay runtime de metadados de tenant em storage operacional (`VALIDATOR_TENANT_STORE_PATH` ou `VALIDATOR_SQLITE_PATH`) preservando os tenants YAML/file-based como fonte das regras de validação.
+- Tenants criados pela aplicação herdam o perfil de validação do `default`, mas começam sem `api_keys` e sem operadores seed para evitar credenciais acidentais.
+- Adicionado estado `disabled` ao carregamento de tenant: fluxos administrativos podem ler com `include_disabled=True`, enquanto login, chaves legadas e sessões emitidas passam a bloquear tenants desabilitados.
+- Adicionada auditoria para criação, edição, desativação e reativação de tenants, além de testes para criação válida, colisões de id/alias/display name, tenant desabilitado e isolamento por papel.
+- Files changed: `app/core/tenant_config.py`, `app/core/tenant_runtime.py`, `app/core/tenant_loader.py`, `app/core/operational_sqlite.py`, `app/core/audit.py`, `app/services/tenant_admin_service.py`, `app/services/auth_service.py`, `app/api/auth.py`, `app/api/routes.py`, `tests/test_api.py`, `tests/test_tenant.py`, `tests/test_operational_sqlite.py`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+- **Learnings for future iterations:**
+  - Tenant admin should only persist administrative metadata in runtime storage; keep validation columns/rules/categories in YAML or a future dedicated config workflow.
+  - Runtime-created tenants should not inherit seed credentials from `default`, even when they inherit the default validation profile.
+  - Use disabled-tenant visibility deliberately: admin/history paths need `include_disabled=True`, but normal auth and validation paths should reject disabled tenants.
 ---

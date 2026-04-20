@@ -28,6 +28,12 @@ from app.core.validation_scope import (
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthServiceError, EffectiveOperator
 from app.services.job_service import JobService
+from app.services.tenant_admin_service import (
+    TenantAdminRecord,
+    TenantAdminService,
+    TenantAdminServiceError,
+    TenantSource,
+)
 from app.services.validation_service import (
     OperationalExportKind,
     build_job_upload_path,
@@ -70,6 +76,13 @@ def _build_job_service() -> JobService:
 
 audit_service = _build_audit_service()
 auth_service.set_audit_service(audit_service)
+
+
+def _build_tenant_admin_service() -> TenantAdminService:
+    return TenantAdminService(audit_service=audit_service)
+
+
+tenant_admin_service = _build_tenant_admin_service()
 job_service = _build_job_service()
 
 LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -87,6 +100,7 @@ class TenantListItemResponse(BaseModel):
     tenant_id: str
     display_name: str
     is_default: bool = False
+    disabled: bool = False
 
 
 class TenantScopedRequest(BaseModel):
@@ -152,6 +166,26 @@ class OperatorResponse(BaseModel):
     role: OperatorRole
     disabled: bool
     is_seed: bool
+
+
+class TenantAdminResponse(BaseModel):
+    tenant_id: str
+    display_name: str
+    aliases: list[str] = Field(default_factory=list)
+    disabled: bool
+    source: TenantSource
+    is_default: bool = False
+
+
+class TenantAdminCreateRequest(BaseModel):
+    tenant_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+
+
+class TenantAdminUpdateRequest(BaseModel):
+    display_name: str | None = None
+    aliases: list[str] | None = None
 
 
 class OperatorCreateRequest(TenantScopedRequest):
@@ -359,6 +393,7 @@ def _build_tenant_list_item_response(tenant_id: str) -> TenantListItemResponse:
         tenant_id=tenant.tenant_id,
         display_name=tenant.display_name,
         is_default=tenant.tenant_id == DEFAULT_TENANT_ID,
+        disabled=tenant.disabled,
     )
 
 
@@ -382,6 +417,17 @@ def _build_operator_response(operator: EffectiveOperator) -> OperatorResponse:
         role=operator.role,
         disabled=operator.disabled,
         is_seed=operator.is_seed,
+    )
+
+
+def _build_tenant_admin_response(tenant: TenantAdminRecord) -> TenantAdminResponse:
+    return TenantAdminResponse(
+        tenant_id=tenant.tenant_id,
+        display_name=tenant.display_name,
+        aliases=tenant.aliases,
+        disabled=tenant.disabled,
+        source=tenant.source,
+        is_default=tenant.is_default,
     )
 
 
@@ -414,6 +460,25 @@ def _authorize_operator_management(
             api_key_id=auth.api_key_id,
             target_tenant_id=target_tenant_id,
             action=action,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
+def _authorize_tenant_administration(
+    request: Request,
+    *,
+    action: str,
+    target_tenant_id: str | None = None,
+) -> None:
+    auth = get_authenticated_tenant(request)
+    try:
+        auth_service.authorize_tenant_administration(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            action=action,
+            target_tenant_id=target_tenant_id,
         )
     except AuthServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
@@ -525,6 +590,117 @@ async def revoke_api_key(
         api_key_id=record.key_id,
         revoked_at=record.revoked_at or record.created_at,
     )
+
+
+@router.get("/admin/tenants", response_model=list[TenantAdminResponse])
+async def admin_list_tenants(request: Request) -> list[TenantAdminResponse]:
+    _authorize_tenant_administration(request, action="tenants.list")
+    return [
+        _build_tenant_admin_response(tenant)
+        for tenant in tenant_admin_service.list_tenants()
+    ]
+
+
+@router.post(
+    "/admin/tenants",
+    response_model=TenantAdminResponse,
+    status_code=201,
+)
+async def admin_create_tenant(
+    request: Request,
+    payload: TenantAdminCreateRequest,
+) -> TenantAdminResponse:
+    auth = get_authenticated_tenant(request)
+    _authorize_tenant_administration(
+        request,
+        action="tenants.create",
+        target_tenant_id=payload.tenant_id,
+    )
+    try:
+        tenant = tenant_admin_service.create_tenant(
+            tenant_id=payload.tenant_id,
+            display_name=payload.display_name,
+            aliases=payload.aliases,
+            api_key_id=auth.api_key_id,
+        )
+    except TenantAdminServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_admin_response(tenant)
+
+
+@router.patch(
+    "/admin/tenants/{tenant_id}",
+    response_model=TenantAdminResponse,
+)
+async def admin_update_tenant(
+    request: Request,
+    tenant_id: str,
+    payload: TenantAdminUpdateRequest,
+) -> TenantAdminResponse:
+    auth = get_authenticated_tenant(request)
+    _authorize_tenant_administration(
+        request,
+        action="tenants.update",
+        target_tenant_id=tenant_id,
+    )
+    try:
+        tenant = tenant_admin_service.update_tenant(
+            tenant_id=tenant_id,
+            display_name=payload.display_name,
+            aliases=payload.aliases,
+            api_key_id=auth.api_key_id,
+        )
+    except TenantAdminServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_admin_response(tenant)
+
+
+@router.post(
+    "/admin/tenants/{tenant_id}/disable",
+    response_model=TenantAdminResponse,
+)
+async def admin_disable_tenant(
+    request: Request,
+    tenant_id: str,
+) -> TenantAdminResponse:
+    auth = get_authenticated_tenant(request)
+    _authorize_tenant_administration(
+        request,
+        action="tenants.disable",
+        target_tenant_id=tenant_id,
+    )
+    try:
+        tenant = tenant_admin_service.disable_tenant(
+            tenant_id=tenant_id,
+            api_key_id=auth.api_key_id,
+        )
+    except TenantAdminServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_admin_response(tenant)
+
+
+@router.post(
+    "/admin/tenants/{tenant_id}/reactivate",
+    response_model=TenantAdminResponse,
+)
+async def admin_reactivate_tenant(
+    request: Request,
+    tenant_id: str,
+) -> TenantAdminResponse:
+    auth = get_authenticated_tenant(request)
+    _authorize_tenant_administration(
+        request,
+        action="tenants.reactivate",
+        target_tenant_id=tenant_id,
+    )
+    try:
+        tenant = tenant_admin_service.reactivate_tenant(
+            tenant_id=tenant_id,
+            api_key_id=auth.api_key_id,
+        )
+    except TenantAdminServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_admin_response(tenant)
 
 
 @router.get("/tenants", response_model=list[TenantListItemResponse])

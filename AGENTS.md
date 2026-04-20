@@ -149,6 +149,9 @@ If there are still stories with passes: false, end your response normally (anoth
   - critical checks
   - LLM settings
   - prompt selection
+- Tenant administration metadata belongs in the runtime operational overlay (`tenant_id`, `display_name`, `aliases`, `disabled`); keep YAML/file-based tenant configs as the source for validation rules until a dedicated rules/config workflow exists.
+- Runtime-created tenants may inherit the default validation profile, but must not inherit default seed API keys or operators.
+- Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths; normal auth, validation, and operational paths should reject disabled tenants.
 
 ## Domain Preservation
 

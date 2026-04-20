@@ -848,8 +848,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 49,
-      "passes": false,
-      "notes": "A administração de tenants deve ser tenant-agnóstica e compatível com a configuração file-based atual. Alterações profundas de regras/colunas podem continuar em fluxo separado de configuração até existir uma UI específica."
+      "passes": true,
+      "notes": "Implementado com APIs administrativas restritas a platform_admin, metadados runtime persistidos como overlay operacional (tenant_id, display_name, aliases, disabled), auditoria de criação/edição/desativação/reativação e bloqueio de acesso para tenants disabled sem alterar as regras YAML/file-based."
     },
     {
       "id": "US-050",

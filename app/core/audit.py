@@ -19,6 +19,10 @@ class AuditEventType(StrEnum):
     OPERATOR_CREATED = "operator_created"
     OPERATOR_DISABLED = "operator_disabled"
     OPERATOR_PASSWORD_ROTATED = "operator_password_rotated"
+    TENANT_CREATED = "tenant_created"
+    TENANT_UPDATED = "tenant_updated"
+    TENANT_DISABLED = "tenant_disabled"
+    TENANT_REACTIVATED = "tenant_reactivated"
     AUTHORIZATION_DENIED = "authorization_denied"
 
 

@@ -150,6 +150,32 @@ class OperationalSQLiteStore:
             rows=rows,
         )
 
+    def load_runtime_tenants(self) -> list[dict[str, Any]]:
+        return self._load_payloads(
+            "SELECT payload FROM runtime_tenants ORDER BY tenant_id ASC"
+        )
+
+    def replace_runtime_tenants(self, payloads: Iterable[dict[str, Any]]) -> None:
+        rows = [
+            (
+                str(payload["tenant_id"]),
+                str(payload["display_name"]).casefold(),
+                bool(payload.get("disabled", False)),
+                str(payload["updated_at"]),
+                _serialize_payload(payload),
+            )
+            for payload in payloads
+        ]
+        self._replace_rows(
+            table_name="runtime_tenants",
+            insert_sql=(
+                "INSERT INTO runtime_tenants "
+                "(tenant_id, display_name_key, disabled, updated_at, payload) "
+                "VALUES (?, ?, ?, ?, ?)"
+            ),
+            rows=rows,
+        )
+
     def try_insert_first_operator_record(self, payload: dict[str, Any]) -> bool:
         """Insert one operator only if no persisted operators exist yet."""
         row = (
@@ -232,6 +258,18 @@ class OperationalSQLiteStore:
             payload TEXT NOT NULL,
             PRIMARY KEY (tenant_id, operator_id)
         );
+
+        CREATE TABLE IF NOT EXISTS runtime_tenants (
+            tenant_id TEXT PRIMARY KEY,
+            display_name_key TEXT NOT NULL,
+            disabled INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS runtime_tenants_display_name_idx
+            ON runtime_tenants (display_name_key);
+        CREATE INDEX IF NOT EXISTS runtime_tenants_disabled_idx
+            ON runtime_tenants (disabled);
         """
         with self._connect() as connection:
             connection.executescript(schema)

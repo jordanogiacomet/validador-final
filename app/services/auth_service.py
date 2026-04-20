@@ -28,6 +28,7 @@ from app.core.tenant_config import (
     TenantConfig,
 )
 from app.core.tenant_loader import (
+    TenantDisabledError,
     canonicalize_tenant_id,
     list_tenants,
     load_tenant_config,
@@ -314,6 +315,43 @@ class AuthService:
             operator=actor,
         )
         raise AuthServiceError(403, "Operator is not allowed to manage this tenant")
+
+    def authorize_tenant_administration(
+        self,
+        *,
+        actor_tenant_id: str,
+        actor_operator_id: str | None,
+        api_key_id: str | None,
+        action: str,
+        target_tenant_id: str | None = None,
+    ) -> None:
+        normalized_actor_tenant_id = canonicalize_tenant_id(actor_tenant_id)
+        normalized_target_tenant_id = (
+            canonicalize_tenant_id(target_tenant_id)
+            if target_tenant_id is not None
+            else normalized_actor_tenant_id
+        )
+        actor = (
+            self._find_operator_by_id(normalized_actor_tenant_id, actor_operator_id)
+            if actor_operator_id is not None
+            else None
+        )
+
+        if (
+            actor is not None
+            and not actor.disabled
+            and actor.role is OperatorRole.PLATFORM_ADMIN
+        ):
+            return
+
+        self._record_authorization_denied_event(
+            tenant_id=normalized_actor_tenant_id,
+            api_key_id=api_key_id,
+            action=action,
+            target_tenant_id=normalized_target_tenant_id,
+            operator=actor,
+        )
+        raise AuthServiceError(403, "Only platform_admin can manage tenants")
 
     def authorize_operator_role_assignment(
         self,
@@ -826,6 +864,8 @@ class AuthService:
             return load_tenant_config(tenant_id)
         except FileNotFoundError as exc:
             raise AuthServiceError(404, "Tenant not found") from exc
+        except TenantDisabledError as exc:
+            raise AuthServiceError(403, "Tenant is disabled") from exc
 
     def _operator_exists_for_other_tenant(
         self,
@@ -1034,7 +1074,7 @@ class AuthService:
         operator_id = str(payload.get("operator_id", "")).strip()
         try:
             tenant = load_tenant_config(canonicalize_tenant_id(tenant_id))
-        except FileNotFoundError:
+        except (FileNotFoundError, TenantDisabledError):
             return OperatorRole.OPERATOR
 
         seed_operator = next(
@@ -1128,7 +1168,7 @@ class AuthService:
     def _get_tenant_ttl_seconds(self, tenant_id: str) -> int:
         try:
             tenant = load_tenant_config(tenant_id)
-        except FileNotFoundError:
+        except (FileNotFoundError, TenantDisabledError):
             return DEFAULT_ISSUED_API_KEY_TTL_SECONDS
         return tenant.auth.issued_api_key_ttl_seconds
 

@@ -11,7 +11,9 @@ from app.api.routes import audit_service, auth_service, job_service
 from app.core.audit import AuditEventType
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.tenant_config import OperatorRole
+from app.core.tenant_loader import load_tenant_config
 from app.main import app
+from app.services.tenant_admin_service import TenantAdminService
 from app.services.validation_service import run_validation_job
 
 client = TestClient(app)
@@ -40,6 +42,23 @@ def enable_initial_setup_storage(monkeypatch, tmp_path) -> Path:
     return operator_storage_path
 
 
+def enable_tenant_admin_storage(monkeypatch, tmp_path) -> Path:
+    tenant_storage_path = tmp_path / "runtime_tenants.json"
+    monkeypatch.setenv("VALIDATOR_TENANT_STORE_PATH", str(tenant_storage_path))
+
+    import app.api.routes as routes
+
+    monkeypatch.setattr(
+        routes,
+        "tenant_admin_service",
+        TenantAdminService(
+            storage_path=tenant_storage_path,
+            audit_service=audit_service,
+        ),
+    )
+    return tenant_storage_path
+
+
 def login_headers(
     *,
     tenant_id: str = "default",
@@ -57,6 +76,20 @@ def login_headers(
     assert response.status_code == 200
     payload = response.json()
     return auth_headers(payload["x_api_key"]), payload
+
+
+def platform_admin_headers() -> dict[str, str]:
+    auth_service.create_operator(
+        tenant_id="default",
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+        role=OperatorRole.PLATFORM_ADMIN,
+    )
+    headers, _payload = login_headers(
+        username="admin.plataforma",
+        password="AdminGlobal@2026",
+    )
+    return headers
 
 
 CSV_CONTENT = (
@@ -755,6 +788,230 @@ def test_tenant_admin_cannot_create_platform_admin():
     assert event.details["operator_id"] == "default-local-operator"
     assert event.details["role"] == "tenant_admin"
     assert event.details["action"] == "operators.create.platform_admin"
+
+
+def test_admin_tenant_routes_require_platform_admin(tmp_path, monkeypatch):
+    enable_tenant_admin_storage(monkeypatch, tmp_path)
+    headers, _payload = login_headers()
+
+    response = client.get("/admin/tenants", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only platform_admin can manage tenants"
+    event = audit_service.list_events(tenant_id="default")[0]
+    assert event.event_type is AuditEventType.AUTHORIZATION_DENIED
+    assert event.details["action"] == "tenants.list"
+    assert event.details["role"] == "tenant_admin"
+
+
+def test_platform_admin_can_create_edit_disable_and_reactivate_runtime_tenant(
+    tmp_path,
+    monkeypatch,
+):
+    tenant_storage_path = enable_tenant_admin_storage(monkeypatch, tmp_path)
+    headers = platform_admin_headers()
+
+    create_response = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "cliente_novo",
+            "display_name": "Cliente Novo",
+            "aliases": ["cliente-novo"],
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_payload = create_response.json()
+    assert created_payload["tenant_id"] == "cliente_novo"
+    assert created_payload["display_name"] == "Cliente Novo"
+    assert created_payload["aliases"] == ["cliente-novo"]
+    assert created_payload["disabled"] is False
+    assert created_payload["source"] == "runtime"
+
+    loaded = load_tenant_config("cliente-novo")
+    assert loaded.tenant_id == "cliente_novo"
+    assert loaded.columns["item"] == "Item"
+    assert loaded.api_keys == []
+    assert loaded.operators == []
+
+    update_response = client.patch(
+        "/admin/tenants/cliente_novo",
+        headers=headers,
+        json={
+            "display_name": "Cliente Oficial",
+            "aliases": ["cliente-oficial"],
+        },
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["display_name"] == "Cliente Oficial"
+    assert load_tenant_config("cliente-oficial").tenant_id == "cliente_novo"
+
+    disable_response = client.post(
+        "/admin/tenants/cliente_novo/disable",
+        headers=headers,
+    )
+    assert disable_response.status_code == 200
+    assert disable_response.json()["disabled"] is True
+
+    hidden_from_operational_list = client.get("/tenants", headers=headers)
+    assert hidden_from_operational_list.status_code == 200
+    tenant_ids = {tenant["tenant_id"] for tenant in hidden_from_operational_list.json()}
+    assert "cliente_novo" not in tenant_ids
+
+    reactivate_response = client.post(
+        "/admin/tenants/cliente_novo/reactivate",
+        headers=headers,
+    )
+    assert reactivate_response.status_code == 200
+    assert reactivate_response.json()["disabled"] is False
+    assert load_tenant_config("cliente-oficial").tenant_id == "cliente_novo"
+
+    admin_list_response = client.get("/admin/tenants", headers=headers)
+    assert admin_list_response.status_code == 200
+    assert any(
+        tenant["tenant_id"] == "cliente_novo"
+        and tenant["display_name"] == "Cliente Oficial"
+        for tenant in admin_list_response.json()
+    )
+
+    storage_payload = json.loads(tenant_storage_path.read_text(encoding="utf-8"))
+    assert storage_payload[0]["tenant_id"] == "cliente_novo"
+    assert storage_payload[0]["display_name"] == "Cliente Oficial"
+
+    event_types = [
+        event.event_type
+        for event in audit_service.list_events(tenant_id="cliente_novo")
+        if event.event_type
+        in {
+            AuditEventType.TENANT_CREATED,
+            AuditEventType.TENANT_UPDATED,
+            AuditEventType.TENANT_DISABLED,
+            AuditEventType.TENANT_REACTIVATED,
+        }
+    ]
+    assert event_types == [
+        AuditEventType.TENANT_REACTIVATED,
+        AuditEventType.TENANT_DISABLED,
+        AuditEventType.TENANT_UPDATED,
+        AuditEventType.TENANT_CREATED,
+    ]
+
+
+def test_tenant_admin_create_rejects_identifier_alias_and_display_name_collisions(
+    tmp_path,
+    monkeypatch,
+):
+    enable_tenant_admin_storage(monkeypatch, tmp_path)
+    headers = platform_admin_headers()
+
+    id_collision = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "default",
+            "display_name": "Outro Default",
+        },
+    )
+    assert id_collision.status_code == 409
+    assert "default" in id_collision.json()["detail"]
+
+    alias_collision = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "cliente_alias",
+            "display_name": "Cliente Alias",
+            "aliases": ["redesim_v2"],
+        },
+    )
+    assert alias_collision.status_code == 409
+    assert "redesim_v2" in alias_collision.json()["detail"]
+
+    display_name_collision = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "cliente_display",
+            "display_name": "Default Tenant",
+        },
+    )
+    assert display_name_collision.status_code == 409
+    assert display_name_collision.json()["detail"] == "Tenant display name already exists"
+
+    invalid_identifier = client.post(
+        "/admin/tenants",
+        headers=headers,
+        json={
+            "tenant_id": "Cliente Novo",
+            "display_name": "Cliente Novo",
+        },
+    )
+    assert invalid_identifier.status_code == 422
+    assert "tenant_id must use lowercase" in invalid_identifier.json()["detail"]
+
+
+def test_disabled_tenant_blocks_login_and_existing_issued_keys(tmp_path, monkeypatch):
+    enable_tenant_admin_storage(monkeypatch, tmp_path)
+    platform_headers = platform_admin_headers()
+    create_response = client.post(
+        "/admin/tenants",
+        headers=platform_headers,
+        json={
+            "tenant_id": "cliente_bloqueado",
+            "display_name": "Cliente Bloqueado",
+        },
+    )
+    assert create_response.status_code == 201
+    operator = auth_service.create_operator(
+        tenant_id="cliente_bloqueado",
+        username="cliente.admin",
+        password="Cliente@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+    tenant_headers, login_payload = login_headers(
+        tenant_id="cliente_bloqueado",
+        username="cliente.admin",
+        password="Cliente@2026",
+    )
+    assert login_payload["operator_id"] == operator.operator_id
+
+    disable_response = client.post(
+        "/admin/tenants/cliente_bloqueado/disable",
+        headers=platform_headers,
+    )
+    assert disable_response.status_code == 200
+
+    denied_existing_session = client.get("/jobs", headers=tenant_headers)
+    assert denied_existing_session.status_code == 403
+    assert denied_existing_session.json()["detail"] == "Tenant is disabled"
+
+    denied_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "cliente_bloqueado",
+            "username": "cliente.admin",
+            "password": "Cliente@2026",
+        },
+    )
+    assert denied_login.status_code == 403
+    assert denied_login.json()["detail"] == "Tenant is disabled"
+
+    reactivate_response = client.post(
+        "/admin/tenants/cliente_bloqueado/reactivate",
+        headers=platform_headers,
+    )
+    assert reactivate_response.status_code == 200
+
+    restored_login = client.post(
+        "/login",
+        json={
+            "tenant_id": "cliente_bloqueado",
+            "username": "cliente.admin",
+            "password": "Cliente@2026",
+        },
+    )
+    assert restored_login.status_code == 200
 
 
 def test_jobs_are_scoped_to_issued_api_key_tenant():
