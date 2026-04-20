@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AdminConsole } from "@/components/admin-console";
 import { LoginScreen } from "@/components/login-screen";
 import { OperationalWorkspace } from "@/components/operational-workspace";
 import {
@@ -11,7 +12,7 @@ import {
   setApiSession,
   setApiSessionInvalidHandler,
 } from "@/lib/api";
-import type { LoginResponse } from "@/lib/types";
+import type { LoginResponse, OperatorRole } from "@/lib/types";
 
 const SESSION_RENEWAL_THRESHOLD_MS = 5 * 60 * 1000;
 const SESSION_CLOCK_INTERVAL_MS = 30 * 1000;
@@ -30,12 +31,28 @@ function formatMinutesUntil(msUntilExpiry: number): string {
   return minutes === 1 ? "menos de 1 minuto" : `cerca de ${minutes} minutos`;
 }
 
+function canOpenAdminConsole(role: OperatorRole | undefined): boolean {
+  return role === "platform_admin" || role === "tenant_admin";
+}
+
+function getRoleLabel(role: OperatorRole | undefined): string {
+  switch (role) {
+    case "platform_admin":
+      return "Administrador global";
+    case "tenant_admin":
+      return "Administrador da empresa";
+    default:
+      return "Operador";
+  }
+}
+
 export default function HomePage() {
   const [session, setSession] = useState<LoginResponse | null>(null);
   const [isSessionReady, setIsSessionReady] = useState(false);
   const [now, setNow] = useState<number>(() => Date.now());
   const [isRenewing, setIsRenewing] = useState(false);
   const [renewError, setRenewError] = useState<string | null>(null);
+  const [isAdminConsoleOpen, setIsAdminConsoleOpen] = useState(false);
 
   useEffect(() => {
     setSession(getApiSession());
@@ -74,12 +91,14 @@ export default function HomePage() {
     setApiSession(nextSession);
     setSession(nextSession);
     setRenewError(null);
+    setIsAdminConsoleOpen(false);
   }
 
   function handleLogout() {
     clearApiSession();
     setSession(null);
     setRenewError(null);
+    setIsAdminConsoleOpen(false);
   }
 
   const handleRenew = useCallback(async () => {
@@ -111,11 +130,24 @@ export default function HomePage() {
               <div className="session-meta">
                 <div className="panel-kicker panel-kicker-inline">Sessão ativa</div>
                 <strong>Empresa {session.tenant_id}</strong>
-                <p>Operador {session.operator_id}</p>
+                <p>
+                  Operador {session.operator_id} • {getRoleLabel(session.role)}
+                </p>
               </div>
-              <button className="action-button" type="button" onClick={handleLogout}>
-                Sair
-              </button>
+              <div className="session-actions">
+                {canOpenAdminConsole(session.role) ? (
+                  <button
+                    className={`action-button${isAdminConsoleOpen ? " primary" : ""}`}
+                    type="button"
+                    onClick={() => setIsAdminConsoleOpen((currentValue) => !currentValue)}
+                  >
+                    {isAdminConsoleOpen ? "Fechar administração" : "Abrir administração"}
+                  </button>
+                ) : null}
+                <button className="action-button" type="button" onClick={handleLogout}>
+                  Sair
+                </button>
+              </div>
             </section>
             {isRenewalWindow && msUntilExpiry !== null ? (
               <section
@@ -142,6 +174,13 @@ export default function HomePage() {
                   {isRenewing ? "Renovando..." : "Renovar sessão"}
                 </button>
               </section>
+            ) : null}
+            {canOpenAdminConsole(session.role) && isAdminConsoleOpen && session.role ? (
+              <AdminConsole
+                role={session.role}
+                sessionTenantId={session.tenant_id}
+                onClose={() => setIsAdminConsoleOpen(false)}
+              />
             ) : null}
             <OperationalWorkspace initialTenantId={session.tenant_id} />
           </>

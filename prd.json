@@ -906,7 +906,7 @@
         "Frontend typecheck, lint e testes passam"
       ],
       "priority": 52,
-      "passes": false,
+      "passes": true,
       "notes": "O console administrativo não deve virar landing page. Ele deve ser um painel utilitário acessível apenas quando o papel do usuário permitir."
     },
     {

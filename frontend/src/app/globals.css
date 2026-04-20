@@ -96,6 +96,13 @@ p {
   color: var(--muted);
 }
 
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .session-renewal-card {
   display: flex;
   align-items: center;
@@ -1911,6 +1918,143 @@ tbody tr:nth-child(even) td {
   grid-column: 1 / -1;
 }
 
+.admin-console-card {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.admin-console-head,
+.admin-console-actions,
+.admin-section-switcher,
+.admin-row-actions,
+.admin-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-console-head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.admin-console-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.admin-console-body {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.admin-subcard,
+.admin-operator-card,
+.admin-tenant-card {
+  padding: 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(21, 78, 74, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.admin-subhead {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-subhead p,
+.admin-operator-meta {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.admin-notice {
+  display: grid;
+  gap: 6px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+}
+
+.admin-notice.success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(31, 122, 79, 0.16);
+}
+
+.admin-notice.error {
+  color: var(--error);
+  background: var(--error-soft);
+  border-color: rgba(180, 35, 24, 0.16);
+}
+
+.admin-operator-list,
+.admin-tenant-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.admin-operator-head,
+.admin-tenant-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-operator-head strong,
+.admin-tenant-head strong {
+  display: block;
+  line-height: 1.35;
+}
+
+.admin-operator-head p,
+.admin-tenant-head p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.admin-operator-meta {
+  margin-top: 14px;
+}
+
+.admin-row-actions {
+  align-items: center;
+  margin-top: 16px;
+}
+
+.admin-inline-form {
+  margin-top: 18px;
+}
+
+.admin-checkbox {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.admin-checkbox input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.admin-tenant-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
 @media (max-width: 1180px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -1998,7 +2142,11 @@ tbody tr:nth-child(even) td {
   .actions,
   .correction-actions,
   .modal-actions,
-  .session-card {
+  .session-card,
+  .admin-console-head,
+  .admin-console-actions,
+  .admin-operator-head,
+  .admin-tenant-head {
     flex-direction: column;
     align-items: stretch;
   }

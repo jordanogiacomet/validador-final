@@ -10,10 +10,12 @@ import type {
   JobResultPayload,
   JobStatusResponse,
   OperatorResponse,
+  OperatorInvitationResponse,
   ReviewFlagActionStatus,
   RowReadResponse,
   RowReviewFlagResponse,
   RowUpdateResponse,
+  TenantAdminResponse,
   TenantListItem,
   UploadResponse,
   ValidationScope,
@@ -351,6 +353,72 @@ export async function listTenants(): Promise<TenantListItem[]> {
   return readResponse<TenantListItem[]>(response);
 }
 
+export async function listAdminTenants(): Promise<TenantAdminResponse[]> {
+  const response = await apiFetch("/admin/tenants");
+  return readResponse<TenantAdminResponse[]>(response);
+}
+
+export async function createAdminTenant(payload: {
+  tenantId: string;
+  displayName: string;
+  aliases?: string[];
+}): Promise<TenantAdminResponse> {
+  const response = await apiFetch("/admin/tenants", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tenant_id: payload.tenantId.trim(),
+      display_name: payload.displayName.trim(),
+      aliases: payload.aliases ?? [],
+    }),
+  });
+  return readResponse<TenantAdminResponse>(response);
+}
+
+export async function updateAdminTenant(
+  tenantId: string,
+  payload: {
+    displayName?: string;
+    aliases?: string[];
+  },
+): Promise<TenantAdminResponse> {
+  const response = await apiFetch(`/admin/tenants/${encodeURIComponent(tenantId)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      display_name: payload.displayName?.trim(),
+      aliases: payload.aliases,
+    }),
+  });
+  return readResponse<TenantAdminResponse>(response);
+}
+
+export async function disableAdminTenant(tenantId: string): Promise<TenantAdminResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/disable`,
+    {
+      method: "POST",
+    },
+  );
+  return readResponse<TenantAdminResponse>(response);
+}
+
+export async function reactivateAdminTenant(
+  tenantId: string,
+): Promise<TenantAdminResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/reactivate`,
+    {
+      method: "POST",
+    },
+  );
+  return readResponse<TenantAdminResponse>(response);
+}
+
 export async function listAuditEvents(params: {
   tenantId?: string | null;
   limit?: number;
@@ -448,6 +516,99 @@ export async function completePasswordSetup(params: {
     },
     { includeAuth: false },
   );
+  return readResponse<OperatorResponse>(response);
+}
+
+export async function listOperators(tenantId: string): Promise<OperatorResponse[]> {
+  const query = new URLSearchParams({
+    tenant_id: tenantId.trim(),
+  });
+  const response = await apiFetch(`/operators?${query.toString()}`);
+  return readResponse<OperatorResponse[]>(response);
+}
+
+export async function createOperatorAccount(payload: {
+  tenantId: string;
+  username: string;
+  password: string;
+  role: NonNullable<OperatorResponse["role"]>;
+  requirePasswordChange: boolean;
+}): Promise<OperatorResponse> {
+  const response = await apiFetch("/operators", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tenant_id: payload.tenantId.trim(),
+      username: payload.username.trim(),
+      password: payload.password,
+      role: payload.role,
+      require_password_change: payload.requirePasswordChange,
+    }),
+  });
+  return readResponse<OperatorResponse>(response);
+}
+
+export async function createOperatorInvitation(payload: {
+  tenantId: string;
+  username: string;
+  role: NonNullable<OperatorResponse["role"]>;
+  expiresInHours: number;
+}): Promise<OperatorInvitationResponse> {
+  const response = await apiFetch("/operators/invitations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tenant_id: payload.tenantId.trim(),
+      username: payload.username.trim(),
+      role: payload.role,
+      expires_in_hours: payload.expiresInHours,
+    }),
+  });
+  return readResponse<OperatorInvitationResponse>(response);
+}
+
+export async function resetOperatorAccountPassword(
+  operatorId: string,
+  payload: {
+    tenantId: string;
+    newPassword: string;
+    requirePasswordChange: boolean;
+  },
+): Promise<OperatorResponse> {
+  const response = await apiFetch(
+    `/operators/${encodeURIComponent(operatorId)}/reset-password`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        tenant_id: payload.tenantId.trim(),
+        new_password: payload.newPassword,
+        require_password_change: payload.requirePasswordChange,
+      }),
+    },
+  );
+  return readResponse<OperatorResponse>(response);
+}
+
+export async function disableOperatorAccount(
+  operatorId: string,
+  tenantId: string,
+): Promise<OperatorResponse> {
+  const response = await apiFetch(`/operators/${encodeURIComponent(operatorId)}/disable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tenant_id: tenantId.trim(),
+    }),
+  });
   return readResponse<OperatorResponse>(response);
 }
 

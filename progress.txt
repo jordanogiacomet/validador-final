@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-20 16:46 -02
+Last Updated: 2026-04-20 17:32 -02
 
 ---
 
@@ -65,6 +65,7 @@ Last Updated: 2026-04-20 16:46 -02
 - Frontend tenant-scoped workspaces must initialize their active tenant from the authenticated session, not from a hardcoded `default` fallback; otherwise optional panels can fire a mismatched tenant request before `/tenants` finishes loading and trigger false auth failures for non-default operators.
 - Session renewal routes through `AuthService.renew_api_key` + `POST /api-keys/renew`; emit `api_key_renewed` linking predecessor to successor, propagate `expires_at` into the frontend `LoginResponse`, and warn the operator before expiration without forcing a logout.
 - Frontend session invalidation should react to true credential failures (`Invalid/Expired/Revoked API key`), not to generic `403` authorization mismatches like `API key does not grant access to tenant ...`; those should surface as local errors without logging the operator out.
+- Frontend admin panels should stay opt-in over the operational workspace, gate platform-only controls from `session.role`, and keep ordinary `403` permission failures as inline feedback instead of forcing logout.
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Validation job cancellation should use cooperative checkpoints through long service/engine loops; do not rely only on batch-end polling for large CSV reads, global indexing, row validation, or artifact preparation.
 - Persisted jobs loaded as `running` with `cancel_requested=true` should be finalized as `canceled` by `JobService` so restarts do not leave inactive work stuck as "Cancelando".
@@ -1110,4 +1111,21 @@ Expected architectural direction:
   - Hardening de auth pública deve ficar concentrado no `AuthService`; as rotas públicas só encaminham `request origin` e normalizam contratos externos como o `/login` enumeration-safe.
   - Reset de conta sem canal de e-mail deve permanecer admin-mediated: a emissão do reset token é autenticada, mas a conclusão do reset continua pública e hash-only para não exigir sessão prévia.
   - Tentativas de login inválidas após disable/reset/rotação agora geram `auth_login_failed` na auditoria; testes que inspecionam a ordem dos eventos precisam considerar esse evento antes dos eventos de revogação/rotação.
+---
+## 2026-04-20 17:32 -02 - US-052
+- Criado um console administrativo opcional no frontend, aberto sob demanda a partir da shell autenticada, mantendo a área operacional como fluxo padrão mesmo para perfis administrativos.
+- Exposta a superfície frontend para gestão de tenants e usuários sobre as APIs já existentes: `platform_admin` enxerga seções de empresas e usuários; `tenant_admin` enxerga apenas a gestão de usuários do próprio tenant; operadores comuns continuam sem navegação administrativa.
+- Adicionadas mensagens operacionais claras para criação de usuário, convite, reset de senha, desabilitação de usuário e desabilitação/reativação de tenant, mantendo respostas `403` como erro local sem logout automático.
+- Files changed: `frontend/src/components/admin-console.tsx`, `frontend/src/components/admin-console.test.tsx`, `frontend/src/app/page.tsx`, `frontend/src/app/page.test.tsx`, `frontend/src/app/globals.css`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the administrative console is still recommended before publishing it.
+- **Learnings for future iterations:**
+  - Painéis administrativos no frontend devem permanecer opcionais e separados do fluxo operacional principal; administradores ainda precisam cair primeiro na área de validação.
+  - Controles globais de tenant devem ser escondidos no frontend a partir de `session.role`, mas a autorização final continua no backend; trate `403` como feedback inline, não como logout.
+  - Novos fetches administrativos do frontend devem continuar centralizados em `frontend/src/lib/api.ts`, enquanto a visibilidade por papel fica na shell autenticada e nos testes específicos do componente.
 ---

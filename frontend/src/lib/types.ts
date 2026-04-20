@@ -9,11 +9,13 @@ export type ReviewFlagStatus = "review";
 export type ReviewFlagActionStatus = ReviewFlagStatus | "clear";
 
 export type OperatorRole = "platform_admin" | "tenant_admin" | "operator";
+export type TenantAdminSource = "file" | "runtime";
 
 export interface TenantListItem {
   tenant_id: string;
   display_name: string;
   is_default: boolean;
+  disabled?: boolean;
 }
 
 export interface LoginRequestPayload {
@@ -43,6 +45,24 @@ export interface OperatorResponse {
   disabled: boolean;
   must_change_password?: boolean;
   is_seed: boolean;
+}
+
+export interface TenantAdminResponse {
+  tenant_id: string;
+  display_name: string;
+  aliases: string[];
+  disabled: boolean;
+  source: TenantAdminSource;
+  is_default: boolean;
+}
+
+export interface OperatorInvitationResponse {
+  tenant_id: string;
+  invite_id: string;
+  username: string;
+  role: OperatorRole;
+  expires_at: string;
+  invite_token: string;
 }
 
 export interface LoginResponse {

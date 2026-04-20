@@ -36,6 +36,27 @@ vi.mock("@/components/operational-workspace", () => ({
   }) => <div>Workspace operacional {initialTenantId}</div>,
 }));
 
+vi.mock("@/components/admin-console", () => ({
+  AdminConsole: ({
+    role,
+    sessionTenantId,
+    onClose,
+  }: {
+    role: string;
+    sessionTenantId: string;
+    onClose: () => void;
+  }) => (
+    <div>
+      <span>
+        Console administrativo {role} {sessionTenantId}
+      </span>
+      <button type="button" onClick={onClose}>
+        Fechar painel mock
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
@@ -170,5 +191,51 @@ describe("HomePage auth flow", () => {
     render(<HomePage />);
 
     expect(await screen.findByText("Workspace operacional redesim")).toBeDefined();
+  });
+
+  it("shows the admin toggle only for administrative roles", async () => {
+    getApiSessionMock.mockReturnValue({
+      ...session,
+      role: "tenant_admin",
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByRole("button", { name: "Abrir administração" })).toBeDefined();
+  });
+
+  it("keeps the operational shell simple for common operators", async () => {
+    getApiSessionMock.mockReturnValue({
+      ...session,
+      role: "operator",
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Workspace operacional default")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Abrir administração" })).toBeNull();
+  });
+
+  it("opens and closes the admin console without replacing the operational workspace", async () => {
+    getApiSessionMock.mockReturnValue({
+      ...session,
+      role: "platform_admin",
+    });
+
+    render(<HomePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Abrir administração" }));
+
+    expect(
+      await screen.findByText("Console administrativo platform_admin default"),
+    ).toBeDefined();
+    expect(screen.getByText("Workspace operacional default")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fechar painel mock" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Console administrativo platform_admin default")).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "Abrir administração" })).toBeDefined();
   });
 });
