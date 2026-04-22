@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+import os
 import re
 import shutil
 import time
@@ -10,6 +11,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -60,6 +62,11 @@ REVIEW_FLAGS_FILE_NAME = "review_flags.json"
 CSV_READ_CHUNK_SIZE = 5000
 COOPERATIVE_CHECKPOINT_ROW_INTERVAL = 1000
 PARALLEL_CANCELLATION_POLL_SECONDS = 0.1
+UPLOAD_MAX_BYTES_ENV = "VALIDATOR_UPLOAD_MAX_BYTES"
+DEFAULT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+SUPPORTED_UPLOAD_SUFFIXES = {".csv"}
+COMMON_CSV_DELIMITERS = (",", ";", "\t", "|")
+COMMON_CSV_ENCODINGS = ("utf-8", "utf-8-sig", "iso-8859-1")
 
 _logger = get_logger("validation_service")
 CancellationCheckpoint = Callable[[], None]
@@ -72,6 +79,32 @@ class _CachedJobCsvContext:
     signature: tuple[int, int]
     tenant_config: TenantConfig
     df: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class UploadPreflightIssue:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class UploadPreflightResult:
+    file_name: str
+    file_size_bytes: int
+    detected_columns: list[str]
+    missing_columns: list[str]
+    guidance: list[str]
+    issues: list[UploadPreflightIssue]
+
+
+@dataclass(frozen=True)
+class _CsvLayoutProbe:
+    encoding: str
+    delimiter: str
+    columns: list[str]
+    missing_columns: list[str]
+    matched_column_count: int
+    decode_error: str | None = None
 
 
 _JOB_CSV_CONTEXT_CACHE: dict[str, _CachedJobCsvContext] = {}
@@ -233,6 +266,524 @@ def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]
     }
 
 
+def _display_csv_delimiter(delimiter: str) -> str:
+    if delimiter == "\t":
+        return "TAB"
+    return delimiter
+
+
+def _format_upload_size_limit(max_bytes: int) -> str:
+    if max_bytes >= 1024 * 1024:
+        size_mb = max_bytes / (1024 * 1024)
+        return f"{int(size_mb)} MB" if size_mb.is_integer() else f"{size_mb:.1f} MB"
+
+    if max_bytes >= 1024:
+        size_kb = max_bytes / 1024
+        return f"{int(size_kb)} KB" if size_kb.is_integer() else f"{size_kb:.1f} KB"
+
+    return f"{max_bytes} bytes"
+
+
+def _get_upload_max_bytes() -> int:
+    configured_value = os.getenv(UPLOAD_MAX_BYTES_ENV, "").strip()
+    if not configured_value:
+        return DEFAULT_UPLOAD_MAX_BYTES
+
+    try:
+        parsed_value = int(configured_value)
+    except ValueError:
+        return DEFAULT_UPLOAD_MAX_BYTES
+
+    return max(parsed_value, 1)
+
+
+def _sanitize_header_name(value: object) -> str:
+    return str(value).removeprefix("\ufeff").strip()
+
+
+def _get_expected_upload_columns(tenant_config: TenantConfig) -> list[str]:
+    expected_columns: list[str] = []
+    seen_columns: set[str] = set()
+
+    for field_name, default_column in DEFAULT_TENANT_COLUMNS.items():
+        source_column = str(tenant_config.columns.get(field_name, default_column)).strip()
+        if not source_column or source_column in seen_columns:
+            continue
+        expected_columns.append(source_column)
+        seen_columns.add(source_column)
+
+    return expected_columns
+
+
+def _probe_csv_layout(
+    content: bytes,
+    *,
+    tenant_config: TenantConfig,
+    encoding: str,
+    delimiter: str,
+) -> _CsvLayoutProbe:
+    expected_columns = _get_expected_upload_columns(tenant_config)
+
+    try:
+        decoded_text = content.decode(encoding)
+    except UnicodeDecodeError as exc:
+        return _CsvLayoutProbe(
+            encoding=encoding,
+            delimiter=delimiter,
+            columns=[],
+            missing_columns=expected_columns,
+            matched_column_count=0,
+            decode_error=str(exc),
+        )
+
+    reader = csv.reader(StringIO(decoded_text), delimiter=delimiter)
+    header_row: list[str] = []
+    for row in reader:
+        cleaned_row = [_sanitize_header_name(cell) for cell in row]
+        if any(cleaned_row):
+            header_row = [cell for cell in cleaned_row if cell]
+            break
+
+    missing_columns = [
+        source_column
+        for source_column in expected_columns
+        if resolve_source_column_name(source_column, header_row) is None
+    ]
+
+    return _CsvLayoutProbe(
+        encoding=encoding,
+        delimiter=delimiter,
+        columns=header_row,
+        missing_columns=missing_columns,
+        matched_column_count=len(expected_columns) - len(missing_columns),
+    )
+
+
+def _find_best_alternative_csv_probe(
+    content: bytes,
+    *,
+    tenant_config: TenantConfig,
+    expected_encoding: str,
+    expected_delimiter: str,
+) -> _CsvLayoutProbe | None:
+    candidate_probes: list[_CsvLayoutProbe] = []
+    seen_combinations: set[tuple[str, str]] = set()
+
+    candidate_encodings = [expected_encoding]
+    candidate_encodings.extend(
+        encoding
+        for encoding in COMMON_CSV_ENCODINGS
+        if encoding not in candidate_encodings
+    )
+
+    candidate_delimiters = [expected_delimiter]
+    candidate_delimiters.extend(
+        delimiter
+        for delimiter in COMMON_CSV_DELIMITERS
+        if delimiter not in candidate_delimiters
+    )
+
+    for encoding in candidate_encodings:
+        for delimiter in candidate_delimiters:
+            if encoding == expected_encoding and delimiter == expected_delimiter:
+                continue
+
+            combination = (encoding, delimiter)
+            if combination in seen_combinations:
+                continue
+            seen_combinations.add(combination)
+
+            probe = _probe_csv_layout(
+                content,
+                tenant_config=tenant_config,
+                encoding=encoding,
+                delimiter=delimiter,
+            )
+            if probe.decode_error is None:
+                candidate_probes.append(probe)
+
+    if not candidate_probes:
+        return None
+
+    return max(
+        candidate_probes,
+        key=lambda probe: (probe.matched_column_count, len(probe.columns)),
+    )
+
+
+def _build_preflight_result(
+    *,
+    file_name: str,
+    file_size_bytes: int,
+    detected_columns: list[str],
+    missing_columns: list[str],
+    guidance: list[str],
+    issues: list[UploadPreflightIssue],
+) -> UploadPreflightResult:
+    return UploadPreflightResult(
+        file_name=file_name,
+        file_size_bytes=file_size_bytes,
+        detected_columns=detected_columns,
+        missing_columns=missing_columns,
+        guidance=guidance,
+        issues=issues,
+    )
+
+
+def _raise_upload_preflight_error(
+    detail: str,
+    *,
+    file_name: str,
+    file_size_bytes: int,
+    detected_columns: list[str],
+    missing_columns: list[str],
+    guidance: list[str],
+    issues: list[UploadPreflightIssue],
+) -> None:
+    raise UploadPreflightError(
+        detail,
+        _build_preflight_result(
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=detected_columns,
+            missing_columns=missing_columns,
+            guidance=guidance,
+            issues=issues,
+        ),
+    )
+
+
+def run_upload_preflight(
+    *,
+    file_name: str | None,
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> UploadPreflightResult:
+    sanitized_file_name = _sanitize_job_file_name(file_name)
+    file_size_bytes = len(content)
+    file_extension = Path(sanitized_file_name).suffix.lower()
+    expected_columns = _get_expected_upload_columns(tenant_config)
+
+    if file_extension not in SUPPORTED_UPLOAD_SUFFIXES:
+        _raise_upload_preflight_error(
+            "Envie a planilha em CSV antes de iniciar o lote.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=[
+                "Exporte o arquivo novamente no formato CSV.",
+                "Esta etapa ainda nao aceita XLSX ou outros formatos.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="unsupported_extension",
+                    message=f"Formato '{file_extension or 'sem extensao'}' nao suportado.",
+                )
+            ],
+        )
+
+    if not content or not content.strip():
+        _raise_upload_preflight_error(
+            "O arquivo enviado esta vazio.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=[
+                "Confirme se a planilha tem cabecalho na primeira linha.",
+                "Inclua ao menos uma linha de dados antes de reenviar o arquivo.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="file_empty",
+                    message="Nenhum conteudo util foi encontrado no arquivo.",
+                )
+            ],
+        )
+
+    max_upload_bytes = _get_upload_max_bytes()
+    if file_size_bytes > max_upload_bytes:
+        _raise_upload_preflight_error(
+            "O arquivo excede o tamanho maximo permitido para preflight.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=[
+                f"Reduza o arquivo para ate {_format_upload_size_limit(max_upload_bytes)}.",
+                "Se necessario, divida o lote em partes menores antes do upload.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="file_too_large",
+                    message=(
+                        f"O arquivo tem {file_size_bytes} bytes e o limite atual eh "
+                        f"{max_upload_bytes} bytes."
+                    ),
+                )
+            ],
+        )
+
+    expected_probe = _probe_csv_layout(
+        content,
+        tenant_config=tenant_config,
+        encoding=tenant_config.csv.encoding,
+        delimiter=tenant_config.csv.delimiter,
+    )
+    best_alternative_probe = _find_best_alternative_csv_probe(
+        content,
+        tenant_config=tenant_config,
+        expected_encoding=tenant_config.csv.encoding,
+        expected_delimiter=tenant_config.csv.delimiter,
+    )
+
+    if expected_probe.decode_error is not None:
+        guidance = [
+            f"Salve o CSV com codificacao {tenant_config.csv.encoding}.",
+            "Reexporte o arquivo antes de tentar novamente.",
+        ]
+        if (
+            best_alternative_probe is not None
+            and best_alternative_probe.encoding != tenant_config.csv.encoding
+            and best_alternative_probe.matched_column_count > 0
+        ):
+            guidance.append(
+                f"O arquivo atual parece estar em {best_alternative_probe.encoding}."
+            )
+        _raise_upload_preflight_error(
+            "A codificacao do arquivo nao corresponde ao layout esperado para esta empresa.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=guidance,
+            issues=[
+                UploadPreflightIssue(
+                    code="encoding_mismatch",
+                    message=(
+                        f"Falha ao ler o arquivo com codificacao "
+                        f"{tenant_config.csv.encoding}."
+                    ),
+                )
+            ],
+        )
+
+    if (
+        best_alternative_probe is not None
+        and best_alternative_probe.matched_column_count
+        > expected_probe.matched_column_count
+    ):
+        detected_columns = best_alternative_probe.columns
+
+        if (
+            best_alternative_probe.delimiter != tenant_config.csv.delimiter
+            and best_alternative_probe.encoding == tenant_config.csv.encoding
+        ):
+            _raise_upload_preflight_error(
+                "O delimitador do CSV nao corresponde ao layout esperado para esta empresa.",
+                file_name=sanitized_file_name,
+                file_size_bytes=file_size_bytes,
+                detected_columns=detected_columns,
+                missing_columns=best_alternative_probe.missing_columns,
+                guidance=[
+                    "Exporte o arquivo novamente usando o delimitador "
+                    f"'{_display_csv_delimiter(tenant_config.csv.delimiter)}'.",
+                    "O arquivo atual parece usar o delimitador "
+                    f"'{_display_csv_delimiter(best_alternative_probe.delimiter)}'.",
+                ],
+                issues=[
+                    UploadPreflightIssue(
+                        code="delimiter_mismatch",
+                        message=(
+                            "Cabecalho encontrado, mas com separador diferente do configurado."
+                        ),
+                    )
+                ],
+            )
+
+        if (
+            best_alternative_probe.encoding != tenant_config.csv.encoding
+            and best_alternative_probe.delimiter == tenant_config.csv.delimiter
+        ):
+            _raise_upload_preflight_error(
+                "A codificacao do arquivo nao corresponde ao layout esperado para esta empresa.",
+                file_name=sanitized_file_name,
+                file_size_bytes=file_size_bytes,
+                detected_columns=detected_columns,
+                missing_columns=best_alternative_probe.missing_columns,
+                guidance=[
+                    f"Salve o CSV com codificacao {tenant_config.csv.encoding}.",
+                    f"O arquivo atual parece estar em {best_alternative_probe.encoding}.",
+                ],
+                issues=[
+                    UploadPreflightIssue(
+                        code="encoding_mismatch",
+                        message=(
+                            "Cabecalho encontrado apenas com codificacao diferente da esperada."
+                        ),
+                    )
+                ],
+            )
+
+        _raise_upload_preflight_error(
+            "Nao foi possivel reconciliar o layout do CSV com o perfil desta empresa.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=detected_columns,
+            missing_columns=best_alternative_probe.missing_columns,
+            guidance=[
+                "Revise o delimitador, a codificacao e o cabecalho antes de reenviar.",
+                "Gere um novo CSV a partir do layout configurado para esta empresa.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="layout_mismatch",
+                    message=(
+                        "O cabecalho so foi parcialmente reconhecido com "
+                        "outra combinacao de leitura."
+                    ),
+                )
+            ],
+        )
+
+    if not expected_probe.columns or expected_probe.matched_column_count == 0:
+        _raise_upload_preflight_error(
+            "A primeira linha nao contem um cabecalho compativel com o layout esperado.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=expected_columns,
+            guidance=[
+                "Confirme se a primeira linha traz o cabecalho do CSV.",
+                "Revise o delimitador e gere novamente o arquivo antes do upload.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_header",
+                    message="Nenhuma coluna obrigatoria foi reconhecida na primeira linha.",
+                )
+            ],
+        )
+
+    if expected_probe.missing_columns:
+        _raise_upload_preflight_error(
+            "Faltam colunas obrigatorias no cabecalho do CSV.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=expected_probe.missing_columns,
+            guidance=[
+                "Inclua as colunas faltantes no cabecalho antes de reenviar.",
+                "Mantenha os nomes das colunas alinhados com o layout configurado para a empresa.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_columns",
+                    message=(
+                        "O cabecalho foi lido, mas ainda nao contem todas "
+                        "as colunas necessarias."
+                    ),
+                )
+            ],
+        )
+
+    try:
+        df = pd.read_csv(
+            BytesIO(content),
+            dtype=str,
+            **_build_csv_read_kwargs(tenant_config),
+        )
+    except pd.errors.EmptyDataError:
+        _raise_upload_preflight_error(
+            "O arquivo enviado esta vazio.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=[],
+            guidance=[
+                "Confirme se a planilha tem cabecalho na primeira linha.",
+                "Inclua ao menos uma linha de dados antes de reenviar o arquivo.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="file_empty",
+                    message="Nenhum dado foi encontrado abaixo do cabecalho.",
+                )
+            ],
+        )
+    except UnicodeDecodeError:
+        _raise_upload_preflight_error(
+            "A codificacao do arquivo nao corresponde ao layout esperado para esta empresa.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=[],
+            guidance=[
+                f"Salve o CSV com codificacao {tenant_config.csv.encoding}.",
+                "Reexporte o arquivo antes de tentar novamente.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="encoding_mismatch",
+                    message=(
+                        f"Falha ao ler o arquivo com codificacao "
+                        f"{tenant_config.csv.encoding}."
+                    ),
+                )
+            ],
+        )
+    except pd.errors.ParserError:
+        _raise_upload_preflight_error(
+            "Nao foi possivel ler o CSV com o layout configurado para esta empresa.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=[],
+            guidance=[
+                "Revise delimitador, aspas e cabecalho antes de reenviar.",
+                "Se possivel, gere novamente o arquivo CSV a partir da origem.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="csv_unreadable",
+                    message="A leitura completa do CSV falhou antes da criacao do job.",
+                )
+            ],
+        )
+
+    if expected_probe.columns and len(expected_probe.columns) == len(df.columns):
+        df.columns = expected_probe.columns
+
+    if df.empty:
+        _raise_upload_preflight_error(
+            "O arquivo nao contem linhas de dados para validar.",
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=expected_probe.columns,
+            missing_columns=[],
+            guidance=[
+                "Mantenha o cabecalho na primeira linha e preencha ao menos um item.",
+                "Reexporte o CSV depois de conferir que ha registros abaixo do cabecalho.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_rows",
+                    message="Nenhuma linha de dados foi encontrada abaixo do cabecalho.",
+                )
+            ],
+        )
+
+    return _build_preflight_result(
+        file_name=sanitized_file_name,
+        file_size_bytes=file_size_bytes,
+        detected_columns=expected_probe.columns,
+        missing_columns=[],
+        guidance=[],
+        issues=[],
+    )
+
+
 def _read_raw_csv_headers(file_path: Path, tenant_config: TenantConfig) -> list[str]:
     with file_path.open("r", encoding=tenant_config.csv.encoding, newline="") as file:
         reader = csv.reader(file, delimiter=tenant_config.csv.delimiter)
@@ -323,6 +874,13 @@ def _cleanup_temp_artifacts(paths: list[Path]) -> None:
 
 class JobCancellationRequestedError(Exception):
     pass
+
+
+class UploadPreflightError(ValueError):
+    def __init__(self, detail: str, result: UploadPreflightResult) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.result = result
 
 
 class OperationalExportKind(StrEnum):

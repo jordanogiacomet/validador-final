@@ -1,7 +1,12 @@
+import React from "react";
 import type { FormEvent } from "react";
 
 import { getValidationScopeLabel } from "@/lib/presentation";
-import type { TenantListItem, ValidationScope } from "@/lib/types";
+import type {
+  TenantListItem,
+  UploadPreflightPayload,
+  ValidationScope,
+} from "@/lib/types";
 
 interface UploadPanelProps {
   tenants: TenantListItem[];
@@ -11,6 +16,7 @@ interface UploadPanelProps {
   isSubmitting: boolean;
   isTenantLoading: boolean;
   tenantError: string | null;
+  uploadPreflight: UploadPreflightPayload | null;
   onTenantChange: (tenantId: string) => void;
   onValidationScopeChange: (scope: ValidationScope) => void;
   onFileChange: (file: File | null) => void;
@@ -25,6 +31,7 @@ export function UploadPanel({
   isSubmitting,
   isTenantLoading,
   tenantError,
+  uploadPreflight,
   onTenantChange,
   onValidationScopeChange,
   onFileChange,
@@ -86,6 +93,31 @@ export function UploadPanel({
             />
             <span className="file-name">{selectedFileName || "Nenhum arquivo selecionado."}</span>
             <div className="file-help">CSV com cabeçalho na primeira linha.</div>
+            {uploadPreflight ? (
+              <div aria-live="polite" role="alert">
+                {uploadPreflight.issues.map((issue) => (
+                  <p className="inline-error" key={issue.code}>
+                    {issue.message}
+                  </p>
+                ))}
+                <div className="file-help">
+                  Colunas encontradas:{" "}
+                  {uploadPreflight.detected_columns.length
+                    ? uploadPreflight.detected_columns.join(", ")
+                    : "nenhuma compativel."}
+                </div>
+                {uploadPreflight.missing_columns.length ? (
+                  <div className="file-help">
+                    Colunas faltantes: {uploadPreflight.missing_columns.join(", ")}
+                  </div>
+                ) : null}
+                {uploadPreflight.guidance.map((item, index) => (
+                  <div className="file-help" key={`${index}-${item}`}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
 

@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-20 17:32 -02
+Last Updated: 2026-04-22 11:27 -02
 
 ---
 
@@ -12,6 +12,7 @@ Last Updated: 2026-04-20 17:32 -02
 - Derive `flag_item_coletado` and `flag_item_cadastrado_do_zero` before executing row-level validation.
 - Prefer rule-based validation with reusable abstractions over hardcoded validation chains.
 - Keep API handlers thin and delegate orchestration to services.
+- Upload preflight should run in `app/services/validation_service.py` before `job_service.create_job(...)`; on failure, return a top-level `preflight` payload with detected/missing columns so the frontend can render inline corrections without creating a doomed job.
 - Keep validation logic, job orchestration, and report rendering in separate modules.
 - Preserve the distinction between collected items and zero-created items as a core domain concept.
 - Use `progress.txt` to record assumptions, gotchas, and reusable learnings for future iterations.
@@ -1158,4 +1159,21 @@ Expected architectural direction:
   - Worker mode depende do backend SQLite do `JobService`; o fallback JSON/in-memory continua útil para dev/test, mas não oferece o claim/lease cross-process necessário para produção.
   - Rotas que enfileiram jobs precisam persistir o `file_path` antes de o lote ficar claimable; o claim SQL filtra apenas jobs com artefato pronto para evitar corrida entre upload/cópia e execução.
   - Rebuilds in-place de artefatos reutilizam o mesmo lifecycle do job, então o caminho de execução precisa continuar aceitando refresh de jobs já `completed` sem criar uma segunda máquina de estados.
+---
+## 2026-04-22 11:27 -02 - US-055
+- Implementado um preflight de upload em `app/services/validation_service.py` antes da criação do job, cobrindo extensão suportada, arquivo vazio, tamanho máximo configurável, encoding, delimitador, cabeçalho compatível, colunas obrigatórias e legibilidade básica do CSV.
+- A rota `POST /validate` passou a delegar esse preflight ao service layer e, quando ele falha, retorna `detail` + payload estruturado `preflight` sem criar/persistir job; no frontend, o workspace agora mantém o lote atual intacto e exibe o feedback inline no painel de upload.
+- Adicionados testes focados no backend e frontend para sucesso e falhas de layout, incluindo payload estruturado de preflight, rejeição sem criação de job e renderização inline das orientações no formulário.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/services/validation_service.py`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/operational-workspace.test.tsx`, `frontend/src/components/upload-panel.tsx`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `tests/test_api.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the upload preflight feedback is still recommended before publishing it.
+- **Learnings for future iterations:**
+  - O upload deve validar layout/encoding/header antes de criar qualquer `JobRecord`; falha de preflight nao deve gerar job "condenado" nem limpar o lote atual no frontend.
+  - Erros operacionais de preflight ficam mais reutilizaveis quando a API responde com `detail` + payload estruturado `preflight`, e o frontend extrai isso por helper central em `frontend/src/lib/api.ts`.
+  - Componentes React renderizados pelos testes Vitest precisam importar `React` explicitamente neste repo; alguns fluxos do Next mascaram isso, mas o runtime de teste nao.
 ---

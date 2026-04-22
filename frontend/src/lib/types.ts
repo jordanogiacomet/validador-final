@@ -119,6 +119,20 @@ export interface UploadResponse {
   validation_scope: ValidationScope;
 }
 
+export interface UploadPreflightIssue {
+  code: string;
+  message: string;
+}
+
+export interface UploadPreflightPayload {
+  file_name: string;
+  file_size_bytes: number;
+  detected_columns: string[];
+  missing_columns: string[];
+  guidance: string[];
+  issues: UploadPreflightIssue[];
+}
+
 export interface SummaryPayload {
   total_rows: number;
   validated_rows?: number;

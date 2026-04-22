@@ -1,7 +1,7 @@
 "use client";
 
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ActiveJobsPanel } from "@/components/active-jobs-panel";
 import { AuditPanel } from "@/components/audit-panel";
@@ -13,6 +13,7 @@ import { StateBanner } from "@/components/state-banner";
 import { UploadPanel } from "@/components/upload-panel";
 import {
   cancelJob,
+  extractUploadPreflightPayload,
   getJob,
   getJobResult,
   getJobRow,
@@ -52,6 +53,7 @@ import type {
   ReviewFlagActionStatus,
   RowReadResponse,
   TenantListItem,
+  UploadPreflightPayload,
   ValidationScope,
 } from "@/lib/types";
 import { useActiveJobs } from "@/hooks/use-active-jobs";
@@ -212,6 +214,9 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   const [validationScope, setValidationScope] = useState<ValidationScope>("zero_items");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [uploadPreflight, setUploadPreflight] = useState<UploadPreflightPayload | null>(
+    null,
+  );
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<JobStatusResponse | null>(null);
   const [reportData, setReportData] = useState<JobResultPayload | null>(null);
@@ -378,6 +383,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   async function openJob(jobId: string) {
     resetWorkspaceState();
     setManualBanner(null);
+    setUploadPreflight(null);
     setHasPendingCorrections(false);
 
     try {
@@ -435,6 +441,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
     event.preventDefault();
 
     if (!selectedFile) {
+      setUploadPreflight(null);
       setManualBanner({
         kind: "error",
         label: "Arquivo não informado",
@@ -443,23 +450,8 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       return;
     }
 
-    resetWorkspaceState();
     setManualBanner(null);
-    setReportData(null);
-    setHasPendingCorrections(false);
-    setCurrentJobId(null);
-    setCurrentJob(
-      createClientJobState({
-        jobId: "",
-        tenantId: selectedTenantId,
-        status: "queued",
-        validationScope,
-        fileName: selectedFile.name,
-        currentStep: "file_received",
-        statusTitle: "Arquivo recebido",
-        statusDetail: "Aguardando processamento.",
-      }),
-    );
+    setUploadPreflight(null);
     setIsSubmitting(true);
 
     try {
@@ -469,6 +461,9 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
         validationScope,
       });
 
+      resetWorkspaceState();
+      setReportData(null);
+      setHasPendingCorrections(false);
       setCurrentJobId(uploadPayload.job_id);
       setCurrentJob(
         createClientJobState({
@@ -485,21 +480,14 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       setValidationScope(uploadPayload.validation_scope);
       await refreshJobs();
     } catch (caughtError) {
+      const preflightPayload = extractUploadPreflightPayload(caughtError);
+      if (preflightPayload) {
+        setUploadPreflight(preflightPayload);
+        return;
+      }
+
       const message =
         caughtError instanceof Error ? caughtError.message : "Não foi possível concluir o lote.";
-      setCurrentJob(
-        createClientJobState({
-          jobId: "",
-          tenantId: selectedTenantId,
-          status: "failed",
-          validationScope,
-          fileName: selectedFile.name,
-          currentStep: "failed",
-          statusTitle: "Falha no processamento",
-          statusDetail: message,
-          errorMessage: message,
-        }),
-      );
       setManualBanner({
         kind: "error",
         label: "Falha no processamento",
@@ -828,6 +816,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
     setIsReprocessing(true);
     resetWorkspaceState();
     setManualBanner(null);
+    setUploadPreflight(null);
 
     try {
       const payload = await reprocessJob(currentJobId);
@@ -887,14 +876,20 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
             isSubmitting={isSubmitting}
             isTenantLoading={isTenantLoading}
             tenantError={tenantError}
+            uploadPreflight={uploadPreflight}
             onTenantChange={(tenantId) => {
               setSelectedTenantId(tenantId);
               setManualBanner(null);
+              setUploadPreflight(null);
             }}
-            onValidationScopeChange={setValidationScope}
+            onValidationScopeChange={(scope) => {
+              setValidationScope(scope);
+              setUploadPreflight(null);
+            }}
             onFileChange={(file) => {
               setSelectedFile(file);
               setSelectedFileName(file?.name || null);
+              setUploadPreflight(null);
             }}
             onSubmit={handleSubmit}
           />

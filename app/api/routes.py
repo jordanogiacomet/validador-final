@@ -34,6 +34,7 @@ from app.services.tenant_admin_service import (
 )
 from app.services.validation_service import (
     OperationalExportKind,
+    UploadPreflightError,
     build_job_upload_path,
     create_reprocess_job,
     get_job_csv_download,
@@ -43,6 +44,7 @@ from app.services.validation_service import (
     get_job_xlsx_export,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
+    run_upload_preflight,
     run_validation_job,
     set_job_row_review_flag,
     update_job_csv_row,
@@ -111,6 +113,20 @@ class UploadResponse(BaseModel):
     status: str
     tenant_id: str
     validation_scope: ValidationScope
+
+
+class UploadPreflightIssueResponse(BaseModel):
+    code: str
+    message: str
+
+
+class UploadPreflightResponse(BaseModel):
+    file_name: str
+    file_size_bytes: int
+    detected_columns: list[str] = Field(default_factory=list)
+    missing_columns: list[str] = Field(default_factory=list)
+    guidance: list[str] = Field(default_factory=list)
+    issues: list[UploadPreflightIssueResponse] = Field(default_factory=list)
 
 
 class TenantListItemResponse(BaseModel):
@@ -472,6 +488,22 @@ def _build_tenant_list_item_response(tenant_id: str) -> TenantListItemResponse:
         display_name=tenant.display_name,
         is_default=tenant.tenant_id == DEFAULT_TENANT_ID,
         disabled=tenant.disabled,
+    )
+
+
+def _build_upload_preflight_response(
+    result,
+) -> UploadPreflightResponse:
+    return UploadPreflightResponse(
+        file_name=result.file_name,
+        file_size_bytes=result.file_size_bytes,
+        detected_columns=result.detected_columns,
+        missing_columns=result.missing_columns,
+        guidance=result.guidance,
+        issues=[
+            UploadPreflightIssueResponse(code=issue.code, message=issue.message)
+            for issue in result.issues
+        ],
     )
 
 
@@ -1189,8 +1221,26 @@ async def upload_and_validate(
 ) -> UploadResponse:
     auth = get_authenticated_tenant(request)
     resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
-
     stored_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
+    content = await file.read()
+    tenant_config = load_tenant_config(resolved_tenant_id)
+
+    try:
+        run_upload_preflight(
+            file_name=stored_file_name,
+            content=content,
+            tenant_config=tenant_config,
+        )
+    except UploadPreflightError as exc:
+        preflight = _build_upload_preflight_response(exc.result)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": exc.detail,
+                "preflight": preflight.model_dump(mode="json"),
+            },
+        )
+
     job = job_service.create_job(
         tenant_id=resolved_tenant_id,
         file_name=stored_file_name,
@@ -1206,8 +1256,6 @@ async def upload_and_validate(
         stored_file_name,
     )
     file_path.parent.mkdir(parents=True, exist_ok=True)
-
-    content = await file.read()
     file_path.write_bytes(content)
 
     job.file_path = str(file_path)

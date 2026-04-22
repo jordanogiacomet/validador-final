@@ -4,6 +4,7 @@ import {
   clearApiSession,
   completePasswordSetup,
   createInitialAdmin,
+  extractUploadPreflightPayload,
   downloadGeneratedFile,
   downloadApiFile,
   getApiSession,
@@ -16,6 +17,7 @@ import {
   renewApiSession,
   setApiSession,
   setApiSessionInvalidHandler,
+  validateFile,
 } from "@/lib/api";
 
 const SESSION = {
@@ -228,6 +230,54 @@ describe("api auth session helpers", () => {
     expect(requestUrl).toContain("limit=8");
     expect(requestUrl).not.toContain("active_only=true");
     expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
+  it("preserves structured upload preflight payloads on validate errors", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "Faltam colunas obrigatorias no cabecalho do CSV.",
+          preflight: {
+            file_name: "lote.csv",
+            file_size_bytes: 256,
+            detected_columns: ["Item", "Descricao"],
+            missing_columns: ["Complemento"],
+            guidance: ["Inclua as colunas faltantes no cabecalho antes de reenviar."],
+            issues: [
+              {
+                code: "missing_columns",
+                message:
+                  "O cabecalho foi lido, mas ainda nao contem todas as colunas necessarias.",
+              },
+            ],
+          },
+        }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    try {
+      await validateFile({
+        file: new File(["Item,Descricao\n001,Mesa\n"], "lote.csv", {
+          type: "text/csv",
+        }),
+        tenantId: "default",
+        validationScope: "zero_items",
+      });
+      throw new Error("validateFile should have rejected");
+    } catch (error) {
+      const preflight = extractUploadPreflightPayload(error);
+      expect(preflight).not.toBeNull();
+      expect(preflight?.missing_columns).toEqual(["Complemento"]);
+      expect(preflight?.issues[0]?.code).toBe("missing_columns");
+    }
   });
 
   it("persists the issued session in sessionStorage", () => {

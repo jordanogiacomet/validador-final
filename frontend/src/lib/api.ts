@@ -17,6 +17,7 @@ import type {
   RowUpdateResponse,
   TenantAdminResponse,
   TenantListItem,
+  UploadPreflightPayload,
   UploadResponse,
   ValidationScope,
 } from "@/lib/types";
@@ -33,17 +34,19 @@ export class ApiError extends Error {
   status: number;
   detail: string;
   requestId: string | null;
+  payload: unknown;
 
   constructor(
     message: string,
     status: number,
-    options: { detail?: string; requestId?: string | null } = {},
+    options: { detail?: string; requestId?: string | null; payload?: unknown } = {},
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = options.detail ?? message;
     this.requestId = options.requestId ?? null;
+    this.payload = options.payload;
   }
 }
 
@@ -281,6 +284,34 @@ export function formatApiErrorMessage(
   return fallbackMessage;
 }
 
+function isUploadPreflightPayload(value: unknown): value is UploadPreflightPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<UploadPreflightPayload>;
+  return (
+    typeof candidate.file_name === "string" &&
+    typeof candidate.file_size_bytes === "number" &&
+    Array.isArray(candidate.detected_columns) &&
+    Array.isArray(candidate.missing_columns) &&
+    Array.isArray(candidate.guidance) &&
+    Array.isArray(candidate.issues)
+  );
+}
+
+export function extractUploadPreflightPayload(
+  error: unknown,
+): UploadPreflightPayload | null {
+  if (!(error instanceof ApiError) || !error.payload || typeof error.payload !== "object") {
+    return null;
+  }
+
+  const payload = error.payload as Record<string, unknown>;
+  const preflight = payload.preflight;
+  return isUploadPreflightPayload(preflight) ? preflight : null;
+}
+
 async function shouldInvalidateSession(
   response: Response,
   includeAuth: boolean,
@@ -341,7 +372,7 @@ async function readResponse<T>(response: Response): Promise<T> {
     throw new ApiError(
       appendSupportCode(mapApiErrorDetail(detail, response.status), requestId),
       response.status,
-      { detail, requestId },
+      { detail, requestId, payload },
     );
   }
 

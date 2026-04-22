@@ -98,6 +98,8 @@ CSV_CONTENT = (
     "002,,Cadeira,MarcaZ,ModeloW,SN2,Sala2,CC2,,\n"
 )
 
+SEMICOLON_CSV_CONTENT = CSV_CONTENT.replace(",", ";")
+
 DUPLICATE_SCOPE_CSV_CONTENT = (
     "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
     "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
@@ -1930,6 +1932,37 @@ def test_download_result_completed():
     assert response.json()["summary"]["total_rows"] == 1
 
     Path(result_path).unlink(missing_ok=True)
+
+
+def test_validate_rejects_preflight_failure_without_creating_job():
+    files = {
+        "file": (
+            "lote.csv",
+            BytesIO(SEMICOLON_CSV_CONTENT.encode()),
+            "text/csv",
+        )
+    }
+
+    response = client.post(
+        "/validate?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert (
+        payload["detail"]
+        == "O delimitador do CSV nao corresponde ao layout esperado para esta empresa."
+    )
+    assert payload["preflight"]["detected_columns"][:3] == [
+        "Item",
+        "Placa Anterior",
+        "Descrição",
+    ]
+    assert payload["preflight"]["missing_columns"] == []
+    assert payload["preflight"]["issues"][0]["code"] == "delimiter_mismatch"
+    assert job_service.list_jobs(tenant_id="default") == []
 
 
 def test_validation_result_includes_item_and_descricao_metadata():

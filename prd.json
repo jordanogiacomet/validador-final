@@ -958,8 +958,8 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 55,
-      "passes": false,
-      "notes": "Prioridade alta porque a experiência atual descobre erros estruturais tarde demais e gera custo de suporte evitável."
+      "passes": true,
+      "notes": "Implementado com preflight de upload em `app/services/validation_service.py` antes da criação do job, resposta estruturada `preflight` em `POST /validate` e feedback inline no frontend sem substituir o lote atual quando o arquivo é rejeitado."
     },
     {
       "id": "US-056",

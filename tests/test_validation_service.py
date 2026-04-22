@@ -9,10 +9,12 @@ import pytest
 import app.services.validation_service as validation_service
 from app.core.job import JobStatus
 from app.core.llm_cache import LLM_CACHE_PATH_ENV
+from app.core.tenant_loader import load_tenant_config
 from app.rules.llm_audit import set_default_client
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
+    UploadPreflightError,
     delete_job_csv_rows,
     delete_job_csv_rows_and_refresh,
     get_job_csv_download,
@@ -22,6 +24,7 @@ from app.services.validation_service import (
     get_job_review_flags_path,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
+    run_upload_preflight,
     run_validation_job,
     set_job_row_review_flag,
     update_job_csv_row,
@@ -1203,3 +1206,157 @@ def test_get_job_report_download_falls_back_to_legacy_results_root(
     report_path = get_job_report_download(job.job_id, service)
 
     assert report_path == legacy_report_path
+
+
+def test_run_upload_preflight_accepts_valid_default_csv():
+    tenant_config = load_tenant_config("default")
+
+    result = run_upload_preflight(
+        file_name="inventario.csv",
+        content=CSV_CONTENT.encode("utf-8"),
+        tenant_config=tenant_config,
+    )
+
+    assert result.file_name == "inventario.csv"
+    assert "Item" in result.detected_columns
+    assert result.missing_columns == []
+    assert result.guidance == []
+
+
+def test_run_upload_preflight_rejects_unsupported_extension():
+    tenant_config = load_tenant_config("default")
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.txt",
+            content=CSV_CONTENT.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert exc_info.value.detail == "Envie a planilha em CSV antes de iniciar o lote."
+    assert exc_info.value.result.issues[0].code == "unsupported_extension"
+
+
+def test_run_upload_preflight_rejects_empty_file():
+    tenant_config = load_tenant_config("default")
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=b"",
+            tenant_config=tenant_config,
+        )
+
+    assert exc_info.value.detail == "O arquivo enviado esta vazio."
+    assert exc_info.value.result.issues[0].code == "file_empty"
+
+
+def test_run_upload_preflight_rejects_file_larger_than_limit(monkeypatch):
+    tenant_config = load_tenant_config("default")
+    monkeypatch.setenv(validation_service.UPLOAD_MAX_BYTES_ENV, "8")
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=CSV_CONTENT.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert exc_info.value.detail == "O arquivo excede o tamanho maximo permitido para preflight."
+    assert exc_info.value.result.issues[0].code == "file_too_large"
+
+
+def test_run_upload_preflight_rejects_wrong_delimiter_and_reports_detected_columns():
+    tenant_config = load_tenant_config("default")
+    semicolon_content = CSV_CONTENT.replace(",", ";")
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=semicolon_content.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert (
+        exc_info.value.detail
+        == "O delimitador do CSV nao corresponde ao layout esperado para esta empresa."
+    )
+    assert exc_info.value.result.detected_columns[:3] == [
+        "Item",
+        "Placa Anterior",
+        "Descrição",
+    ]
+    assert exc_info.value.result.issues[0].code == "delimiter_mismatch"
+
+
+def test_run_upload_preflight_rejects_wrong_encoding():
+    tenant_config = load_tenant_config("default")
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=CSV_CONTENT.encode("iso-8859-1"),
+            tenant_config=tenant_config,
+        )
+
+    assert (
+        exc_info.value.detail
+        == "A codificacao do arquivo nao corresponde ao layout esperado para esta empresa."
+    )
+    assert exc_info.value.result.issues[0].code == "encoding_mismatch"
+
+
+def test_run_upload_preflight_rejects_missing_header():
+    tenant_config = load_tenant_config("default")
+    missing_header_content = (
+        "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
+    )
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=missing_header_content.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert (
+        exc_info.value.detail
+        == "A primeira linha nao contem um cabecalho compativel com o layout esperado."
+    )
+    assert exc_info.value.result.issues[0].code == "missing_header"
+
+
+def test_run_upload_preflight_rejects_missing_required_columns():
+    tenant_config = load_tenant_config("default")
+    missing_columns_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Observação\n"
+        "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Obs\n"
+    )
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=missing_columns_content.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert exc_info.value.detail == "Faltam colunas obrigatorias no cabecalho do CSV."
+    assert exc_info.value.result.missing_columns == ["Complemento"]
+    assert exc_info.value.result.issues[0].code == "missing_columns"
+
+
+def test_run_upload_preflight_rejects_header_only_csv():
+    tenant_config = load_tenant_config("default")
+    header_only_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    )
+
+    with pytest.raises(UploadPreflightError) as exc_info:
+        run_upload_preflight(
+            file_name="inventario.csv",
+            content=header_only_content.encode("utf-8"),
+            tenant_config=tenant_config,
+        )
+
+    assert exc_info.value.detail == "O arquivo nao contem linhas de dados para validar."
+    assert exc_info.value.result.issues[0].code == "missing_rows"
