@@ -265,6 +265,8 @@ function looksLikeCsvFailure(message: string): boolean {
   const normalizedMessage = message.toLowerCase();
   return (
     normalizedMessage.includes("csv") ||
+    normalizedMessage.includes("xlsx") ||
+    normalizedMessage.includes("excel") ||
     normalizedMessage.includes("delimiter") ||
     normalizedMessage.includes("encoding") ||
     normalizedMessage.includes("codec") ||
@@ -280,7 +282,7 @@ export function formatJobFailureMessage(
   const rawMessage = job.error_message || job.status_detail || "";
 
   if (looksLikeCsvFailure(rawMessage)) {
-    return `Não foi possível ler o CSV. Revise o arquivo, delimitador, codificação e cabeçalho.${supportReference}`;
+    return `Não foi possível ler a planilha. Revise o arquivo, o cabeçalho e, se estiver em CSV, o delimitador e a codificação.${supportReference}`;
   }
 
   return `O lote não foi concluído nesta tentativa. Tente novamente ou acione o suporte com a referência do lote.${supportReference}`;

@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 11:27 -02
+Last Updated: 2026-04-22 11:52 -02
 
 ---
 
@@ -13,6 +13,7 @@ Last Updated: 2026-04-22 11:27 -02
 - Prefer rule-based validation with reusable abstractions over hardcoded validation chains.
 - Keep API handlers thin and delegate orchestration to services.
 - Upload preflight should run in `app/services/validation_service.py` before `job_service.create_job(...)`; on failure, return a top-level `preflight` payload with detected/missing columns so the frontend can render inline corrections without creating a doomed job.
+- Accept XLSX uploads by converting them to tenant-configured CSV at ingress in `app/services/validation_service.py`; keep downstream job execution, duplicate correction, and report flows on the shared CSV artifact.
 - Keep validation logic, job orchestration, and report rendering in separate modules.
 - Preserve the distinction between collected items and zero-created items as a core domain concept.
 - Use `progress.txt` to record assumptions, gotchas, and reusable learnings for future iterations.
@@ -1176,4 +1177,21 @@ Expected architectural direction:
   - O upload deve validar layout/encoding/header antes de criar qualquer `JobRecord`; falha de preflight nao deve gerar job "condenado" nem limpar o lote atual no frontend.
   - Erros operacionais de preflight ficam mais reutilizaveis quando a API responde com `detail` + payload estruturado `preflight`, e o frontend extrai isso por helper central em `frontend/src/lib/api.ts`.
   - Componentes React renderizados pelos testes Vitest precisam importar `React` explicitamente neste repo; alguns fluxos do Next mascaram isso, mas o runtime de teste nao.
+---
+## 2026-04-22 11:52 -02 - US-056
+- Implementado suporte a upload CSV e XLSX com preflight tenant-aware, convertendo XLSX para um artefato CSV configurado pelo tenant antes da criação do job para manter validação, correção e reprocessamento genéricos.
+- Adicionado download autenticado de template XLSX por tenant com aba de planilha e instruções mínimas; o frontend agora comunica formatos aceitos, diferenças práticas entre CSV e XLSX e acesso ao modelo da empresa.
+- Adicionados testes focados para preflight XLSX, equivalência de parsing CSV/XLSX, download do template e uso autenticado do template no frontend, além de cobertura do fluxo operacional atualizado.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/services/validation_service.py`, `tests/test_validation_service.py`, `tests/test_api.py`, `frontend/src/lib/api.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/components/upload-panel.tsx`, `frontend/src/components/upload-panel.test.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/operational-workspace.test.tsx`, `frontend/src/lib/__tests__/api.test.ts`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the CSV/XLSX upload guidance and template download is still recommended before publishing it.
+- **Learnings for future iterations:**
+  - Normalize spreadsheet-format variation at the ingress boundary: keep CSV and XLSX acceptance in the upload service, but store a tenant-configured CSV artifact so duplicate-resolution and corrected-download flows do not fork by file type.
+  - Tenant templates should derive expected headers from `TenantConfig.columns`; avoid duplicating per-tenant column knowledge in routes or frontend copy.
+  - Frontend upload guidance can stay styling-neutral by reusing existing authenticated download helpers and existing panel classes instead of adding CSS-only state for operational copy updates.
 ---

@@ -1,10 +1,13 @@
 import copy
+import csv
 import json
 import threading
 import time
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
 import app.services.validation_service as validation_service
 from app.core.job import JobStatus
@@ -76,6 +79,17 @@ def build_default_csv_content(row_count: int) -> str:
             f"Detalhe completo {index},Obs"
         )
     return "\n".join(rows) + "\n"
+
+
+def build_xlsx_content_from_csv(csv_content: str) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    for row in csv.reader(StringIO(csv_content)):
+        worksheet.append(row)
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
 
 
 class RecordingJobService(JobService):
@@ -1223,6 +1237,21 @@ def test_run_upload_preflight_accepts_valid_default_csv():
     assert result.guidance == []
 
 
+def test_run_upload_preflight_accepts_valid_default_xlsx():
+    tenant_config = load_tenant_config("default")
+
+    result = run_upload_preflight(
+        file_name="inventario.xlsx",
+        content=build_xlsx_content_from_csv(CSV_CONTENT),
+        tenant_config=tenant_config,
+    )
+
+    assert result.file_name == "inventario.xlsx"
+    assert "Item" in result.detected_columns
+    assert result.missing_columns == []
+    assert result.guidance == []
+
+
 def test_run_upload_preflight_rejects_unsupported_extension():
     tenant_config = load_tenant_config("default")
 
@@ -1233,7 +1262,7 @@ def test_run_upload_preflight_rejects_unsupported_extension():
             tenant_config=tenant_config,
         )
 
-    assert exc_info.value.detail == "Envie a planilha em CSV antes de iniciar o lote."
+    assert exc_info.value.detail == "Envie a planilha em CSV ou XLSX antes de iniciar o lote."
     assert exc_info.value.result.issues[0].code == "unsupported_extension"
 
 
@@ -1360,3 +1389,26 @@ def test_run_upload_preflight_rejects_header_only_csv():
 
     assert exc_info.value.detail == "O arquivo nao contem linhas de dados para validar."
     assert exc_info.value.result.issues[0].code == "missing_rows"
+
+
+def test_prepare_upload_content_for_job_converts_xlsx_to_tenant_csv_equivalently(tmp_path):
+    tenant_config = load_tenant_config("default")
+    xlsx_content = build_xlsx_content_from_csv(CSV_CONTENT)
+
+    stored_file_name, stored_content = validation_service.prepare_upload_content_for_job(
+        file_name="inventario.xlsx",
+        content=xlsx_content,
+        tenant_config=tenant_config,
+    )
+
+    expected_path = tmp_path / "expected.csv"
+    expected_path.write_text(CSV_CONTENT, encoding="utf-8")
+    actual_path = tmp_path / stored_file_name
+    actual_path.write_bytes(stored_content)
+
+    expected_df = validation_service._read_tenant_csv(expected_path, tenant_config)
+    actual_df = validation_service._read_tenant_csv(actual_path, tenant_config)
+
+    assert stored_file_name == "inventario.csv"
+    assert actual_df.columns.tolist() == expected_df.columns.tolist()
+    assert actual_df.to_dict(orient="records") == expected_df.to_dict(orient="records")

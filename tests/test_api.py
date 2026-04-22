@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from openpyxl import Workbook, load_workbook
 
 import app.services.validation_service as validation_service
 from app.api.routes import audit_service, auth_service, job_service
@@ -22,6 +23,7 @@ DEFAULT_API_KEY = "default-local-test-key"
 DEFAULT_API_KEY_ID = "default-local"
 DEFAULT_OPERATOR_PASSWORD = "Validador@2026!"
 REDESIM_API_KEY = "redesim-local-test-key"
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def setup_function():
@@ -111,6 +113,17 @@ REDESIM_CSV_CONTENT = (
     "especie_id;base_id;;item_anterior;item;descricao;marca;modelo;ns;complemento;observacao;cc;cc_descricao;local;latitude;longitude;gps;usuario;foto_complementar_memento;\n"
     "1;144;uuid-1;;001;MONITOR;Dell;P2419H;SN1;;;8327;A27;MATRIZ;;;;Leticia;;\n"
 )
+
+
+def build_xlsx_content_from_csv(csv_content: str) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    for raw_line in csv_content.strip().splitlines():
+        worksheet.append(raw_line.split(","))
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
 
 
 def test_health():
@@ -1618,6 +1631,59 @@ def test_upload_and_validate_creates_job():
     assert audit_events[1].details["validation_scope"] == "zero_items"
 
 
+def test_upload_and_validate_accepts_xlsx_and_matches_csv_result():
+    csv_response = client.post(
+        "/validate?tenant_id=default",
+        files={"file": ("inventario.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")},
+        headers=auth_headers(),
+    )
+    xlsx_response = client.post(
+        "/validate?tenant_id=default",
+        files={
+            "file": (
+                "inventario.xlsx",
+                BytesIO(build_xlsx_content_from_csv(CSV_CONTENT)),
+                XLSX_MEDIA_TYPE,
+            )
+        },
+        headers=auth_headers(),
+    )
+
+    assert csv_response.status_code == 200
+    assert xlsx_response.status_code == 200
+
+    csv_job = job_service.get_job(csv_response.json()["job_id"])
+    xlsx_job = job_service.get_job(xlsx_response.json()["job_id"])
+    assert csv_job is not None
+    assert xlsx_job is not None
+
+    try:
+        csv_result = client.get(
+            f"/jobs/{csv_job.job_id}/result",
+            headers=auth_headers(),
+        )
+        xlsx_result = client.get(
+            f"/jobs/{xlsx_job.job_id}/result",
+            headers=auth_headers(),
+        )
+
+        assert csv_result.status_code == 200
+        assert xlsx_result.status_code == 200
+        assert xlsx_job.file_name == "inventario.xlsx"
+        assert xlsx_job.file_path is not None
+        assert Path(xlsx_job.file_path).suffix == ".csv"
+        assert Path(xlsx_job.file_path).name.endswith("inventario.csv")
+        assert xlsx_result.json() == csv_result.json()
+    finally:
+        for job in (csv_job, xlsx_job):
+            if job.file_path:
+                Path(job.file_path).unlink(missing_ok=True)
+            if job.result_path:
+                Path(job.result_path).unlink(missing_ok=True)
+            if job.report_path:
+                Path(job.report_path).unlink(missing_ok=True)
+
+
 def test_upload_default_tenant():
     files = {"file": ("test.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")}
     response = client.post("/validate", files=files, headers=auth_headers())
@@ -1687,6 +1753,41 @@ def test_upload_accepts_redesim_v2_alias_and_returns_canonical_tenant():
             Path(job.result_path).unlink(missing_ok=True)
         if job.report_path:
             Path(job.report_path).unlink(missing_ok=True)
+
+
+def test_download_tenant_upload_template_returns_xlsx_workbook():
+    response = client.get("/tenants/default/template", headers=auth_headers())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == XLSX_MEDIA_TYPE
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="default_modelo_validacao.xlsx"'
+    )
+
+    workbook = load_workbook(BytesIO(response.content))
+    try:
+        assert workbook.sheetnames == ["Planilha", "Instrucoes"]
+        data_sheet = workbook["Planilha"]
+        headers = [data_sheet.cell(row=1, column=index).value for index in range(1, 11)]
+        assert headers == [
+            "Item",
+            "Placa Anterior",
+            "Descrição",
+            "Marca",
+            "Modelo",
+            "NS",
+            "Local",
+            "CC",
+            "Complemento",
+            "Observação",
+        ]
+        assert (
+            workbook["Instrucoes"]["A3"].value
+            == "2. O sistema aceita o envio direto deste arquivo em XLSX."
+        )
+    finally:
+        workbook.close()
 
 
 def test_upload_can_request_all_items_scope():

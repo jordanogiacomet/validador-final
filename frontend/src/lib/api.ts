@@ -253,13 +253,15 @@ function mapApiErrorDetail(detail: string, status: number): string {
 
   if (
     normalizedDetail.includes("csv") ||
+    normalizedDetail.includes("xlsx") ||
+    normalizedDetail.includes("excel") ||
     normalizedDetail.includes("delimiter") ||
     normalizedDetail.includes("encoding") ||
     normalizedDetail.includes("codec") ||
     normalizedDetail.includes("tokenizing") ||
     normalizedDetail.includes("column")
   ) {
-    return "Não foi possível ler o CSV. Revise o arquivo, delimitador, codificação e cabeçalho.";
+    return "Não foi possível ler a planilha. Revise o arquivo, o cabeçalho e, se estiver em CSV, o delimitador e a codificação.";
   }
 
   if (status >= 500) {
@@ -660,6 +662,14 @@ export async function validateFile(params: {
     body: formData,
   });
   return readResponse<UploadResponse>(response);
+}
+
+export async function downloadTenantTemplate(tenantId: string): Promise<void> {
+  const normalizedTenantId = tenantId.trim();
+  await downloadApiFile(
+    `/tenants/${encodeURIComponent(normalizedTenantId)}/template`,
+    `${normalizedTenantId || "tenant"}_modelo_validacao.xlsx`,
+  );
 }
 
 export async function listJobs(params: {

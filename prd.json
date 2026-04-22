@@ -975,8 +975,8 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 56,
-      "passes": false,
-      "notes": "Prioridade alta para reduzir fricção de onboarding e alinhar o operador com o layout esperado antes do processamento."
+      "passes": true,
+      "notes": "Implementado com preflight CSV/XLSX tenant-aware em `app/services/validation_service.py`, conversão de XLSX para artefato CSV tenant-configurado antes da execução do job, endpoint autenticado de template XLSX por tenant e atualização do frontend para orientar formatos aceitos e baixar o modelo."
     },
     {
       "id": "US-057",

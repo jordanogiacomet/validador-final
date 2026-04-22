@@ -4,6 +4,7 @@ import {
   clearApiSession,
   completePasswordSetup,
   createInitialAdmin,
+  downloadTenantTemplate,
   extractUploadPreflightPayload,
   downloadGeneratedFile,
   downloadApiFile,
@@ -455,6 +456,44 @@ describe("api auth session helpers", () => {
     expect(removeSpy).toHaveBeenCalledTimes(1);
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:download");
+  });
+
+  it("downloads the tenant template through the authenticated API helper", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response("xlsx-data", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": 'attachment; filename="default_modelo_validacao.xlsx"',
+        },
+      }),
+    );
+    const createObjectUrl = vi.fn(() => "blob:template");
+    const revokeObjectUrl = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    const link = originalCreateElement("a");
+    const clickSpy = vi.spyOn(link, "click").mockImplementation(() => {});
+
+    window.URL.createObjectURL = createObjectUrl;
+    window.URL.revokeObjectURL = revokeObjectUrl;
+    vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === "a") {
+        return link;
+      }
+      return originalCreateElement(tagName);
+    }) as typeof document.createElement);
+
+    setApiSession(SESSION);
+
+    await downloadTenantTemplate("default");
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/tenants/default/template");
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+    expect(link.download).toBe("default_modelo_validacao.xlsx");
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:template");
   });
 
   it("downloads generated files through the shared browser helper", () => {

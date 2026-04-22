@@ -36,12 +36,14 @@ from app.services.validation_service import (
     OperationalExportKind,
     UploadPreflightError,
     build_job_upload_path,
+    build_tenant_upload_template_xlsx,
     create_reprocess_job,
     get_job_csv_download,
     get_job_operational_export,
     get_job_report_download,
     get_job_result_payload,
     get_job_xlsx_export,
+    prepare_upload_content_for_job,
     read_job_csv_row,
     resolve_duplicate_csv_rows_and_refresh,
     run_upload_preflight,
@@ -891,6 +893,19 @@ async def get_tenants(request: Request) -> list[TenantListItemResponse]:
     return [_build_tenant_list_item_response(tenant_id) for tenant_id in tenant_ids]
 
 
+@router.get("/tenants/{tenant_id}/template")
+async def download_tenant_upload_template(request: Request, tenant_id: str) -> Response:
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    tenant_config = load_tenant_config(resolved_tenant_id)
+    xlsx_bytes, download_name = build_tenant_upload_template_xlsx(tenant_config)
+    headers = {"Content-Disposition": f'attachment; filename="{download_name}"'}
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MEDIA_TYPE,
+        headers=headers,
+    )
+
+
 @router.get("/operators", response_model=list[OperatorResponse])
 async def list_operators(
     request: Request,
@@ -1221,13 +1236,13 @@ async def upload_and_validate(
 ) -> UploadResponse:
     auth = get_authenticated_tenant(request)
     resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
-    stored_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
+    uploaded_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
     content = await file.read()
     tenant_config = load_tenant_config(resolved_tenant_id)
 
     try:
         run_upload_preflight(
-            file_name=stored_file_name,
+            file_name=uploaded_file_name,
             content=content,
             tenant_config=tenant_config,
         )
@@ -1241,9 +1256,18 @@ async def upload_and_validate(
             },
         )
 
+    try:
+        stored_file_name, stored_content = prepare_upload_content_for_job(
+            file_name=uploaded_file_name,
+            content=content,
+            tenant_config=tenant_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
     job = job_service.create_job(
         tenant_id=resolved_tenant_id,
-        file_name=stored_file_name,
+        file_name=uploaded_file_name,
         api_key_id=auth.api_key_id,
         params={
             VALIDATION_SCOPE_PARAM: validation_scope.value,
@@ -1256,10 +1280,10 @@ async def upload_and_validate(
         stored_file_name,
     )
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(content)
+    file_path.write_bytes(stored_content)
 
     job.file_path = str(file_path)
-    job.file_name = stored_file_name
+    job.file_name = uploaded_file_name
     job_service.save_job(job.job_id)
 
     _schedule_validation_execution(

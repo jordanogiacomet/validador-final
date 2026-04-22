@@ -13,6 +13,7 @@ import { StateBanner } from "@/components/state-banner";
 import { UploadPanel } from "@/components/upload-panel";
 import {
   cancelJob,
+  downloadTenantTemplate,
   extractUploadPreflightPayload,
   getJob,
   getJobResult,
@@ -445,7 +446,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       setManualBanner({
         kind: "error",
         label: "Arquivo não informado",
-        detail: "Selecione um CSV antes de iniciar o processamento do lote.",
+        detail: "Selecione um CSV ou XLSX antes de iniciar o processamento do lote.",
       });
       return;
     }
@@ -495,6 +496,22 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       });
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleDownloadTemplate() {
+    try {
+      await downloadTenantTemplate(selectedTenantId);
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Nao foi possivel baixar o modelo desta empresa.";
+      setManualBanner({
+        kind: "error",
+        label: "Falha ao baixar modelo",
+        detail: message,
+      });
     }
   }
 
@@ -882,6 +899,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
               setManualBanner(null);
               setUploadPreflight(null);
             }}
+            onTemplateDownload={handleDownloadTemplate}
             onValidationScopeChange={(scope) => {
               setValidationScope(scope);
               setUploadPreflight(null);

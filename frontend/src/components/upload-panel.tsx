@@ -18,6 +18,7 @@ interface UploadPanelProps {
   tenantError: string | null;
   uploadPreflight: UploadPreflightPayload | null;
   onTenantChange: (tenantId: string) => void;
+  onTemplateDownload: () => void;
   onValidationScopeChange: (scope: ValidationScope) => void;
   onFileChange: (file: File | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -33,6 +34,7 @@ export function UploadPanel({
   tenantError,
   uploadPreflight,
   onTenantChange,
+  onTemplateDownload,
   onValidationScopeChange,
   onFileChange,
   onSubmit,
@@ -45,7 +47,7 @@ export function UploadPanel({
       <div className="panel-kicker">1. Enviar planilha</div>
       <h2 className="panel-title">Começar nova conferência</h2>
       <p className="panel-copy">
-        Confirme a empresa da sessão, selecione o CSV e diga o que deseja conferir. O restante acontece automaticamente.
+        Confirme a empresa da sessão, selecione um CSV ou XLSX e diga o que deseja conferir. O restante acontece automaticamente.
       </p>
 
       <form className="form-grid" onSubmit={onSubmit}>
@@ -75,24 +77,39 @@ export function UploadPanel({
         </div>
 
         <div className="field">
-          <label htmlFor="file">Planilha CSV</label>
+          <label htmlFor="file">Planilha CSV ou XLSX</label>
           <div className="file-picker">
             <div className="file-picker-top">
               <label className="file-trigger" htmlFor="file">
                 Selecionar arquivo
               </label>
-              <span className="panel-kicker panel-kicker-inline">CSV</span>
+              <button
+                className="file-trigger"
+                type="button"
+                disabled={isSubmitting || isTenantLoading}
+                onClick={onTemplateDownload}
+              >
+                Baixar modelo XLSX
+              </button>
+              <span className="panel-kicker panel-kicker-inline">CSV ou XLSX</span>
             </div>
             <input
               id="file"
               className="file-input"
               name="file"
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
             />
             <span className="file-name">{selectedFileName || "Nenhum arquivo selecionado."}</span>
-            <div className="file-help">CSV com cabeçalho na primeira linha.</div>
+            <div className="file-help">
+              XLSX pode ser enviado diretamente. CSV precisa manter o cabecalho na primeira
+              linha.
+            </div>
+            <div className="file-help">
+              Use o modelo de {selectedTenant?.display_name || selectedTenantId} para manter as
+              colunas esperadas e, se salvar em CSV, preservar o layout da empresa.
+            </div>
             {uploadPreflight ? (
               <div aria-live="polite" role="alert">
                 {uploadPreflight.issues.map((issue) => (

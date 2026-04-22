@@ -15,6 +15,8 @@ from io import BytesIO, StringIO
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 from app.core.canonical_fields import (
     DEFAULT_TENANT_COLUMNS,
@@ -64,9 +66,11 @@ COOPERATIVE_CHECKPOINT_ROW_INTERVAL = 1000
 PARALLEL_CANCELLATION_POLL_SECONDS = 0.1
 UPLOAD_MAX_BYTES_ENV = "VALIDATOR_UPLOAD_MAX_BYTES"
 DEFAULT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
-SUPPORTED_UPLOAD_SUFFIXES = {".csv"}
+SUPPORTED_UPLOAD_SUFFIXES = {".csv", ".xlsx"}
 COMMON_CSV_DELIMITERS = (",", ";", "\t", "|")
 COMMON_CSV_ENCODINGS = ("utf-8", "utf-8-sig", "iso-8859-1")
+UPLOAD_TEMPLATE_DATA_SHEET_NAME = "Planilha"
+UPLOAD_TEMPLATE_GUIDE_SHEET_NAME = "Instrucoes"
 
 _logger = get_logger("validation_service")
 CancellationCheckpoint = Callable[[], None]
@@ -157,6 +161,16 @@ def _sanitize_job_file_name(
 ) -> str:
     normalized_name = Path(file_name or default).name
     return normalized_name or default
+
+
+def _get_upload_extension(file_name: str | None) -> str:
+    return Path(_sanitize_job_file_name(file_name)).suffix.lower()
+
+
+def _build_storage_csv_file_name(file_name: str | None) -> str:
+    sanitized_name = _sanitize_job_file_name(file_name)
+    stem = Path(sanitized_name).stem or "lote"
+    return f"{stem}.csv"
 
 
 def get_tenant_uploads_dir(tenant_id: str) -> Path:
@@ -301,6 +315,69 @@ def _sanitize_header_name(value: object) -> str:
     return str(value).removeprefix("\ufeff").strip()
 
 
+def _trim_trailing_empty_cells(values: list[str]) -> list[str]:
+    trimmed_values = list(values)
+    while trimmed_values and not trimmed_values[-1].strip():
+        trimmed_values.pop()
+    return trimmed_values
+
+
+def _stringify_spreadsheet_cell(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _read_xlsx_content(content: bytes) -> tuple[list[str], pd.DataFrame]:
+    try:
+        workbook = load_workbook(
+            BytesIO(content),
+            read_only=True,
+            data_only=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive branch
+        raise ValueError("Unable to read XLSX content.") from exc
+
+    try:
+        worksheets = workbook.worksheets
+        if not worksheets:
+            return [], pd.DataFrame()
+
+        worksheet = worksheets[0]
+        raw_headers: list[str] | None = None
+        data_rows: list[list[str]] = []
+        header_width = 0
+
+        for raw_row in worksheet.iter_rows(values_only=True):
+            row_values = _trim_trailing_empty_cells(
+                [_stringify_spreadsheet_cell(value) for value in raw_row]
+            )
+            if raw_headers is None:
+                sanitized_headers = [_sanitize_header_name(value) for value in row_values]
+                if not any(sanitized_headers):
+                    continue
+                raw_headers = sanitized_headers
+                header_width = len(raw_headers)
+                continue
+
+            if not any(cell.strip() for cell in row_values):
+                continue
+
+            normalized_row = row_values[:header_width]
+            if len(normalized_row) < header_width:
+                normalized_row.extend([""] * (header_width - len(normalized_row)))
+            data_rows.append(normalized_row)
+
+        if raw_headers is None:
+            return [], pd.DataFrame()
+
+        return raw_headers, pd.DataFrame(data_rows, columns=raw_headers)
+    finally:
+        workbook.close()
+
+
 def _get_expected_upload_columns(tenant_config: TenantConfig) -> list[str]:
     expected_columns: list[str] = []
     seen_columns: set[str] = set()
@@ -357,6 +434,22 @@ def _probe_csv_layout(
         missing_columns=missing_columns,
         matched_column_count=len(expected_columns) - len(missing_columns),
     )
+
+
+def _match_expected_upload_columns(
+    expected_columns: list[str],
+    detected_columns: list[str],
+) -> tuple[list[str], int]:
+    missing_columns: list[str] = []
+    matched_column_count = 0
+
+    for source_column in expected_columns:
+        if resolve_source_column_name(source_column, detected_columns) is None:
+            missing_columns.append(source_column)
+            continue
+        matched_column_count += 1
+
+    return missing_columns, matched_column_count
 
 
 def _find_best_alternative_csv_probe(
@@ -430,6 +523,131 @@ def _build_preflight_result(
     )
 
 
+def _run_xlsx_upload_preflight(
+    *,
+    file_name: str,
+    file_size_bytes: int,
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> UploadPreflightResult:
+    expected_columns = _get_expected_upload_columns(tenant_config)
+
+    try:
+        raw_headers, df = _read_xlsx_content(content)
+    except ValueError:
+        _raise_upload_preflight_error(
+            "Nao foi possivel ler a planilha XLSX enviada.",
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=[
+                "Baixe novamente o modelo da empresa ou reexporte a planilha em XLSX.",
+                "Se preferir, envie o arquivo como CSV com o layout configurado para a empresa.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="xlsx_unreadable",
+                    message="A leitura da planilha XLSX falhou antes da criacao do job.",
+                )
+            ],
+        )
+
+    detected_columns = [column for column in raw_headers if column]
+    missing_columns, matched_column_count = _match_expected_upload_columns(
+        expected_columns,
+        detected_columns,
+    )
+
+    if not detected_columns and df.empty:
+        _raise_upload_preflight_error(
+            "O arquivo enviado esta vazio.",
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=[],
+            missing_columns=expected_columns,
+            guidance=[
+                "Confirme se a planilha tem cabecalho na primeira linha.",
+                "Inclua ao menos uma linha de dados antes de reenviar o arquivo.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="file_empty",
+                    message="Nenhum conteudo util foi encontrado na planilha XLSX.",
+                )
+            ],
+        )
+
+    if not detected_columns or matched_column_count == 0:
+        _raise_upload_preflight_error(
+            "A primeira linha nao contem um cabecalho compativel com o layout esperado.",
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=detected_columns,
+            missing_columns=expected_columns,
+            guidance=[
+                "Confirme se a primeira linha traz o cabecalho da planilha.",
+                "Use o modelo da empresa para manter os nomes das colunas esperadas.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_header",
+                    message="Nenhuma coluna obrigatoria foi reconhecida na primeira linha.",
+                )
+            ],
+        )
+
+    if missing_columns:
+        _raise_upload_preflight_error(
+            "Faltam colunas obrigatorias no cabecalho da planilha.",
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=detected_columns,
+            missing_columns=missing_columns,
+            guidance=[
+                "Inclua as colunas faltantes no cabecalho antes de reenviar.",
+                "Use o modelo da empresa para manter a ordem e os nomes esperados.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_columns",
+                    message=(
+                        "O cabecalho foi lido, mas ainda nao contem todas "
+                        "as colunas necessarias."
+                    ),
+                )
+            ],
+        )
+
+    if df.empty:
+        _raise_upload_preflight_error(
+            "O arquivo nao contem linhas de dados para validar.",
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            detected_columns=detected_columns,
+            missing_columns=[],
+            guidance=[
+                "Mantenha o cabecalho na primeira linha e preencha ao menos um item.",
+                "Reexporte a planilha depois de conferir que ha registros abaixo do cabecalho.",
+            ],
+            issues=[
+                UploadPreflightIssue(
+                    code="missing_rows",
+                    message="Nenhuma linha de dados foi encontrada abaixo do cabecalho.",
+                )
+            ],
+        )
+
+    return _build_preflight_result(
+        file_name=file_name,
+        file_size_bytes=file_size_bytes,
+        detected_columns=detected_columns,
+        missing_columns=[],
+        guidance=[],
+        issues=[],
+    )
+
+
 def _raise_upload_preflight_error(
     detail: str,
     *,
@@ -461,19 +679,19 @@ def run_upload_preflight(
 ) -> UploadPreflightResult:
     sanitized_file_name = _sanitize_job_file_name(file_name)
     file_size_bytes = len(content)
-    file_extension = Path(sanitized_file_name).suffix.lower()
+    file_extension = _get_upload_extension(sanitized_file_name)
     expected_columns = _get_expected_upload_columns(tenant_config)
 
     if file_extension not in SUPPORTED_UPLOAD_SUFFIXES:
         _raise_upload_preflight_error(
-            "Envie a planilha em CSV antes de iniciar o lote.",
+            "Envie a planilha em CSV ou XLSX antes de iniciar o lote.",
             file_name=sanitized_file_name,
             file_size_bytes=file_size_bytes,
             detected_columns=[],
             missing_columns=expected_columns,
             guidance=[
-                "Exporte o arquivo novamente no formato CSV.",
-                "Esta etapa ainda nao aceita XLSX ou outros formatos.",
+                "Exporte o arquivo novamente em CSV ou XLSX.",
+                "Outros formatos ainda nao sao aceitos nesta etapa.",
             ],
             issues=[
                 UploadPreflightIssue(
@@ -523,6 +741,14 @@ def run_upload_preflight(
                     ),
                 )
             ],
+        )
+
+    if file_extension == ".xlsx":
+        return _run_xlsx_upload_preflight(
+            file_name=sanitized_file_name,
+            file_size_bytes=file_size_bytes,
+            content=content,
+            tenant_config=tenant_config,
         )
 
     expected_probe = _probe_csv_layout(
@@ -782,6 +1008,85 @@ def run_upload_preflight(
         guidance=[],
         issues=[],
     )
+
+
+def _dataframe_to_csv_bytes(
+    df: pd.DataFrame,
+    tenant_config: TenantConfig,
+) -> bytes:
+    csv_content = df.to_csv(
+        index=False,
+        sep=tenant_config.csv.delimiter,
+    )
+    return csv_content.encode(tenant_config.csv.encoding)
+
+
+def prepare_upload_content_for_job(
+    *,
+    file_name: str | None,
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> tuple[str, bytes]:
+    sanitized_file_name = _sanitize_job_file_name(file_name)
+    storage_file_name = _build_storage_csv_file_name(sanitized_file_name)
+    file_extension = _get_upload_extension(sanitized_file_name)
+
+    if file_extension == ".csv":
+        return storage_file_name, content
+
+    if file_extension == ".xlsx":
+        raw_headers, df = _read_xlsx_content(content)
+        if raw_headers and len(raw_headers) == len(df.columns):
+            df.columns = raw_headers
+        try:
+            return storage_file_name, _dataframe_to_csv_bytes(df, tenant_config)
+        except UnicodeEncodeError as exc:
+            raise ValueError(
+                "A planilha XLSX contem caracteres incompativeis com o layout CSV desta empresa."
+            ) from exc
+
+    raise ValueError(f"Unsupported upload format: {file_extension or 'unknown'}")
+
+
+def build_tenant_upload_template_xlsx(
+    tenant_config: TenantConfig,
+) -> tuple[bytes, str]:
+    expected_columns = _get_expected_upload_columns(tenant_config)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = UPLOAD_TEMPLATE_DATA_SHEET_NAME
+    worksheet.freeze_panes = "A2"
+
+    for column_index, column_name in enumerate(expected_columns, start=1):
+        cell = worksheet.cell(row=1, column=column_index, value=column_name)
+        cell.font = Font(bold=True)
+        worksheet.column_dimensions[cell.column_letter].width = max(len(column_name) + 4, 16)
+
+    guide_sheet = workbook.create_sheet(title=UPLOAD_TEMPLATE_GUIDE_SHEET_NAME)
+    guide_sheet["A1"] = "Como preparar a planilha"
+    guide_sheet["A1"].font = Font(bold=True)
+    guide_lines = [
+        (
+            f"1. Preencha a aba '{UPLOAD_TEMPLATE_DATA_SHEET_NAME}' e mantenha "
+            "o cabecalho na primeira linha."
+        ),
+        "2. O sistema aceita o envio direto deste arquivo em XLSX.",
+        (
+            "3. Se preferir salvar em CSV, preserve o delimitador "
+            f"'{_display_csv_delimiter(tenant_config.csv.delimiter)}' e a codificacao "
+            f"{tenant_config.csv.encoding}."
+        ),
+        "4. Colunas esperadas: " + ", ".join(expected_columns),
+    ]
+    for row_index, line in enumerate(guide_lines, start=2):
+        guide_sheet.cell(row=row_index, column=1, value=line)
+
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+
+    tenant_id = canonicalize_tenant_id(tenant_config.tenant_id)
+    return output.getvalue(), f"{tenant_id}_modelo_validacao.xlsx"
 
 
 def _read_raw_csv_headers(file_path: Path, tenant_config: TenantConfig) -> list[str]:
@@ -1068,14 +1373,12 @@ def _store_job_csv_context(
 
 def _build_corrected_csv_name(job: JobRecord, file_path: Path) -> str:
     original_name = job.file_name or file_path.name
-    original_path = Path(original_name)
-    suffix = original_path.suffix or ".csv"
-    stem = original_path.stem or "lote"
+    stem = Path(original_name).stem or Path(file_path.name).stem or "lote"
 
     if stem.endswith("_corrigido"):
-        return f"{stem}{suffix}"
+        return f"{stem}.csv"
 
-    return f"{stem}_corrigido{suffix}"
+    return f"{stem}_corrigido.csv"
 
 
 def get_job_csv_download(
@@ -1764,7 +2067,7 @@ def create_reprocess_job(
     destination_path = build_job_upload_path(
         new_job.tenant_id,
         new_job.job_id,
-        source_file_name,
+        _build_storage_csv_file_name(source_file_name),
     )
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_file_path, destination_path)

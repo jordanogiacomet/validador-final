@@ -94,7 +94,7 @@ describe("OperationalWorkspace upload preflight", () => {
 
     render(<OperationalWorkspace initialTenantId="default" />);
 
-    const fileInput = await screen.findByLabelText("Planilha CSV");
+    const fileInput = await screen.findByLabelText("Planilha CSV ou XLSX");
     fireEvent.change(fileInput, {
       target: {
         files: [new File(["Item;Descricao\n001;Mesa\n"], "lote.csv", { type: "text/csv" })],
