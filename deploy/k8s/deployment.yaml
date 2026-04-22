@@ -5,7 +5,7 @@ metadata:
   namespace: validador-final
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   storageClassName: nfs-client
   resources:
     requests:
@@ -18,7 +18,7 @@ metadata:
   namespace: validador-final
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   storageClassName: nfs-client
   resources:
     requests:
@@ -54,6 +54,8 @@ spec:
               value: http://192.168.0.20:30092,http://192.168.20.209:30092,http://192.168.0.20,http://192.168.20.209
             - name: VALIDATOR_FRONTEND_ORIGIN_REGEX
               value: "^https?://[^/]+(:30092)?$"
+            - name: VALIDATOR_JOB_EXECUTION_MODE
+              value: worker
             - name: VALIDATOR_SQLITE_PATH
               value: /app/results/operational.sqlite3
             - name: VALIDATOR_OFFICIAL_TENANT_ID
@@ -90,6 +92,81 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+            - name: results
+              mountPath: /app/results
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: validador-final-uploads
+        - name: results
+          persistentVolumeClaim:
+            claimName: validador-final-results
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: validador-final-worker
+  namespace: validador-final
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: validador-final-worker
+  template:
+    metadata:
+      labels:
+        app: validador-final-worker
+    spec:
+      containers:
+        - name: worker
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - app.workers.validation_worker
+          env:
+            - name: VALIDATOR_JOB_EXECUTION_MODE
+              value: worker
+            - name: VALIDATOR_SQLITE_PATH
+              value: /app/results/operational.sqlite3
+            - name: VALIDATOR_OFFICIAL_TENANT_ID
+              value: redesim
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: username
+                  optional: true
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: password
+                  optional: true
+            - name: VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET
+              value: "false"
+            - name: VALIDATOR_SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: validador-final-bootstrap-admin
+                  key: setup-token
+                  optional: true
+            - name: VALIDATOR_JOB_WORKER_POLL_INTERVAL_SECONDS
+              value: "1"
+            - name: VALIDATOR_JOB_WORKER_LEASE_SECONDS
+              value: "120"
           resources:
             requests:
               cpu: 100m

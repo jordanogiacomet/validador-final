@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
+
+from app.core.job import JobRecord, JobStatus
 
 OPERATIONAL_SQLITE_PATH_ENV: Final[str] = "VALIDATOR_SQLITE_PATH"
 SQLITE_SUFFIXES: Final[tuple[str, ...]] = (".db", ".sqlite", ".sqlite3")
@@ -46,26 +49,177 @@ class OperationalSQLiteStore:
             "SELECT payload FROM jobs ORDER BY created_at ASC, job_id ASC"
         )
 
+    def load_job(self, job_id: str) -> dict[str, Any] | None:
+        return self._load_single_payload(
+            "SELECT payload FROM jobs WHERE job_id = ?",
+            (job_id,),
+        )
+
     def replace_jobs(self, payloads: Iterable[dict[str, Any]]) -> None:
-        rows = [
-            (
-                str(payload["job_id"]),
-                str(payload["tenant_id"]),
-                str(payload["status"]),
-                str(payload["created_at"]),
-                str(payload["updated_at"]),
-                _serialize_payload(payload),
-            )
-            for payload in payloads
-        ]
+        rows = [self._build_job_row(payload) for payload in payloads]
         self._replace_rows(
             table_name="jobs",
             insert_sql=(
                 "INSERT INTO jobs (job_id, tenant_id, status, created_at, updated_at, "
-                "payload) VALUES (?, ?, ?, ?, ?, ?)"
+                "file_path, execution_owner, execution_expires_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             rows=rows,
         )
+
+    def upsert_job(self, payload: dict[str, Any]) -> None:
+        row = self._build_job_row(payload)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    job_id,
+                    tenant_id,
+                    status,
+                    created_at,
+                    updated_at,
+                    file_path,
+                    execution_owner,
+                    execution_expires_at,
+                    payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    tenant_id = excluded.tenant_id,
+                    status = excluded.status,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    file_path = excluded.file_path,
+                    execution_owner = excluded.execution_owner,
+                    execution_expires_at = excluded.execution_expires_at,
+                    payload = excluded.payload
+                """,
+                row,
+            )
+
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        lease_expires_at = now + timedelta(seconds=max(1, lease_seconds))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT payload
+                FROM jobs
+                WHERE (
+                    status = ?
+                    AND file_path IS NOT NULL
+                    AND file_path != ''
+                ) OR (
+                    status = ?
+                    AND execution_expires_at IS NOT NULL
+                    AND execution_expires_at <= ?
+                )
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT 1
+                """,
+                (
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    now.isoformat(),
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+
+            job = JobRecord.model_validate(_deserialize_payload(str(row[0])))
+            job.begin_execution(
+                execution_owner_id=worker_id,
+                execution_expires_at=lease_expires_at,
+            )
+            payload = job.model_dump(mode="json")
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    job_id,
+                    tenant_id,
+                    status,
+                    created_at,
+                    updated_at,
+                    file_path,
+                    execution_owner,
+                    execution_expires_at,
+                    payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    tenant_id = excluded.tenant_id,
+                    status = excluded.status,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    file_path = excluded.file_path,
+                    execution_owner = excluded.execution_owner,
+                    execution_expires_at = excluded.execution_expires_at,
+                    payload = excluded.payload
+                """,
+                self._build_job_row(payload),
+            )
+            return payload
+
+    def heartbeat_job_execution(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        lease_expires_at = now + timedelta(seconds=max(1, lease_seconds))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT payload
+                FROM jobs
+                WHERE job_id = ?
+                  AND status = ?
+                  AND execution_owner = ?
+                """,
+                (job_id, JobStatus.RUNNING.value, worker_id),
+            ).fetchone()
+            if row is None:
+                return None
+
+            job = JobRecord.model_validate(_deserialize_payload(str(row[0])))
+            job.refresh_execution_lease(
+                execution_owner_id=worker_id,
+                execution_expires_at=lease_expires_at,
+            )
+            payload = job.model_dump(mode="json")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET tenant_id = ?,
+                    status = ?,
+                    created_at = ?,
+                    updated_at = ?,
+                    file_path = ?,
+                    execution_owner = ?,
+                    execution_expires_at = ?,
+                    payload = ?
+                WHERE job_id = ?
+                """,
+                (
+                    payload["tenant_id"],
+                    payload["status"],
+                    payload["created_at"],
+                    payload["updated_at"],
+                    payload.get("file_path"),
+                    payload.get("execution_owner_id"),
+                    payload.get("execution_expires_at"),
+                    _serialize_payload(payload),
+                    job_id,
+                ),
+            )
+            return payload
 
     def load_audit_events(self) -> list[dict[str, Any]]:
         return self._load_payloads(
@@ -278,10 +432,17 @@ class OperationalSQLiteStore:
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            file_path TEXT,
+            execution_owner TEXT,
+            execution_expires_at TEXT,
             payload TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS jobs_tenant_created_idx
             ON jobs (tenant_id, created_at);
+        CREATE INDEX IF NOT EXISTS jobs_status_created_idx
+            ON jobs (status, created_at);
+        CREATE INDEX IF NOT EXISTS jobs_execution_expires_idx
+            ON jobs (execution_expires_at);
 
         CREATE TABLE IF NOT EXISTS audit_events (
             event_id TEXT PRIMARY KEY,
@@ -364,11 +525,25 @@ class OperationalSQLiteStore:
         """
         with self._connect() as connection:
             connection.executescript(schema)
+            self._ensure_column(connection, "jobs", "file_path", "TEXT")
+            self._ensure_column(connection, "jobs", "execution_owner", "TEXT")
+            self._ensure_column(connection, "jobs", "execution_expires_at", "TEXT")
 
     def _load_payloads(self, query: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(query).fetchall()
         return [_deserialize_payload(str(row[0])) for row in rows]
+
+    def _load_single_payload(
+        self,
+        query: str,
+        params: tuple[object, ...],
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        if row is None:
+            return None
+        return _deserialize_payload(str(row[0]))
 
     def _replace_rows(
         self,
@@ -387,6 +562,38 @@ class OperationalSQLiteStore:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
+
+    def _ensure_column(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        definition: str,
+    ) -> None:
+        existing_columns = {
+            str(row[1])
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name in existing_columns:
+            return
+        connection.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+        )
+
+    def _build_job_row(self, payload: dict[str, Any]) -> tuple[object, ...]:
+        job = JobRecord.model_validate(payload)
+        serialized = job.model_dump(mode="json")
+        return (
+            str(serialized["job_id"]),
+            str(serialized["tenant_id"]),
+            str(serialized["status"]),
+            str(serialized["created_at"]),
+            str(serialized["updated_at"]),
+            serialized.get("file_path"),
+            serialized.get("execution_owner_id"),
+            serialized.get("execution_expires_at"),
+            _serialize_payload(serialized),
+        )
 
 
 def _serialize_payload(payload: dict[str, Any]) -> str:

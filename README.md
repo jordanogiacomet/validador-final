@@ -258,6 +258,36 @@ When `VALIDATOR_SQLITE_PATH` is set, these service stores use the shared SQLite 
 - job metadata
 - audit log events
 - issued API keys
+
+Dedicated Worker Mode
+
+The API still defaults to inline/background execution for local development and tests.
+To move job execution out of the FastAPI process, set:
+
+```bash
+export VALIDATOR_SQLITE_PATH="results/operational.sqlite3"
+export VALIDATOR_JOB_EXECUTION_MODE="worker"
+```
+
+Then run the API and the dedicated worker separately:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+In another terminal:
+
+```bash
+python -m app.workers.validation_worker
+```
+
+In worker mode:
+
+- `POST /validate` and `POST /jobs/{job_id}/reprocess` only enqueue persisted jobs
+- the worker claims jobs atomically from the shared SQLite store
+- stale running jobs can be reclaimed after the execution lease expires
+- Kubernetes should run the API and worker as separate deployments over the same
+  shared uploads/results volumes
 - managed operator records
 
 If `VALIDATOR_SQLITE_PATH` is not set, the legacy JSON-backed env vars remain supported:

@@ -3,6 +3,7 @@ import json
 import math
 import re
 import shutil
+import time
 import unicodedata
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -40,7 +41,7 @@ from app.rules.llm_audit import (
 )
 from app.rules.suspicious_patterns import SuspiciousPatternRule
 from app.rules.zero_item_quality import ZeroItemQualityRule
-from app.services.job_service import JobService
+from app.services.job_service import DEFAULT_EXECUTION_LEASE_SECONDS, JobService
 from app.services.report_service import (
     build_duplicate_section,
     build_duplicates_export_csv,
@@ -1363,15 +1364,47 @@ def _raise_if_cancellation_requested(
         )
 
 
-def run_validation_job(job_id: str, job_service: JobService) -> None:
+def run_validation_job(
+    job_id: str,
+    job_service: JobService,
+    *,
+    worker_id: str | None = None,
+    execution_lease_seconds: int = DEFAULT_EXECUTION_LEASE_SECONDS,
+) -> None:
     job = job_service.get_job(job_id)
     if job is None or job.status == JobStatus.CANCELED:
         return
 
     started_at = datetime.now(UTC)
     temp_artifact_paths: list[Path] = []
+    last_execution_heartbeat = 0.0
+    heartbeat_interval_seconds = max(
+        1.0,
+        min(float(execution_lease_seconds) / 3.0, 30.0),
+    )
+
+    def maybe_refresh_execution_lease(*, force: bool = False) -> None:
+        nonlocal last_execution_heartbeat
+        if worker_id is None:
+            return
+        now_monotonic = time.monotonic()
+        if not force and (
+            now_monotonic - last_execution_heartbeat
+        ) < heartbeat_interval_seconds:
+            return
+        refreshed_job = job_service.heartbeat_job_execution(
+            job_id,
+            worker_id=worker_id,
+            lease_seconds=execution_lease_seconds,
+        )
+        if refreshed_job is None:
+            raise RuntimeError(
+                "The worker lost ownership of the execution lease for this job."
+            )
+        last_execution_heartbeat = now_monotonic
 
     def cancellation_checkpoint() -> None:
+        maybe_refresh_execution_lease()
         _raise_if_cancellation_requested(job_id, job_service)
 
     log_event(
@@ -1383,7 +1416,8 @@ def run_validation_job(job_id: str, job_service: JobService) -> None:
 
     try:
         cancellation_checkpoint()
-        job_service.start_job(job_id)
+        job = job_service.begin_job_execution(job_id)
+        maybe_refresh_execution_lease(force=True)
         cancellation_checkpoint()
 
         ensure_rules_registered()

@@ -36,6 +36,8 @@ class JobRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_message: str | None = None
     cancel_requested: bool = False
+    execution_owner_id: str | None = None
+    execution_expires_at: datetime | None = None
     partial_summary: dict[str, Any] = Field(default_factory=dict)
     is_partial_result_available: bool = False
     partial_grouped_problems: dict[str, list[dict[str, Any]]] = Field(
@@ -68,19 +70,49 @@ class JobRecord(BaseModel):
         self.updated_at = datetime.now(UTC)
 
     def mark_running(self) -> None:
-        self.transition_to(JobStatus.RUNNING)
+        self.begin_execution()
+
+    def begin_execution(
+        self,
+        *,
+        execution_owner_id: str | None = None,
+        execution_expires_at: datetime | None = None,
+    ) -> None:
+        if self.status in {JobStatus.QUEUED, JobStatus.COMPLETED}:
+            self.transition_to(JobStatus.RUNNING)
+        elif self.status == JobStatus.RUNNING:
+            self.updated_at = datetime.now(UTC)
+        else:
+            self.transition_to(JobStatus.RUNNING)
+
         self.total_rows = 0
         self.source_total_rows = 0
         self.rows_with_issues = 0
         self.total_issues = 0
         self.error_message = None
         self.cancel_requested = False
+        self.execution_owner_id = execution_owner_id
+        self.execution_expires_at = execution_expires_at
         self._clear_partial_preview()
         self.set_progress(
             current_step="reading_lot",
             status_title="Leitura do lote em andamento",
             status_detail="O arquivo está sendo lido e preparado para validação.",
         )
+
+    def refresh_execution_lease(
+        self,
+        *,
+        execution_owner_id: str,
+        execution_expires_at: datetime,
+    ) -> None:
+        if self.status != JobStatus.RUNNING:
+            raise ValueError("Execution lease can only be refreshed for running jobs")
+        if self.execution_owner_id not in (None, execution_owner_id):
+            raise ValueError("Execution lease can only be refreshed by the active owner")
+        self.execution_owner_id = execution_owner_id
+        self.execution_expires_at = execution_expires_at
+        self.updated_at = datetime.now(UTC)
 
     def mark_completed(
         self,
@@ -104,6 +136,8 @@ class JobRecord(BaseModel):
         self.processed_rows = total_rows
         self.error_message = None
         self.cancel_requested = False
+        self.execution_owner_id = None
+        self.execution_expires_at = None
         self._clear_partial_preview(reset_progress_metrics=False)
         self.set_progress(
             current_step="report_ready",
@@ -118,6 +152,8 @@ class JobRecord(BaseModel):
         self.transition_to(JobStatus.FAILED)
         self.error_message = error_message
         self.cancel_requested = False
+        self.execution_owner_id = None
+        self.execution_expires_at = None
         self._clear_partial_preview(reset_progress_metrics=False)
         self.set_progress(
             current_step="failed",
@@ -144,6 +180,8 @@ class JobRecord(BaseModel):
         self.transition_to(JobStatus.CANCELED)
         self.error_message = None
         self.cancel_requested = False
+        self.execution_owner_id = None
+        self.execution_expires_at = None
         self._clear_partial_preview(reset_progress_metrics=False)
         self.set_progress(
             current_step=self.current_step or "file_received",

@@ -84,6 +84,7 @@ Last Updated: 2026-04-20 17:32 -02
 - Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
 - Administrative audit should stay in the shared `AuditService`: classify admin-sensitive events in `app/core/audit.py`, store structured `details` like `actor_operator_id`, `target_operator_id`, and `result` for filters, and enforce global-vs-tenant audit visibility through `AuthService` instead of creating a second audit store.
+- Dedicated worker mode should claim jobs through the shared SQLite-backed `JobService` lease path; keep API routes enqueue-only in that mode and use inline/background execution only as the local/test fallback.
 
 ---
 
@@ -1141,6 +1142,20 @@ Expected architectural direction:
   - `pytest -q`
 - **Learnings for future iterations:**
   - Auditoria administrativa e operacional continuam no mesmo log; a separação deve ser por classificação/escopo de leitura, não por armazenamento duplicado.
-  - Filtros de auditoria por ator/alvo ficam estáveis quando os serviços gravam chaves estruturadas (`actor_operator_id`, `target_operator_id`, `result`) em `details`.
-  - Sanitização sensível é mais segura quando centralizada no próprio `AuditService`/`app/core/audit.py`; não dependa de cada fluxo lembrar de remover senha, token bruto ou hash manualmente.
+- Filtros de auditoria por ator/alvo ficam estáveis quando os serviços gravam chaves estruturadas (`actor_operator_id`, `target_operator_id`, `result`) em `details`.
+- Sanitização sensível é mais segura quando centralizada no próprio `AuditService`/`app/core/audit.py`; não dependa de cada fluxo lembrar de remover senha, token bruto ou hash manualmente.
+---
+## 2026-04-22 11:01 -02 - US-054
+- Implementada uma fila durável de validação sobre o storage operacional compartilhado: `JobService` em SQLite passou a persistir jobs por registro, suportar claim/lease atômico e heartbeat para que um worker dedicado consuma lotes sem depender de `BackgroundTasks` da API em produção.
+- Adicionado o worker dedicado em `app/workers/validation_worker.py`, o runtime compartilhado de serviços em `app/services/runtime.py`, e o modo `VALIDATOR_JOB_EXECUTION_MODE=worker`, deixando a API apenas enfileirar quando esse modo está ativo e preservando o fallback inline/background para desenvolvimento local e testes.
+- Atualizados `deploy/k8s/deployment.yaml` e `README.md` para refletir o split entre API e worker usando o mesmo SQLite/volumes compartilhados; os PVCs passaram a `ReadWriteMany` e o deploy ganhou um `Deployment` separado para o worker.
+- Adicionados testes focados em `tests/test_worker.py` cobrindo enqueue via API em worker mode, claim/lock atômico, retomada de job running com lease expirado, proteção contra claim duplicado e processamento completo do worker com SQLite.
+- Files changed: `AGENTS.md`, `README.md`, `app/api/routes.py`, `app/core/job.py`, `app/core/operational_sqlite.py`, `app/services/job_service.py`, `app/services/runtime.py`, `app/services/validation_service.py`, `app/workers/validation_worker.py`, `deploy/k8s/deployment.yaml`, `tests/test_worker.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+- **Learnings for future iterations:**
+  - Worker mode depende do backend SQLite do `JobService`; o fallback JSON/in-memory continua útil para dev/test, mas não oferece o claim/lease cross-process necessário para produção.
+  - Rotas que enfileiram jobs precisam persistir o `file_path` antes de o lote ficar claimable; o claim SQL filtra apenas jobs com artefato pronto para evitar corrida entre upload/cópia e execução.
+  - Rebuilds in-place de artefatos reutilizam o mesmo lifecycle do job, então o caminho de execução precisa continuar aceitando refresh de jobs já `completed` sem criar uma segunda máquina de estados.
 ---

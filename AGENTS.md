@@ -191,6 +191,7 @@ If there are still stories with passes: false, end your response normally (anoth
 ## API Guidance
 - Keep API handlers thin
 - API endpoints should delegate orchestration to services
+- Dedicated worker mode should keep the API enqueue-only and rely on shared SQLite-backed `JobService` claims/leases; keep inline/background execution as the local/test fallback, not the production default.
 - API code should not contain validation business rules
 - API code should not know tenant-specific rule details beyond selecting the tenant/config
 - Public setup/auth bootstrap routes must be explicitly allowlisted in `app/api/auth.py` and should still delegate all state changes to services.

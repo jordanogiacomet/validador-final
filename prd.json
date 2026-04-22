@@ -926,6 +926,186 @@
       "priority": 53,
       "passes": true,
       "notes": "Implementado estendendo o audit log existente com classificação de eventos administrativos, metadados estruturados de ator/alvo/resultado, filtros server-side por tenant/ator/alvo/tipo/período, sanitização centralizada de payload sensível e autorização de leitura via AuthService sem criar armazenamento paralelo."
+    },
+    {
+      "id": "US-054",
+      "title": "Processar validações em worker dedicado com fila durável",
+      "description": "Como operador, preciso que os lotes de validação sejam executados fora do processo web para que reinícios, rollouts e picos de carga não interrompam o processamento.",
+      "acceptanceCriteria": [
+        "Separar o enfileiramento do lote da execução da validação, sem depender de `BackgroundTasks` no processo da API para concluir jobs em produção",
+        "Persistir jobs enfileirados e permitir que um worker dedicado os consuma de forma segura usando o storage operacional compartilhado",
+        "Garantir retomada segura após reinício da API ou do worker, sem perder jobs e sem processar o mesmo lote duas vezes em paralelo",
+        "Manter um modo simples para desenvolvimento local sem exigir infraestrutura externa complexa",
+        "Atualizar manifests e documentação operacional para refletir a separação entre API e worker",
+        "Adicionar testes focados para enfileiramento, claim/lock, retomada e proteção contra execução duplicada",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 54,
+      "passes": true,
+      "notes": "Implementado com claim/lease durável em SQLite no `JobService`, worker dedicado em `app/workers/validation_worker.py`, modo `VALIDATOR_JOB_EXECUTION_MODE=worker` para deixar a API apenas enfileirar em produção, e deploy/documentação atualizados para rodar API e worker separadamente sobre os mesmos volumes compartilhados."
+    },
+    {
+      "id": "US-055",
+      "title": "Validar arquivo e cabeçalho antes de criar o job",
+      "description": "Como operador, preciso descobrir problemas de layout, delimitador, codificação e colunas antes de iniciar o lote para evitar espera desnecessária e retrabalho.",
+      "acceptanceCriteria": [
+        "Adicionar um fluxo de preflight que valide arquivo vazio, extensão suportada, tamanho máximo e legibilidade básica antes de criar o job",
+        "Detectar e reportar de forma operacional problemas de delimitador, encoding, cabeçalho ausente e colunas obrigatórias não mapeadas para o tenant",
+        "Expor retorno estruturado com colunas detectadas, colunas faltantes e orientações de correção",
+        "Impedir a criação do job quando o preflight falhar",
+        "Exibir mensagens inline claras no frontend sem exigir que o operador acompanhe um lote já condenado ao erro",
+        "Adicionar testes backend e frontend para sucesso, arquivo inválido e incompatibilidade de layout",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 55,
+      "passes": false,
+      "notes": "Prioridade alta porque a experiência atual descobre erros estruturais tarde demais e gera custo de suporte evitável."
+    },
+    {
+      "id": "US-056",
+      "title": "Aceitar CSV e XLSX com template guiado por tenant",
+      "description": "Como operador, quero enviar planilhas em formatos comuns e baixar um template do tenant para reduzir erros de entrada e acelerar a preparação do arquivo.",
+      "acceptanceCriteria": [
+        "Aceitar upload de CSV e XLSX preservando a normalização para os campos canônicos existentes",
+        "Disponibilizar template ou planilha-modelo por tenant com colunas esperadas e instruções operacionais mínimas",
+        "Manter compatibilidade com as configurações de coluna já definidas por tenant sem introduzir lógica hardcoded no core",
+        "Atualizar o frontend para comunicar formatos aceitos, diferenças práticas entre CSV e XLSX e acesso ao template",
+        "Garantir testes de parsing equivalentes entre CSV e XLSX para os mesmos dados de entrada",
+        "Adicionar testes para download do template e para rejeição de formatos não suportados",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 56,
+      "passes": false,
+      "notes": "Prioridade alta para reduzir fricção de onboarding e alinhar o operador com o layout esperado antes do processamento."
+    },
+    {
+      "id": "US-057",
+      "title": "Gerenciar e versionar perfis de validação por tenant na aplicação",
+      "description": "Como administrador, preciso editar regras, thresholds, categorias, normalização e prompts por tenant sem depender de alteração manual em YAML para que o produto seja realmente multi-tenant e operável.",
+      "acceptanceCriteria": [
+        "Permitir visualizar e editar na aplicação os principais componentes do perfil de validação do tenant: regras habilitadas, thresholds, categorias, dicionários de normalização e referências de prompt",
+        "Versionar alterações de configuração com histórico, autor, data e possibilidade de rollback para uma versão anterior",
+        "Validar o schema e a consistência da configuração antes de publicar uma nova versão",
+        "Separar claramente rascunho e versão publicada para não quebrar jobs em execução",
+        "Manter compatibilidade com tenants file-based existentes como bootstrap ou fallback, sem espalhar lógica específica no core",
+        "Adicionar testes para publicação, rollback, isolamento entre tenants e rejeição de configuração inválida",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 57,
+      "passes": false,
+      "notes": "Prioridade alta porque a proposta multi-tenant ainda depende demais de configuração manual fora do produto."
+    },
+    {
+      "id": "US-058",
+      "title": "Endurecer autenticação para produção e remover credenciais inseguras por padrão",
+      "description": "Como responsável pelo ambiente, preciso impedir que credenciais seed, chaves estáticas legadas e sessões expostas no navegador permaneçam como caminho padrão em produção.",
+      "acceptanceCriteria": [
+        "Adicionar modo de produção explícito que desabilite por padrão `api_keys` legadas em YAML e credenciais seed reutilizáveis, permitindo exceções apenas por configuração consciente",
+        "Falhar de forma visível no startup ou no healthcheck quando o ambiente de produção estiver com credenciais inseguras habilitadas indevidamente",
+        "Reduzir a exposição do segredo de sessão emitido no frontend, evitando armazenamento persistente inseguro do valor bruto quando houver alternativa segura disponível",
+        "Preservar os fluxos de login, renovação, revogação e troca obrigatória de senha para operadores válidos",
+        "Adicionar auditoria e testes cobrindo rejeição de credenciais legadas em produção, compatibilidade local e renovação/logout sem regressão",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 58,
+      "passes": false,
+      "notes": "Prioridade alta para reduzir risco real de produção em autenticação e gestão de segredos."
+    },
+    {
+      "id": "US-059",
+      "title": "Aplicar política de retenção e limpeza de artefatos operacionais",
+      "description": "Como gestor operacional, preciso controlar por quanto tempo uploads, resultados, caches e sidecars ficam armazenados para reduzir custo, risco e crescimento desordenado do storage.",
+      "acceptanceCriteria": [
+        "Definir política configurável de retenção para uploads, resultados, relatórios, `review_flags` e cache de LLM",
+        "Ignorar jobs ativos, recém-processados ou explicitamente preservados durante a limpeza",
+        "Registrar em auditoria ou log estruturado as execuções de limpeza e os artefatos removidos",
+        "Expor pelo menos uma forma operacional de executar ou inspecionar a limpeza sem acesso manual ao filesystem do pod",
+        "Adicionar testes para retenção, exclusão segura e proteção de artefatos ainda referenciados",
+        "Ruff lint e pytest passam"
+      ],
+      "priority": 59,
+      "passes": false,
+      "notes": "Prioridade média porque o sistema já persiste artefatos importantes, mas ainda sem ciclo de vida explícito."
+    },
+    {
+      "id": "US-060",
+      "title": "Exibir ETA e notificações de conclusão ou falha do lote",
+      "description": "Como operador, quero saber aproximadamente quanto falta para o lote terminar e ser avisado quando ele concluir ou falhar para não depender de polling manual constante.",
+      "acceptanceCriteria": [
+        "Estimar tempo restante do lote com base no progresso disponível, preservando mensagens honestas quando a estimativa ainda for incerta",
+        "Exibir ETA e estado de conclusão/falha no frontend operacional sem poluir o fluxo principal",
+        "Notificar o operador quando o lote concluir, falhar ou for cancelado, inclusive após troca de aba quando tecnicamente possível",
+        "Evitar notificações duplicadas para o mesmo evento terminal",
+        "Adicionar testes frontend para atualização de ETA e notificação dos estados terminais",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 60,
+      "passes": false,
+      "notes": "Prioridade média para melhorar previsibilidade operacional sem alterar a semântica do motor de validação."
+    },
+    {
+      "id": "US-061",
+      "title": "Rastrear histórico de correções com diff e reversão segura",
+      "description": "Como operador, preciso visualizar o histórico das edições e consolidações feitas em um lote e desfazer correções específicas antes do reprocessamento quando necessário.",
+      "acceptanceCriteria": [
+        "Persistir histórico estruturado para edições de linha, marcações de revisão e consolidações de duplicidade com ator, timestamp e diff antes/depois",
+        "Permitir visualizar esse histórico por lote no frontend operacional",
+        "Permitir reversão segura de correções elegíveis antes do próximo reprocessamento, sem corromper o CSV corrigido",
+        "Manter auditoria e lineage do job consistentes após desfazer e reaplicar correções",
+        "Adicionar testes backend e frontend para histórico, diff e reversão",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 61,
+      "passes": false,
+      "notes": "Prioridade média porque a camada de correção já existe, mas ainda sem trilha completa de mudança e rollback seguro."
+    },
+    {
+      "id": "US-062",
+      "title": "Automatizar CI com checks full-stack e smoke da jornada principal",
+      "description": "Como time de desenvolvimento, preciso que lint, testes e uma verificação mínima da jornada principal rodem automaticamente para reduzir regressões antes de publicar.",
+      "acceptanceCriteria": [
+        "Adicionar pipeline automatizado que execute checks backend e frontend em toda alteração relevante",
+        "Executar automaticamente `ruff`, `pytest`, frontend typecheck, frontend lint e frontend testes",
+        "Adicionar pelo menos um smoke test da jornada crítica autenticada cobrindo login, envio de arquivo e leitura do resultado ou estado do lote",
+        "Falhas no pipeline devem bloquear a promoção normal da alteração até correção",
+        "Documentar pré-requisitos e comandos locais equivalentes para depuração",
+        "Os checks automatizados devem ficar estáveis e reproduzíveis no repositório"
+      ],
+      "priority": 62,
+      "passes": false,
+      "notes": "Prioridade média porque a suíte local é boa, mas ainda falta enforcement automatizado de qualidade na entrega."
+    },
+    {
+      "id": "US-063",
+      "title": "Medir KPIs operacionais e custo de LLM por tenant",
+      "description": "Como gestor, preciso acompanhar volume, tempo, taxa de erro e custo de auditoria LLM por tenant para saber onde o produto gera valor e onde consome recursos demais.",
+      "acceptanceCriteria": [
+        "Consolidar indicadores por tenant e período para quantidade de lotes, linhas processadas, taxa de erro, taxa de aviso, tempo médio e uso de LLM",
+        "Quando houver auditoria LLM, estimar e expor custo ou consumo de forma auditável por tenant e por modelo",
+        "Restringir visibilidade global a `platform_admin` e visão tenant-scoped a administradores do próprio tenant",
+        "Permitir exportar ou consultar esses indicadores sem depender de leitura manual de logs brutos",
+        "Adicionar testes para agregação, autorização e consistência dos cálculos",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 63,
+      "passes": false,
+      "notes": "Prioridade baixa porque depende de uma base operacional mais endurecida antes de virar prioridade de produto."
+    },
+    {
+      "id": "US-064",
+      "title": "Tornar o deploy portável e resiliente para múltiplos ambientes",
+      "description": "Como time de plataforma, preciso publicar a aplicação sem depender de IPs fixos, NodePorts hardcoded ou réplica única para operar com mais segurança e flexibilidade.",
+      "acceptanceCriteria": [
+        "Remover dependências de IPs e portas hardcoded dos manifests e do frontend, passando a configuração externa por ambiente",
+        "Suportar exposição por ingress ou camada equivalente com configuração de origem/TLS adequada",
+        "Preparar API, frontend e worker para operar com mais de uma réplica quando a arquitetura da story US-054 estiver disponível",
+        "Revisar readiness/liveness e configuração de storage para um deploy mais robusto em rollout e restart",
+        "Atualizar documentação e manifests de publicação para múltiplos ambientes",
+        "Adicionar validações ou smoke checks de deploy compatíveis com o ambiente-alvo"
+      ],
+      "priority": 64,
+      "passes": false,
+      "notes": "Prioridade média para reduzir acoplamento do deploy a um ambiente específico e abrir caminho para crescimento seguro."
     }
   ],
   "nonFunctionalRequirements": {

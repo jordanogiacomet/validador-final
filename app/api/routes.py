@@ -16,7 +16,6 @@ from app.api.auth import (
 )
 from app.core.audit import AuditEvent, AuditEventType, AuditPrincipal
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
-from app.core.operational_sqlite import OPERATIONAL_SQLITE_PATH_ENV
 from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
 from app.core.tenant_loader import list_tenants, load_tenant_config, tenant_ids_match
 from app.core.validation_scope import (
@@ -25,9 +24,8 @@ from app.core.validation_scope import (
     ValidationScope,
     parse_validation_scope,
 )
-from app.services.audit_service import AuditService
 from app.services.auth_service import AuthServiceError, EffectiveOperator
-from app.services.job_service import JobService
+from app.services.runtime import build_audit_service, build_job_service
 from app.services.tenant_admin_service import (
     TenantAdminRecord,
     TenantAdminService,
@@ -51,30 +49,14 @@ from app.services.validation_service import (
 )
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+JOB_EXECUTION_MODE_ENV = "VALIDATOR_JOB_EXECUTION_MODE"
+JOB_EXECUTION_MODE_BACKGROUND = "background"
+JOB_EXECUTION_MODE_WORKER = "worker"
 
 router = APIRouter()
 
 
-def _build_audit_service() -> AuditService:
-    sqlite_path = os.getenv(OPERATIONAL_SQLITE_PATH_ENV)
-    storage_path = os.getenv("VALIDATOR_AUDIT_STORE_PATH")
-    return AuditService(
-        storage_path=Path(storage_path) if storage_path else None,
-        sqlite_path=Path(sqlite_path) if sqlite_path else None,
-    )
-
-
-def _build_job_service() -> JobService:
-    sqlite_path = os.getenv(OPERATIONAL_SQLITE_PATH_ENV)
-    storage_path = os.getenv("VALIDATOR_JOB_STORE_PATH")
-    return JobService(
-        storage_path=Path(storage_path) if storage_path else None,
-        sqlite_path=Path(sqlite_path) if sqlite_path else None,
-        audit_service=audit_service,
-    )
-
-
-audit_service = _build_audit_service()
+audit_service = build_audit_service()
 auth_service.set_audit_service(audit_service)
 
 
@@ -83,10 +65,45 @@ def _build_tenant_admin_service() -> TenantAdminService:
 
 
 tenant_admin_service = _build_tenant_admin_service()
-job_service = _build_job_service()
+job_service = build_job_service(audit_service=audit_service)
 
 LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 LOGIN_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@-]+$")
+
+
+def _get_job_execution_mode() -> str:
+    configured_value = (
+        os.getenv(JOB_EXECUTION_MODE_ENV, JOB_EXECUTION_MODE_BACKGROUND)
+        .strip()
+        .lower()
+    )
+    if configured_value in {
+        JOB_EXECUTION_MODE_BACKGROUND,
+        JOB_EXECUTION_MODE_WORKER,
+    }:
+        return configured_value
+    raise RuntimeError(
+        f"Unsupported {JOB_EXECUTION_MODE_ENV} value: {configured_value}"
+    )
+
+
+def _schedule_validation_execution(
+    *,
+    background_tasks: BackgroundTasks,
+    job_id: str,
+) -> None:
+    execution_mode = _get_job_execution_mode()
+    if execution_mode == JOB_EXECUTION_MODE_WORKER:
+        if not job_service.supports_worker_claims:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Worker execution mode requires SQLite-backed operational storage."
+                ),
+            )
+        return
+
+    background_tasks.add_task(run_validation_job, job_id, job_service)
 
 
 class UploadResponse(BaseModel):
@@ -1197,7 +1214,10 @@ async def upload_and_validate(
     job.file_name = stored_file_name
     job_service.save_job(job.job_id)
 
-    background_tasks.add_task(run_validation_job, job.job_id, job_service)
+    _schedule_validation_execution(
+        background_tasks=background_tasks,
+        job_id=job.job_id,
+    )
 
     return UploadResponse(
         job_id=job.job_id,
@@ -1516,7 +1536,10 @@ async def reprocess_job(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
-    background_tasks.add_task(run_validation_job, new_job.job_id, job_service)
+    _schedule_validation_execution(
+        background_tasks=background_tasks,
+        job_id=new_job.job_id,
+    )
 
     return UploadResponse(
         job_id=new_job.job_id,
