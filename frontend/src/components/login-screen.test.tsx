@@ -50,8 +50,8 @@ describe("LoginScreen", () => {
   it("renders the typed tenant login fields", () => {
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    expect(screen.getByLabelText("Código da empresa")).toBeDefined();
-    expect(screen.getByLabelText("Usuário")).toBeDefined();
+    expect(screen.getByLabelText("Codigo da empresa")).toBeDefined();
+    expect(screen.getByLabelText("Usuario")).toBeDefined();
     expect(screen.getByLabelText("Senha")).toBeDefined();
     expect(screen.queryByText("default.operator")).toBeNull();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeDefined();
@@ -66,7 +66,7 @@ describe("LoginScreen", () => {
     expect(screen.getByText("default.operator")).toBeDefined();
   });
 
-  it("shows the initial setup form only when the API reports setup availability", async () => {
+  it("keeps first access as a separate mode instead of mixing it into the login form", async () => {
     getInitialSetupStateMock.mockResolvedValueOnce({
       available: true,
       storage_configured: true,
@@ -76,10 +76,18 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    expect(await screen.findByText("Criar administrador inicial")).toBeDefined();
-    expect(screen.getByLabelText("Usuário administrador")).toBeDefined();
-    expect(screen.getByLabelText("Senha inicial")).toBeDefined();
-    expect(screen.queryByLabelText("Token de setup")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Primeiro acesso" })).toBeDefined();
+    expect(screen.queryByLabelText("Usuario administrador")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Primeiro acesso" }));
+
+    expect(await screen.findByLabelText("Usuario administrador")).toBeDefined();
+    expect(screen.queryByLabelText("Codigo da empresa")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Voltar ao login" }));
+
+    expect(await screen.findByLabelText("Codigo da empresa")).toBeDefined();
+    expect(screen.queryByLabelText("Usuario administrador")).toBeNull();
   });
 
   it("creates the initial admin and prepares the login form for the created account", async () => {
@@ -99,7 +107,8 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(await screen.findByLabelText("Usuário administrador"), {
+    fireEvent.click(await screen.findByRole("button", { name: "Primeiro acesso" }));
+    fireEvent.change(screen.getByLabelText("Usuario administrador"), {
       target: { value: "admin.inicial" },
     });
     fireEvent.change(screen.getByLabelText("Senha inicial"), {
@@ -116,13 +125,13 @@ describe("LoginScreen", () => {
     });
 
     expect(
-      await screen.findByText("Administrador inicial criado. Entre com o usuário criado."),
+      await screen.findByText("Administrador inicial criado. Entre com o usuario criado."),
     ).toBeDefined();
-    expect(screen.queryByText("Criar administrador inicial")).toBeNull();
-    expect((screen.getByLabelText("Código da empresa") as HTMLInputElement).value).toBe(
+    expect(screen.queryByLabelText("Usuario administrador")).toBeNull();
+    expect((screen.getByLabelText("Codigo da empresa") as HTMLInputElement).value).toBe(
       "default",
     );
-    expect((screen.getByLabelText("Usuário") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Usuario") as HTMLInputElement).value).toBe(
       "admin.inicial",
     );
   });
@@ -144,7 +153,8 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(await screen.findByLabelText("Usuário administrador"), {
+    fireEvent.click(await screen.findByRole("button", { name: "Primeiro acesso" }));
+    fireEvent.change(screen.getByLabelText("Usuario administrador"), {
       target: { value: "admin.inicial" },
     });
     fireEvent.change(screen.getByLabelText("Senha inicial"), {
@@ -175,8 +185,8 @@ describe("LoginScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(loginOperatorMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("Informe o código da empresa.")).toBeDefined();
-    expect(screen.getByText("Informe o usuário autorizado para essa empresa.")).toBeDefined();
+    expect(await screen.findByText("Informe o codigo da empresa.")).toBeDefined();
+    expect(screen.getByText("Informe o usuario autorizado para essa empresa.")).toBeDefined();
     expect(screen.getByText("Informe a senha para continuar.")).toBeDefined();
   });
 
@@ -192,8 +202,12 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={onAuthenticated} />);
 
-    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default" } });
-    fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador" } });
+    fireEvent.change(screen.getByLabelText("Codigo da empresa"), {
+      target: { value: "default" },
+    });
+    fireEvent.change(screen.getByLabelText("Usuario"), {
+      target: { value: "operador" },
+    });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
@@ -234,10 +248,10 @@ describe("LoginScreen", () => {
 
     render(<LoginScreen onAuthenticated={onAuthenticated} />);
 
-    fireEvent.change(screen.getByLabelText("Código da empresa"), {
+    fireEvent.change(screen.getByLabelText("Codigo da empresa"), {
       target: { value: "default" },
     });
-    fireEvent.change(screen.getByLabelText("Usuário"), {
+    fireEvent.change(screen.getByLabelText("Usuario"), {
       target: { value: "operador" },
     });
     fireEvent.change(screen.getByLabelText("Senha"), {
@@ -246,8 +260,9 @@ describe("LoginScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(
-      await screen.findByText("Defina a nova senha antes de acessar a área operacional"),
+      await screen.findByText("Conclua esta etapa para liberar o acesso"),
     ).toBeDefined();
+    expect(screen.queryByLabelText("Codigo da empresa")).toBeNull();
     expect(onAuthenticated).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Nova senha"), {
@@ -262,34 +277,38 @@ describe("LoginScreen", () => {
       });
     });
     expect(
-      await screen.findByText("Senha temporária atualizada. Entre novamente com a nova senha."),
+      await screen.findByText("Senha temporaria atualizada. Entre novamente com a nova senha."),
     ).toBeDefined();
     expect(onAuthenticated).not.toHaveBeenCalled();
   });
 
   it.each([
     [
-      "credenciais inválidas",
+      "credenciais invalidas",
       new ApiError("Invalid credentials", 401),
-      "Credenciais inválidas. Revise usuário e senha.",
+      "Credenciais invalidas. Revise usuario e senha.",
     ],
     [
       "empresa inexistente",
       new ApiError("Tenant not found", 404),
-      "Empresa inexistente. Revise o código informado.",
+      "Empresa inexistente. Revise o codigo informado.",
     ],
     [
-      "empresa incompatível",
+      "empresa incompativel",
       new ApiError("Operator is not allowed for this tenant", 403),
-      "Este usuário não pode acessar a empresa informada.",
+      "Este usuario nao pode acessar a empresa informada.",
     ],
   ])("shows a clear message for %s", async (_label, error, message) => {
     loginOperatorMock.mockRejectedValueOnce(error);
 
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default" } });
-    fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador" } });
+    fireEvent.change(screen.getByLabelText("Codigo da empresa"), {
+      target: { value: "default" },
+    });
+    fireEvent.change(screen.getByLabelText("Usuario"), {
+      target: { value: "operador" },
+    });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
@@ -299,15 +318,23 @@ describe("LoginScreen", () => {
   it("blocks tenant and username with invalid characters before calling login", async () => {
     render(<LoginScreen onAuthenticated={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Código da empresa"), { target: { value: "default';--" } });
-    fireEvent.change(screen.getByLabelText("Usuário"), { target: { value: "operador<script>" } });
+    fireEvent.change(screen.getByLabelText("Codigo da empresa"), {
+      target: { value: "default';--" },
+    });
+    fireEvent.change(screen.getByLabelText("Usuario"), {
+      target: { value: "operador<script>" },
+    });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(loginOperatorMock).not.toHaveBeenCalled();
-    expect(await screen.findByText("Use apenas letras, números, ponto, hífen ou underscore.")).toBeDefined();
     expect(
-      screen.getByText("Use apenas letras, números, ponto, arroba, hífen ou underscore."),
+      await screen.findByText("Use apenas letras, numeros, ponto, hifen ou underscore."),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "Use apenas letras, numeros, ponto, arroba, hifen ou underscore.",
+      ),
     ).toBeDefined();
   });
 });

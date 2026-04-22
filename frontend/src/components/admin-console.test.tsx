@@ -18,8 +18,8 @@ import type { TenantValidationProfileResponse } from "@/lib/types";
 
 import { AdminConsole } from "./admin-console";
 
-vi.mock("@/lib/api", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
     ApiError: actual.ApiError,

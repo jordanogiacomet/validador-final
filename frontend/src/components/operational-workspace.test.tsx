@@ -35,10 +35,11 @@ vi.mock("@/components/audit-panel", () => ({
   AuditPanel: () => null,
 }));
 
-vi.mock("@/lib/api", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    ApiError: actual.ApiError,
     listTenants: vi.fn(),
     previewValidationScope: vi.fn(),
     validateFile: vi.fn(),

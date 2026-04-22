@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 18:31 -02
+Last Updated: 2026-04-22 18:50 -02
 
 ---
 
@@ -70,7 +70,9 @@ Last Updated: 2026-04-22 18:31 -02
 - When a rule needs to infer the expected `Marca` from `Modelo`, keep the tenant-owned dictionary in `tenant.normalization.model_brands` keyed by canonical model names and compare against the already-normalized canonical row value.
 - New tenant-owned rule config should use typed Pydantic sub-models in `app/core/tenant_config.py`; validate regex-like entries during tenant load so jobs do not fail mid-validation.
 - Frontend auth should stay centralized in `frontend/src/lib/api.ts`: treat `/login` as the only public call, inject the issued `X-API-Key` for the workspace from shared helpers, and cover UI auth states with Vitest `jsdom` component tests plus `frontend/src/test/setup.ts`.
+- Frontend auth entry in `frontend/src/components/login-screen.tsx` should expose one primary mode at a time (`login`, `primeiro acesso`, `troca obrigatoria de senha`) and keep contextual guidance in the active mode instead of stacking competing forms.
 - Protected frontend downloads must use authenticated helpers in `frontend/src/lib/api.ts`; raw `<a href>` links do not send the issued `X-API-Key` header.
+- Vitest partial mocks of `frontend/src/lib/api.ts` should use `importOriginal()` and preserve shared exports like `ApiError` when tests need to construct API-shaped failures.
 - Client-generated operational CSV exports should be built from the same `frontend/src/lib/presentation.ts` helpers that power the on-screen filters, then downloaded through a shared browser helper in `frontend/src/lib/api.ts`.
 - Tenant-scoped operational panels in the frontend should fetch through authenticated helpers in `frontend/src/lib/api.ts` and keep local filter/reset behavior in `frontend/src/lib/presentation.ts`, resetting context-sensitive filters when the tenant or `currentJobId` changes.
 - For operator-facing frontend flows, keep the main path step-based (`Enviar planilha` -> `Acompanhar lote` -> `Revisar resultado`) and push secondary panels like audit behind an explicit disclosure to reduce visual noise.
@@ -1360,4 +1362,21 @@ Expected architectural direction:
   - A prévia de escopo deve reutilizar exatamente o mesmo preflight do upload para evitar divergência entre o que a UI antecipa e o que o `POST /validate` realmente aceita.
   - Vale calcular todos os recortes em uma única leitura normalizada do arquivo e deixar a troca entre rádios no frontend puramente local; isso reduz round-trips e mantém a resposta imediata ao operador.
   - As contagens por categoria ficam mais úteis quando o backend devolve apenas dados estruturados por escopo e o frontend monta a cópia operacional em `frontend/src/lib/presentation.ts`.
+---
+## 2026-04-22 18:50 -02 - US-066
+- Refatorada a tela de acesso para trabalhar em modos explicitos (`login`, `primeiro acesso`, `troca obrigatoria de senha`), com heroi, copy e contexto diferentes por estado e apenas um formulario principal visivel por vez.
+- Mantidos os fluxos existentes de login, setup inicial e troca obrigatoria de senha; mensagens de erro, bloqueio e sucesso passaram a ficar presas ao modo ativo, sem misturar instrucoes concorrentes no mesmo painel.
+- Atualizados testes frontend do login e ajustados mocks compartilhados de `@/lib/api` em suites relacionadas para preservar `ApiError` e manter a suite completa verde.
+- Files changed: `AGENTS.md`, `frontend/src/app/globals.css`, `frontend/src/components/admin-console.test.tsx`, `frontend/src/components/login-screen.test.tsx`, `frontend/src/components/login-screen.tsx`, `frontend/src/components/operational-workspace.test.tsx`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the auth entry flow is still recommended before publishing.
+- **Learnings for future iterations:**
+  - O fluxo de autenticacao do frontend deve manter um unico estado primario visivel por vez; setup inicial e troca obrigatoria de senha funcionam melhor como modos explicitos do `login-screen`, nao como formularios empilhados.
+  - Mensagens de sucesso, bloqueio e recuperacao na porta de entrada ficam mais claras quando aparecem somente dentro do modo ativo, em vez de competir com textos de outros fluxos.
+  - Mocks parciais de `frontend/src/lib/api.ts` em Vitest devem preservar exportacoes compartilhadas como `ApiError` via `importOriginal()` para que as suites consigam simular falhas reais da API sem quebrar o runner completo.
 ---

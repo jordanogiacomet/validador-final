@@ -1136,7 +1136,7 @@
         "Frontend typecheck, lint e testes passam"
       ],
       "priority": 66,
-      "passes": false,
+      "passes": true,
       "notes": "Story de UX para reduzir carga cognitiva na porta de entrada do produto."
     },
     {

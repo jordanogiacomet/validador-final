@@ -204,6 +204,7 @@ If there are still stories with passes: false, end your response normally (anoth
 - Public setup/auth bootstrap routes must be explicitly allowlisted in `app/api/auth.py` and should still delegate all state changes to services.
 - First-login password-setup enforcement also lives in `app/api/auth.py`; if you add invite/setup/auth exception paths, update the centralized allowlists there instead of bypassing auth in individual routes.
 - Frontend helpers for public API routes must opt out of auth header injection instead of relying on callers to clear the current session.
+- Frontend auth entry lives in `frontend/src/components/login-screen.tsx`; keep exactly one primary mode visible at a time (`login`, `primeiro acesso`, `troca obrigatoria de senha`) and attach contextual guidance/errors to the active mode instead of stacking competing auth forms.
 - Frontend admin surfaces should gate platform-only controls from `session.role` and treat ordinary `403` permission failures as local inline errors; only `401` or invalid/revoked API-key responses should force logout.
 - Public auth hardening belongs in `AuthService`: pass request origin from routes, keep `/login` responses generic to avoid tenant/operator enumeration, and avoid reimplementing lockout logic in FastAPI handlers.
 - Password-recovery flows should remain token-based through `AuthService`: admins can issue reset tokens, public completion consumes hashed single-use tokens, and raw reset tokens must never be persisted.
