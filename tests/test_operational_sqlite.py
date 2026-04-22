@@ -1,6 +1,13 @@
 from app.core.audit import AuditEventType
 from app.core.health import probe_job_store_storage
 from app.core.job import JobStatus
+from app.core.tenant_profile import (
+    ValidationProfileData,
+    ValidationProfileStorePayload,
+    ValidationProfileVersionRecord,
+    load_validation_profile_store,
+    replace_validation_profile_store,
+)
 from app.core.tenant_runtime import (
     RuntimeTenantRecord,
     load_runtime_tenant_records,
@@ -202,3 +209,27 @@ def test_runtime_tenant_records_sqlite_persist_runtime_metadata(tmp_path) -> Non
     assert reloaded[0].display_name == "Cliente SQLite"
     assert reloaded[0].aliases == ["cliente-sqlite"]
     assert reloaded[0].disabled is True
+
+
+def test_validation_profile_store_sqlite_persists_versions(tmp_path) -> None:
+    sqlite_path = tmp_path / "state" / "operational.sqlite3"
+    store = ValidationProfileStorePayload(
+        versions=[
+            ValidationProfileVersionRecord(
+                tenant_id="default",
+                version_number=1,
+                profile=ValidationProfileData(
+                    enabled_rules=["duplicate_item"],
+                    thresholds={"short_complement_max_words": 7},
+                ),
+            )
+        ]
+    )
+
+    replace_validation_profile_store(store, sqlite_path=sqlite_path)
+    reloaded = load_validation_profile_store(sqlite_path=sqlite_path)
+
+    assert len(reloaded.versions) == 1
+    assert reloaded.versions[0].tenant_id == "default"
+    assert reloaded.versions[0].profile.enabled_rules == ["duplicate_item"]
+    assert reloaded.versions[0].profile.thresholds["short_complement_max_words"] == 7

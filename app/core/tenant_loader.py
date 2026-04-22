@@ -4,6 +4,10 @@ from pathlib import Path
 import yaml
 
 from app.core.tenant_config import DEFAULT_TENANT_ID, APIKeyConfig, TenantConfig
+from app.core.tenant_profile import (
+    apply_validation_profile_to_tenant_config,
+    load_published_validation_profile,
+)
 from app.core.tenant_runtime import RuntimeTenantRecord, load_runtime_tenant_records
 
 TENANTS_DIR = Path(__file__).resolve().parent.parent / "tenants"
@@ -113,6 +117,7 @@ def load_tenant_config(
     tenant_id: str,
     *,
     include_disabled: bool = False,
+    include_profile: bool = True,
     runtime_records: list[RuntimeTenantRecord] | None = None,
 ) -> TenantConfig:
     normalized_tenant_id = tenant_id.strip()
@@ -135,6 +140,11 @@ def load_tenant_config(
     match = matches[0]
     if match.disabled and not include_disabled:
         raise TenantDisabledError(match.tenant_id)
+
+    if include_profile:
+        published_profile = load_published_validation_profile(match.tenant_id)
+        if published_profile is not None:
+            match = apply_validation_profile_to_tenant_config(match, published_profile)
 
     return match
 

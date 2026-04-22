@@ -34,6 +34,9 @@ class AuditEventType(StrEnum):
     TENANT_UPDATED = "tenant_updated"
     TENANT_DISABLED = "tenant_disabled"
     TENANT_REACTIVATED = "tenant_reactivated"
+    TENANT_PROFILE_DRAFT_SAVED = "tenant_profile_draft_saved"
+    TENANT_PROFILE_PUBLISHED = "tenant_profile_published"
+    TENANT_PROFILE_ROLLED_BACK = "tenant_profile_rolled_back"
     AUTHORIZATION_DENIED = "authorization_denied"
 
 
@@ -81,6 +84,9 @@ ADMINISTRATIVE_AUDIT_EVENT_TYPES = frozenset(
         AuditEventType.TENANT_UPDATED,
         AuditEventType.TENANT_DISABLED,
         AuditEventType.TENANT_REACTIVATED,
+        AuditEventType.TENANT_PROFILE_DRAFT_SAVED,
+        AuditEventType.TENANT_PROFILE_PUBLISHED,
+        AuditEventType.TENANT_PROFILE_ROLLED_BACK,
         AuditEventType.AUTHORIZATION_DENIED,
     }
 )

@@ -391,6 +391,62 @@ class OperationalSQLiteStore:
             rows=rows,
         )
 
+    def load_validation_profile_drafts(self) -> list[dict[str, Any]]:
+        return self._load_payloads(
+            "SELECT payload FROM validation_profile_drafts ORDER BY tenant_id ASC"
+        )
+
+    def replace_validation_profile_drafts(
+        self,
+        payloads: Iterable[dict[str, Any]],
+    ) -> None:
+        rows = [
+            (
+                str(payload["tenant_id"]),
+                str(payload["updated_at"]),
+                _serialize_payload(payload),
+            )
+            for payload in payloads
+        ]
+        self._replace_rows(
+            table_name="validation_profile_drafts",
+            insert_sql=(
+                "INSERT INTO validation_profile_drafts "
+                "(tenant_id, updated_at, payload) VALUES (?, ?, ?)"
+            ),
+            rows=rows,
+        )
+
+    def load_validation_profile_versions(self) -> list[dict[str, Any]]:
+        return self._load_payloads(
+            "SELECT payload FROM validation_profile_versions "
+            "ORDER BY tenant_id ASC, version_number ASC"
+        )
+
+    def replace_validation_profile_versions(
+        self,
+        payloads: Iterable[dict[str, Any]],
+    ) -> None:
+        rows = [
+            (
+                str(payload["version_id"]),
+                str(payload["tenant_id"]),
+                int(payload["version_number"]),
+                str(payload["published_at"]),
+                _serialize_payload(payload),
+            )
+            for payload in payloads
+        ]
+        self._replace_rows(
+            table_name="validation_profile_versions",
+            insert_sql=(
+                "INSERT INTO validation_profile_versions "
+                "(version_id, tenant_id, version_number, published_at, payload) "
+                "VALUES (?, ?, ?, ?, ?)"
+            ),
+            rows=rows,
+        )
+
     def try_insert_first_operator_record(self, payload: dict[str, Any]) -> bool:
         """Insert one operator only if no persisted operators exist yet."""
         row = (
@@ -522,6 +578,24 @@ class OperationalSQLiteStore:
             ON runtime_tenants (display_name_key);
         CREATE INDEX IF NOT EXISTS runtime_tenants_disabled_idx
             ON runtime_tenants (disabled);
+
+        CREATE TABLE IF NOT EXISTS validation_profile_drafts (
+            tenant_id TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS validation_profile_versions (
+            version_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            published_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS validation_profile_versions_tenant_number_idx
+            ON validation_profile_versions (tenant_id, version_number);
+        CREATE INDEX IF NOT EXISTS validation_profile_versions_tenant_published_idx
+            ON validation_profile_versions (tenant_id, published_at);
         """
         with self._connect() as connection:
             connection.executescript(schema)

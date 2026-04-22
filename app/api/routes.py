@@ -18,6 +18,11 @@ from app.core.audit import AuditEvent, AuditEventType, AuditPrincipal
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
 from app.core.tenant_loader import list_tenants, load_tenant_config, tenant_ids_match
+from app.core.tenant_profile import (
+    ValidationProfileData,
+    ValidationProfileDraftRecord,
+    ValidationProfileVersionRecord,
+)
 from app.core.validation_scope import (
     DEFAULT_VALIDATION_SCOPE,
     VALIDATION_SCOPE_PARAM,
@@ -31,6 +36,10 @@ from app.services.tenant_admin_service import (
     TenantAdminService,
     TenantAdminServiceError,
     TenantSource,
+)
+from app.services.tenant_profile_service import (
+    TenantProfileService,
+    TenantProfileServiceError,
 )
 from app.services.validation_service import (
     OperationalExportKind,
@@ -68,7 +77,12 @@ def _build_tenant_admin_service() -> TenantAdminService:
     return TenantAdminService(audit_service=audit_service)
 
 
+def _build_tenant_profile_service() -> TenantProfileService:
+    return TenantProfileService(audit_service=audit_service)
+
+
 tenant_admin_service = _build_tenant_admin_service()
+tenant_profile_service = _build_tenant_profile_service()
 job_service = build_job_service(audit_service=audit_service)
 
 LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -212,6 +226,45 @@ class TenantAdminResponse(BaseModel):
     disabled: bool
     source: TenantSource
     is_default: bool = False
+
+
+class ValidationProfileDraftResponse(BaseModel):
+    tenant_id: str
+    profile: ValidationProfileData
+    updated_at: datetime
+    updated_by_operator_id: str | None = None
+    updated_by_username: str | None = None
+    updated_by_role: str | None = None
+
+
+class ValidationProfileVersionResponse(BaseModel):
+    tenant_id: str
+    version_id: str
+    version_number: int
+    profile: ValidationProfileData
+    published_at: datetime
+    published_by_operator_id: str | None = None
+    published_by_username: str | None = None
+    published_by_role: str | None = None
+    source: str
+    rollback_source_version_id: str | None = None
+
+
+class TenantValidationProfileResponse(BaseModel):
+    tenant_id: str
+    source: str
+    current_profile: ValidationProfileData
+    draft: ValidationProfileDraftResponse | None = None
+    published_version: ValidationProfileVersionResponse | None = None
+    versions: list[ValidationProfileVersionResponse] = Field(default_factory=list)
+
+
+class TenantValidationProfileDraftRequest(BaseModel):
+    profile: ValidationProfileData
+
+
+class TenantValidationProfileRollbackRequest(BaseModel):
+    version_id: str = Field(min_length=1)
 
 
 class TenantAdminCreateRequest(BaseModel):
@@ -544,6 +597,60 @@ def _build_tenant_admin_response(tenant: TenantAdminRecord) -> TenantAdminRespon
     )
 
 
+def _build_profile_draft_response(
+    draft: ValidationProfileDraftRecord,
+) -> ValidationProfileDraftResponse:
+    return ValidationProfileDraftResponse(
+        tenant_id=draft.tenant_id,
+        profile=draft.profile,
+        updated_at=draft.updated_at,
+        updated_by_operator_id=draft.updated_by_operator_id,
+        updated_by_username=draft.updated_by_username,
+        updated_by_role=draft.updated_by_role,
+    )
+
+
+def _build_profile_version_response(
+    version: ValidationProfileVersionRecord,
+) -> ValidationProfileVersionResponse:
+    return ValidationProfileVersionResponse(
+        tenant_id=version.tenant_id,
+        version_id=version.version_id,
+        version_number=version.version_number,
+        profile=version.profile,
+        published_at=version.published_at,
+        published_by_operator_id=version.published_by_operator_id,
+        published_by_username=version.published_by_username,
+        published_by_role=version.published_by_role,
+        source=version.source,
+        rollback_source_version_id=version.rollback_source_version_id,
+    )
+
+
+def _build_tenant_validation_profile_response(
+    state,
+) -> TenantValidationProfileResponse:
+    return TenantValidationProfileResponse(
+        tenant_id=state.tenant_id,
+        source=state.source,
+        current_profile=state.current_profile,
+        draft=(
+            _build_profile_draft_response(state.draft)
+            if state.draft is not None
+            else None
+        ),
+        published_version=(
+            _build_profile_version_response(state.published_version)
+            if state.published_version is not None
+            else None
+        ),
+        versions=[
+            _build_profile_version_response(version)
+            for version in state.versions
+        ],
+    )
+
+
 def _request_origin(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for", "").strip()
     if forwarded_for:
@@ -569,6 +676,25 @@ def _get_authorized_job(request: Request, job_id: str):
 
 
 def _authorize_operator_management(
+    request: Request,
+    *,
+    target_tenant_id: str,
+    action: str,
+) -> str:
+    auth = get_authenticated_tenant(request)
+    try:
+        return auth_service.authorize_operator_management(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            target_tenant_id=target_tenant_id,
+            action=action,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
+def _authorize_validation_profile_management(
     request: Request,
     *,
     target_tenant_id: str,
@@ -878,6 +1004,108 @@ async def admin_reactivate_tenant(
     except TenantAdminServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     return _build_tenant_admin_response(tenant)
+
+
+@router.get(
+    "/admin/tenants/{tenant_id}/validation-profile",
+    response_model=TenantValidationProfileResponse,
+)
+async def admin_get_tenant_validation_profile(
+    request: Request,
+    tenant_id: str,
+) -> TenantValidationProfileResponse:
+    resolved_tenant_id = _authorize_validation_profile_management(
+        request,
+        target_tenant_id=tenant_id,
+        action="validation_profiles.read",
+    )
+    try:
+        state = tenant_profile_service.get_profile_state(resolved_tenant_id)
+    except TenantProfileServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_validation_profile_response(state)
+
+
+@router.put(
+    "/admin/tenants/{tenant_id}/validation-profile/draft",
+    response_model=TenantValidationProfileResponse,
+)
+async def admin_save_tenant_validation_profile_draft(
+    request: Request,
+    tenant_id: str,
+    payload: TenantValidationProfileDraftRequest,
+) -> TenantValidationProfileResponse:
+    auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
+    resolved_tenant_id = _authorize_validation_profile_management(
+        request,
+        target_tenant_id=tenant_id,
+        action="validation_profiles.save_draft",
+    )
+    try:
+        state = tenant_profile_service.save_draft(
+            tenant_id=resolved_tenant_id,
+            profile=payload.profile,
+            api_key_id=auth.api_key_id,
+            actor=actor,
+        )
+    except TenantProfileServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_validation_profile_response(state)
+
+
+@router.post(
+    "/admin/tenants/{tenant_id}/validation-profile/publish",
+    response_model=TenantValidationProfileResponse,
+)
+async def admin_publish_tenant_validation_profile_draft(
+    request: Request,
+    tenant_id: str,
+) -> TenantValidationProfileResponse:
+    auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
+    resolved_tenant_id = _authorize_validation_profile_management(
+        request,
+        target_tenant_id=tenant_id,
+        action="validation_profiles.publish",
+    )
+    try:
+        state = tenant_profile_service.publish_draft(
+            tenant_id=resolved_tenant_id,
+            api_key_id=auth.api_key_id,
+            actor=actor,
+        )
+    except TenantProfileServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_validation_profile_response(state)
+
+
+@router.post(
+    "/admin/tenants/{tenant_id}/validation-profile/rollback",
+    response_model=TenantValidationProfileResponse,
+)
+async def admin_rollback_tenant_validation_profile(
+    request: Request,
+    tenant_id: str,
+    payload: TenantValidationProfileRollbackRequest,
+) -> TenantValidationProfileResponse:
+    auth = get_authenticated_tenant(request)
+    actor = _build_request_audit_actor(request)
+    resolved_tenant_id = _authorize_validation_profile_management(
+        request,
+        target_tenant_id=tenant_id,
+        action="validation_profiles.rollback",
+    )
+    try:
+        state = tenant_profile_service.rollback_to_version(
+            tenant_id=resolved_tenant_id,
+            version_id=payload.version_id,
+            api_key_id=auth.api_key_id,
+            actor=actor,
+        )
+    except TenantProfileServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _build_tenant_validation_profile_response(state)
 
 
 @router.get("/tenants", response_model=list[TenantListItemResponse])

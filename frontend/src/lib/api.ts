@@ -17,6 +17,8 @@ import type {
   RowUpdateResponse,
   TenantAdminResponse,
   TenantListItem,
+  TenantValidationProfileData,
+  TenantValidationProfileResponse,
   UploadPreflightPayload,
   UploadResponse,
   ValidationScope,
@@ -450,6 +452,61 @@ export async function reactivateAdminTenant(
     },
   );
   return readResponse<TenantAdminResponse>(response);
+}
+
+export async function getTenantValidationProfile(
+  tenantId: string,
+): Promise<TenantValidationProfileResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/validation-profile`,
+  );
+  return readResponse<TenantValidationProfileResponse>(response);
+}
+
+export async function saveTenantValidationProfileDraft(
+  tenantId: string,
+  profile: TenantValidationProfileData,
+): Promise<TenantValidationProfileResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/validation-profile/draft`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ profile }),
+    },
+  );
+  return readResponse<TenantValidationProfileResponse>(response);
+}
+
+export async function publishTenantValidationProfileDraft(
+  tenantId: string,
+): Promise<TenantValidationProfileResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/validation-profile/publish`,
+    {
+      method: "POST",
+    },
+  );
+  return readResponse<TenantValidationProfileResponse>(response);
+}
+
+export async function rollbackTenantValidationProfile(
+  tenantId: string,
+  versionId: string,
+): Promise<TenantValidationProfileResponse> {
+  const response = await apiFetch(
+    `/admin/tenants/${encodeURIComponent(tenantId)}/validation-profile/rollback`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version_id: versionId }),
+    },
+  );
+  return readResponse<TenantValidationProfileResponse>(response);
 }
 
 export async function listAuditEvents(params: {

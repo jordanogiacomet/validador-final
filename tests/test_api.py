@@ -15,6 +15,7 @@ from app.core.tenant_config import OperatorRole
 from app.core.tenant_loader import load_tenant_config
 from app.main import app
 from app.services.tenant_admin_service import TenantAdminService
+from app.services.tenant_profile_service import TenantProfileService
 from app.services.validation_service import run_validation_job
 
 client = TestClient(app)
@@ -59,6 +60,23 @@ def enable_tenant_admin_storage(monkeypatch, tmp_path) -> Path:
         ),
     )
     return tenant_storage_path
+
+
+def enable_tenant_profile_storage(monkeypatch, tmp_path) -> Path:
+    profile_storage_path = tmp_path / "validation_profiles.json"
+    monkeypatch.setenv("VALIDATOR_TENANT_PROFILE_STORE_PATH", str(profile_storage_path))
+
+    import app.api.routes as routes
+
+    monkeypatch.setattr(
+        routes,
+        "tenant_profile_service",
+        TenantProfileService(
+            storage_path=profile_storage_path,
+            audit_service=audit_service,
+        ),
+    )
+    return profile_storage_path
 
 
 def login_headers(
@@ -1577,6 +1595,148 @@ def test_disabled_tenant_rejects_new_operator_creation(tmp_path, monkeypatch):
     )
     assert create_operator.status_code == 403
     assert create_operator.json()["detail"] == "Tenant is disabled"
+
+
+def test_tenant_profile_draft_publish_and_loader_overlay(tmp_path, monkeypatch):
+    enable_tenant_profile_storage(monkeypatch, tmp_path)
+    headers, login_payload = login_headers()
+
+    profile_response = client.get(
+        "/admin/tenants/default/validation-profile",
+        headers=headers,
+    )
+    assert profile_response.status_code == 200
+    profile_state = profile_response.json()
+    assert profile_state["source"] == "file"
+    draft_profile = profile_state["current_profile"]
+    draft_profile["thresholds"]["short_complement_max_words"] = 9
+    draft_profile["enabled_rules"] = ["duplicate_item", "flag_consistency"]
+
+    draft_response = client.put(
+        "/admin/tenants/default/validation-profile/draft",
+        headers=headers,
+        json={"profile": draft_profile},
+    )
+
+    assert draft_response.status_code == 200
+    assert draft_response.json()["draft"]["updated_by_operator_id"] == (
+        login_payload["operator_id"]
+    )
+    assert load_tenant_config("default").thresholds["short_complement_max_words"] == 3
+
+    publish_response = client.post(
+        "/admin/tenants/default/validation-profile/publish",
+        headers=headers,
+    )
+
+    assert publish_response.status_code == 200
+    published_state = publish_response.json()
+    assert published_state["source"] == "published"
+    assert published_state["draft"] is None
+    assert published_state["published_version"]["version_number"] == 1
+    assert published_state["current_profile"]["enabled_rules"] == [
+        "duplicate_item",
+        "flag_consistency",
+    ]
+
+    loaded = load_tenant_config("default")
+    assert loaded.thresholds["short_complement_max_words"] == 9
+    assert loaded.enabled_rules == ["duplicate_item", "flag_consistency"]
+
+    event_types = [event.event_type for event in audit_service.list_events(tenant_id="default")]
+    assert AuditEventType.TENANT_PROFILE_PUBLISHED in event_types
+    assert AuditEventType.TENANT_PROFILE_DRAFT_SAVED in event_types
+
+
+def test_tenant_profile_rollback_creates_new_version_and_keeps_tenants_isolated(
+    tmp_path,
+    monkeypatch,
+):
+    enable_tenant_profile_storage(monkeypatch, tmp_path)
+    headers = platform_admin_headers()
+
+    default_profile_response = client.get(
+        "/admin/tenants/default/validation-profile",
+        headers=headers,
+    )
+    default_profile = default_profile_response.json()["current_profile"]
+    default_profile["thresholds"]["short_complement_max_words"] = 5
+    assert client.put(
+        "/admin/tenants/default/validation-profile/draft",
+        headers=headers,
+        json={"profile": default_profile},
+    ).status_code == 200
+    version_one_response = client.post(
+        "/admin/tenants/default/validation-profile/publish",
+        headers=headers,
+    )
+    assert version_one_response.status_code == 200
+    version_one = version_one_response.json()["published_version"]
+
+    default_profile["thresholds"]["short_complement_max_words"] = 11
+    assert client.put(
+        "/admin/tenants/default/validation-profile/draft",
+        headers=headers,
+        json={"profile": default_profile},
+    ).status_code == 200
+    version_two_response = client.post(
+        "/admin/tenants/default/validation-profile/publish",
+        headers=headers,
+    )
+    assert version_two_response.status_code == 200
+    assert version_two_response.json()["published_version"]["version_number"] == 2
+    assert load_tenant_config("default").thresholds["short_complement_max_words"] == 11
+    assert "short_complement_max_words" not in load_tenant_config("redesim").thresholds
+
+    rollback_response = client.post(
+        "/admin/tenants/default/validation-profile/rollback",
+        headers=headers,
+        json={"version_id": version_one["version_id"]},
+    )
+
+    assert rollback_response.status_code == 200
+    rollback_state = rollback_response.json()
+    assert rollback_state["published_version"]["version_number"] == 3
+    assert rollback_state["published_version"]["source"] == "rollback"
+    assert rollback_state["published_version"]["rollback_source_version_id"] == (
+        version_one["version_id"]
+    )
+    assert rollback_state["current_profile"]["thresholds"][
+        "short_complement_max_words"
+    ] == 5
+    assert load_tenant_config("default").thresholds["short_complement_max_words"] == 5
+    assert "short_complement_max_words" not in load_tenant_config("redesim").thresholds
+
+
+def test_tenant_profile_publish_rejects_invalid_consistency(tmp_path, monkeypatch):
+    enable_tenant_profile_storage(monkeypatch, tmp_path)
+    headers = platform_admin_headers()
+
+    profile_response = client.get(
+        "/admin/tenants/default/validation-profile",
+        headers=headers,
+    )
+    invalid_profile = profile_response.json()["current_profile"]
+    invalid_profile["categories"] = [
+        {"name": "monitor", "keywords": ["monitor"]},
+        {"name": "monitor", "keywords": ["tela"]},
+    ]
+
+    draft_response = client.put(
+        "/admin/tenants/default/validation-profile/draft",
+        headers=headers,
+        json={"profile": invalid_profile},
+    )
+    assert draft_response.status_code == 200
+
+    publish_response = client.post(
+        "/admin/tenants/default/validation-profile/publish",
+        headers=headers,
+    )
+
+    assert publish_response.status_code == 422
+    assert "Duplicate category names: monitor" in publish_response.json()["detail"]
+    assert load_tenant_config("default").categories == []
 
 
 def test_jobs_are_scoped_to_issued_api_key_tenant():

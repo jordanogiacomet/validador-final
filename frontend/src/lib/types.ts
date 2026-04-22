@@ -56,6 +56,77 @@ export interface TenantAdminResponse {
   is_default: boolean;
 }
 
+export interface CategoryConfigPayload {
+  name: string;
+  display_name?: string;
+  keywords?: string[];
+  critical_checks?: string[];
+  critical_check_fields?: Record<string, string[]>;
+  required_fields?: string[];
+  field_help?: Record<string, string>;
+}
+
+export interface LLMConfigPayload {
+  enabled?: boolean;
+  healthcheck_enabled?: boolean;
+  model?: string;
+  fallback_model?: string | null;
+  parallel_requests?: number;
+  temperature?: number;
+  max_tokens?: number;
+  prompt_file?: string;
+  cache_ttl_seconds?: number;
+}
+
+export interface TenantValidationProfileData {
+  columns: Record<string, string>;
+  enabled_rules: string[];
+  disabled_rules: string[];
+  thresholds: Record<string, number | string | boolean>;
+  categories: CategoryConfigPayload[];
+  normalization: {
+    brand_aliases: Record<string, string>;
+    model_aliases: Record<string, string>;
+    model_brands: Record<string, string>;
+  };
+  suspicious_patterns: {
+    literal_patterns: string[];
+    regex_patterns: string[];
+  };
+  llm: LLMConfigPayload;
+}
+
+export interface TenantValidationProfileDraft {
+  tenant_id: string;
+  profile: TenantValidationProfileData;
+  updated_at: string;
+  updated_by_operator_id: string | null;
+  updated_by_username: string | null;
+  updated_by_role: string | null;
+}
+
+export interface TenantValidationProfileVersion {
+  tenant_id: string;
+  version_id: string;
+  version_number: number;
+  profile: TenantValidationProfileData;
+  published_at: string;
+  published_by_operator_id: string | null;
+  published_by_username: string | null;
+  published_by_role: string | null;
+  source: "publish" | "rollback";
+  rollback_source_version_id: string | null;
+}
+
+export interface TenantValidationProfileResponse {
+  tenant_id: string;
+  source: "file" | "published" | string;
+  current_profile: TenantValidationProfileData;
+  draft: TenantValidationProfileDraft | null;
+  published_version: TenantValidationProfileVersion | null;
+  versions: TenantValidationProfileVersion[];
+}
+
 export interface OperatorInvitationResponse {
   tenant_id: string;
   invite_id: string;
@@ -100,6 +171,9 @@ export type AuditEventType =
   | "operator_created"
   | "operator_disabled"
   | "operator_password_rotated"
+  | "tenant_profile_draft_saved"
+  | "tenant_profile_published"
+  | "tenant_profile_rolled_back"
   | "authorization_denied";
 
 export interface AuditEventResponse {

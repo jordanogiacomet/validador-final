@@ -84,6 +84,8 @@ Last Updated: 2026-04-22 11:52 -02
 - Password recovery tokens should follow the same hash-only persistence pattern as invitations, with short TTLs and single-use semantics enforced in shared operational storage.
 - Tenant renames should be handled with declarative aliases in `TenantConfig` plus shared canonicalization in `app/core/tenant_loader.py`; service-layer storage should migrate persisted tenant_ids to the canonical value on load instead of introducing tenant-specific branches.
 - Tenant administration metadata should be a runtime overlay (`tenant_id`, `display_name`, `aliases`, `disabled`) in operational storage; YAML/file-based tenant configs remain the source for validation rules, and runtime-created tenants inherit the default validation profile without seed API keys/operators.
+- Managed validation profiles now persist as tenant-scoped drafts and immutable published versions in `app/core/tenant_profile.py`; `load_tenant_config()` overlays only the latest published profile, never drafts.
+- Profile admin services should load the tenant base with `include_profile=False` before validating draft publication or rollback, so existing published overlays do not mask invalid profile changes.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths that must see disabled tenants; normal tenant loading should reject disabled tenants so login, legacy API keys, and issued sessions stop working immediately.
 - Administrative audit should stay in the shared `AuditService`: classify admin-sensitive events in `app/core/audit.py`, store structured `details` like `actor_operator_id`, `target_operator_id`, and `result` for filters, and enforce global-vs-tenant audit visibility through `AuthService` instead of creating a second audit store.
 - Dedicated worker mode should claim jobs through the shared SQLite-backed `JobService` lease path; keep API routes enqueue-only in that mode and use inline/background execution only as the local/test fallback.
@@ -1194,4 +1196,22 @@ Expected architectural direction:
   - Normalize spreadsheet-format variation at the ingress boundary: keep CSV and XLSX acceptance in the upload service, but store a tenant-configured CSV artifact so duplicate-resolution and corrected-download flows do not fork by file type.
   - Tenant templates should derive expected headers from `TenantConfig.columns`; avoid duplicating per-tenant column knowledge in routes or frontend copy.
   - Frontend upload guidance can stay styling-neutral by reusing existing authenticated download helpers and existing panel classes instead of adding CSS-only state for operational copy updates.
+---
+
+## 2026-04-22 12:16 -02 - US-057
+- Implementado gerenciamento de perfis de validação por tenant na aplicação: o backend agora persiste rascunhos e versões publicadas, valida consistência antes da publicação, cria nova versão em rollback e aplica no loader somente a versão publicada.
+- Adicionada área `Perfis` no console administrativo para visualizar/editar JSON de perfil, salvar rascunho, publicar e reverter versões; `tenant_admin` opera apenas o próprio tenant e `platform_admin` pode selecionar outros tenants.
+- Adicionada persistência SQLite/JSON para perfis, auditoria administrativa de rascunho/publicação/rollback e testes cobrindo publicação, rollback, isolamento entre tenants, rejeição de configuração inválida e helpers/frontend.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/core/audit.py`, `app/core/operational_sqlite.py`, `app/core/tenant_loader.py`, `app/core/tenant_profile.py`, `app/services/tenant_profile_service.py`, `frontend/src/components/admin-console.tsx`, `frontend/src/components/admin-console.test.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/lib/__tests__/api.test.ts`, `tests/test_api.py`, `tests/test_operational_sqlite.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest -q`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the profile editor flow is still recommended before publishing it.
+- **Learnings for future iterations:**
+  - Managed profile drafts must never affect validation execution; `load_tenant_config()` should overlay only the latest published version.
+  - Profile publication/rollback should validate against `load_tenant_config(..., include_profile=False)` to avoid existing published overlays hiding invalid draft changes.
+  - The first profile UI is intentionally JSON-based but still goes through typed API contracts and publish-time validation; future field-by-field editors should reuse the same draft/publish/rollback endpoints.
 ---

@@ -992,8 +992,8 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 57,
-      "passes": false,
-      "notes": "Prioridade alta porque a proposta multi-tenant ainda depende demais de configuração manual fora do produto."
+      "passes": true,
+      "notes": "Implementado gerenciamento de perfil por tenant com rascunho, publicação versionada, rollback, validação de consistência, overlay somente da versão publicada no loader, UI administrativa e testes full-stack."
     },
     {
       "id": "US-058",

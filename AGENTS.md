@@ -150,6 +150,8 @@ If there are still stories with passes: false, end your response normally (anoth
   - LLM settings
   - prompt selection
 - Tenant administration metadata belongs in the runtime operational overlay (`tenant_id`, `display_name`, `aliases`, `disabled`); keep YAML/file-based tenant configs as the source for validation rules until a dedicated rules/config workflow exists.
+- Managed validation profiles live in `app/core/tenant_profile.py`; drafts and versions persist in operational storage, and only the latest published version overlays `load_tenant_config()`.
+- Profile administration should validate/edit against `load_tenant_config(..., include_profile=False)` so unpublished drafts and existing published overlays do not contaminate draft validation or rollback.
 - Runtime-created tenants may inherit the default validation profile, but must not inherit default seed API keys or operators.
 - Use `load_tenant_config(..., include_disabled=True)` only for admin/history paths; normal auth, validation, and operational paths should reject disabled tenants.
 

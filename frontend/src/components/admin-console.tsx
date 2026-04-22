@@ -11,10 +11,14 @@ import {
   disableAdminTenant,
   disableOperatorAccount,
   formatApiErrorMessage,
+  getTenantValidationProfile,
   listAdminTenants,
   listOperators,
+  publishTenantValidationProfileDraft,
   reactivateAdminTenant,
   resetOperatorAccountPassword,
+  rollbackTenantValidationProfile,
+  saveTenantValidationProfileDraft,
   updateAdminTenant,
 } from "@/lib/api";
 import type {
@@ -22,9 +26,11 @@ import type {
   OperatorResponse,
   OperatorRole,
   TenantAdminResponse,
+  TenantValidationProfileData,
+  TenantValidationProfileResponse,
 } from "@/lib/types";
 
-type AdminSection = "operators" | "tenants";
+type AdminSection = "operators" | "tenants" | "profiles";
 type NoticeKind = "success" | "error";
 
 interface AdminConsoleProps {
@@ -94,6 +100,10 @@ function getTenantSourceLabel(source: TenantAdminResponse["source"]): string {
   return source === "runtime" ? "Criado na aplicação" : "Configurado em arquivo";
 }
 
+function getProfileSourceLabel(source: TenantValidationProfileResponse["source"]): string {
+  return source === "published" ? "Versão publicada" : "Fallback em arquivo";
+}
+
 function getAllowedRoleOptions(role: OperatorRole): OperatorRole[] {
   return isPlatformAdmin(role)
     ? ["operator", "tenant_admin", "platform_admin"]
@@ -126,6 +136,14 @@ function parseAliases(value: string): string[] {
 
 function formatAliases(aliases: string[]): string {
   return aliases.join(", ");
+}
+
+function formatProfileJson(profile: TenantValidationProfileData): string {
+  return JSON.stringify(profile, null, 2);
+}
+
+function parseProfileJson(value: string): TenantValidationProfileData {
+  return JSON.parse(value) as TenantValidationProfileData;
 }
 
 function buildTenantDrafts(
@@ -196,6 +214,15 @@ export function AdminConsole({
     displayName: "",
     aliases: "",
   });
+  const [selectedProfileTenantId, setSelectedProfileTenantId] =
+    useState(sessionTenantId);
+  const [profileState, setProfileState] =
+    useState<TenantValidationProfileResponse | null>(null);
+  const [profileJson, setProfileJson] = useState("");
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
+  const [profileNotice, setProfileNotice] = useState<NoticeState | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [pendingProfileAction, setPendingProfileAction] = useState<string | null>(null);
   const [isCreatingOperator, setIsCreatingOperator] = useState(false);
   const [isInvitingOperator, setIsInvitingOperator] = useState(false);
   const [pendingOperatorAction, setPendingOperatorAction] = useState<string | null>(null);
@@ -216,6 +243,18 @@ export function AdminConsole({
       );
   }, [role, tenants]);
 
+  const profileTenantOptions = useMemo(() => {
+    if (!isPlatformAdmin(role)) {
+      return [];
+    }
+
+    return [...tenants].sort((left, right) =>
+      left.display_name.localeCompare(right.display_name, "pt-BR", {
+        sensitivity: "base",
+      }),
+    );
+  }, [role, tenants]);
+
   const selectedOperatorTenant =
     tenants.find((tenant) => tenant.tenant_id === selectedOperatorTenantId) || null;
 
@@ -226,6 +265,7 @@ export function AdminConsole({
       setTenantLoadError(null);
       setIsTenantsLoading(false);
       setSelectedOperatorTenantId(sessionTenantId);
+      setSelectedProfileTenantId(sessionTenantId);
       return;
     }
 
@@ -249,6 +289,13 @@ export function AdminConsole({
             nextOptions.find((tenant) => tenant.tenant_id === currentTenantId) ||
             nextOptions.find((tenant) => tenant.tenant_id === sessionTenantId) ||
             nextOptions[0];
+          return preferredTenant?.tenant_id || currentTenantId;
+        });
+        setSelectedProfileTenantId((currentTenantId) => {
+          const preferredTenant =
+            nextTenants.find((tenant) => tenant.tenant_id === currentTenantId) ||
+            nextTenants.find((tenant) => tenant.tenant_id === sessionTenantId) ||
+            nextTenants[0];
           return preferredTenant?.tenant_id || currentTenantId;
         });
       } catch (error) {
@@ -321,6 +368,61 @@ export function AdminConsole({
     setIssuedInvitation(null);
     setOperatorNotice(null);
   }, [selectedOperatorTenantId]);
+
+  useEffect(() => {
+    if (activeSection !== "profiles") {
+      return;
+    }
+
+    const tenantId = selectedProfileTenantId || sessionTenantId;
+    if (!tenantId) {
+      setProfileState(null);
+      setProfileJson("");
+      setProfileLoadError(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function loadProfile() {
+      setIsProfileLoading(true);
+      setProfileLoadError(null);
+
+      try {
+        const payload = await getTenantValidationProfile(tenantId);
+        if (isCancelled) {
+          return;
+        }
+
+        setProfileState(payload);
+        setProfileJson(formatProfileJson(payload.draft?.profile || payload.current_profile));
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setProfileState(null);
+        setProfileJson("");
+        setProfileLoadError(
+          formatApiErrorMessage(error, "Não foi possível carregar o perfil de validação."),
+        );
+      } finally {
+        if (!isCancelled) {
+          setIsProfileLoading(false);
+        }
+      }
+    }
+
+    void loadProfile();
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeSection, selectedProfileTenantId, sessionTenantId]);
+
+  useEffect(() => {
+    setProfileNotice(null);
+    setProfileLoadError(null);
+  }, [selectedProfileTenantId]);
 
   function handleCreateOperatorFieldChange(
     field: keyof CreateOperatorFormState,
@@ -695,6 +797,87 @@ export function AdminConsole({
     }
   }
 
+  async function handleSaveProfileDraft() {
+    const tenantId = selectedProfileTenantId || sessionTenantId;
+    let parsedProfile: TenantValidationProfileData;
+
+    try {
+      parsedProfile = parseProfileJson(profileJson);
+    } catch {
+      setProfileNotice({
+        kind: "error",
+        message: "O JSON do perfil está inválido. Corrija a sintaxe antes de salvar.",
+      });
+      return;
+    }
+
+    setPendingProfileAction("save-draft");
+    setProfileNotice(null);
+
+    try {
+      const payload = await saveTenantValidationProfileDraft(tenantId, parsedProfile);
+      setProfileState(payload);
+      setProfileJson(formatProfileJson(payload.draft?.profile || payload.current_profile));
+      setProfileNotice({
+        kind: "success",
+        message: "Rascunho salvo. A validação em produção continua usando a versão publicada.",
+      });
+    } catch (error) {
+      setProfileNotice({
+        kind: "error",
+        message: formatApiErrorMessage(error, "Não foi possível salvar o rascunho do perfil."),
+      });
+    } finally {
+      setPendingProfileAction(null);
+    }
+  }
+
+  async function handlePublishProfileDraft() {
+    const tenantId = selectedProfileTenantId || sessionTenantId;
+    setPendingProfileAction("publish");
+    setProfileNotice(null);
+
+    try {
+      const payload = await publishTenantValidationProfileDraft(tenantId);
+      setProfileState(payload);
+      setProfileJson(formatProfileJson(payload.current_profile));
+      setProfileNotice({
+        kind: "success",
+        message: `Perfil publicado na versão ${payload.published_version?.version_number ?? ""}. Novos lotes usarão essa configuração.`,
+      });
+    } catch (error) {
+      setProfileNotice({
+        kind: "error",
+        message: formatApiErrorMessage(error, "Não foi possível publicar o perfil."),
+      });
+    } finally {
+      setPendingProfileAction(null);
+    }
+  }
+
+  async function handleRollbackProfile(versionId: string) {
+    const tenantId = selectedProfileTenantId || sessionTenantId;
+    setPendingProfileAction(`rollback:${versionId}`);
+    setProfileNotice(null);
+
+    try {
+      const payload = await rollbackTenantValidationProfile(tenantId, versionId);
+      setProfileState(payload);
+      setProfileJson(formatProfileJson(payload.current_profile));
+      setProfileNotice({
+        kind: "success",
+        message: `Rollback publicado como versão ${payload.published_version?.version_number ?? ""}.`,
+      });
+    } catch (error) {
+      setProfileNotice({
+        kind: "error",
+        message: formatApiErrorMessage(error, "Não foi possível reverter o perfil."),
+      });
+    } finally {
+      setPendingProfileAction(null);
+    }
+  }
+
   const roleOptions = getAllowedRoleOptions(role);
 
   return (
@@ -737,6 +920,15 @@ export function AdminConsole({
             Empresas
           </button>
         ) : null}
+        <button
+          className={`action-button${activeSection === "profiles" ? " primary" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "profiles"}
+          onClick={() => setActiveSection("profiles")}
+        >
+          Perfis
+        </button>
       </div>
 
       {activeSection === "operators" ? (
@@ -1061,7 +1253,7 @@ export function AdminConsole({
             )}
           </section>
         </div>
-      ) : (
+      ) : activeSection === "tenants" ? (
         <div className="admin-console-body">
           <div className="admin-grid">
             <section className="admin-subcard">
@@ -1214,6 +1406,172 @@ export function AdminConsole({
               })}
             </div>
           )}
+        </div>
+      ) : (
+        <div className="admin-console-body">
+          <section className="admin-subcard">
+            <div className="admin-subhead">
+              <strong>Perfil de validação</strong>
+              <p>
+                Edite regras, thresholds, categorias, normalização e referência de prompt em
+                rascunho. Apenas a publicação muda o perfil usado por novos lotes.
+              </p>
+            </div>
+
+            <div className="admin-tenant-form">
+              {isPlatformAdmin(role) ? (
+                <div className="field">
+                  <label htmlFor="admin-profile-tenant">Empresa</label>
+                  <select
+                    id="admin-profile-tenant"
+                    value={selectedProfileTenantId}
+                    disabled={isTenantsLoading || !profileTenantOptions.length}
+                    onChange={(event) => setSelectedProfileTenantId(event.target.value)}
+                  >
+                    {profileTenantOptions.map((tenant) => (
+                      <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                        {tenant.display_name} ({tenant.tenant_id})
+                      </option>
+                    ))}
+                  </select>
+                  <small>Tenants desabilitados continuam visíveis para histórico e rollback.</small>
+                </div>
+              ) : (
+                <div className="tenant-context">
+                  <strong>{sessionTenantId}</strong>
+                  <span>Perfil da sua empresa</span>
+                </div>
+              )}
+
+              {profileState ? (
+                <div className="admin-chip-row">
+                  <span className="status-chip info">
+                    {getProfileSourceLabel(profileState.source)}
+                  </span>
+                  {profileState.published_version ? (
+                    <span className="status-chip success">
+                      v{profileState.published_version.version_number}
+                    </span>
+                  ) : null}
+                  {profileState.draft ? (
+                    <span className="status-chip warning">Rascunho não publicado</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {profileNotice ? (
+            <div className={`admin-notice ${profileNotice.kind}`} role="status">
+              <strong>{profileNotice.kind === "success" ? "Ação concluída" : "Ação não concluída"}</strong>
+              <p>{profileNotice.message}</p>
+            </div>
+          ) : null}
+
+          {profileLoadError ? <p className="inline-error">{profileLoadError}</p> : null}
+          {isProfileLoading ? (
+            <p className="job-empty">Carregando perfil de validação...</p>
+          ) : profileState ? (
+            <>
+              <section className="admin-subcard">
+                <div className="admin-subhead">
+                  <strong>Editor JSON do perfil</strong>
+                  <p>
+                    O backend valida schema e consistência no momento da publicação. Mantenha
+                    apenas campos de perfil; credenciais e usuários não fazem parte deste payload.
+                  </p>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="admin-profile-json">Configuração do perfil</label>
+                  <textarea
+                    id="admin-profile-json"
+                    rows={18}
+                    value={profileJson}
+                    onChange={(event) => {
+                      setProfileJson(event.target.value);
+                      setProfileNotice(null);
+                    }}
+                  />
+                </div>
+
+                <div className="admin-row-actions">
+                  <button
+                    className="action-button"
+                    type="button"
+                    onClick={() => void handleSaveProfileDraft()}
+                    disabled={pendingProfileAction === "save-draft"}
+                  >
+                    {pendingProfileAction === "save-draft"
+                      ? "Salvando rascunho..."
+                      : "Salvar rascunho"}
+                  </button>
+                  <button
+                    className="cta"
+                    type="button"
+                    onClick={() => void handlePublishProfileDraft()}
+                    disabled={!profileState.draft || pendingProfileAction === "publish"}
+                  >
+                    {pendingProfileAction === "publish" ? "Publicando..." : "Publicar perfil"}
+                  </button>
+                </div>
+              </section>
+
+              <section className="admin-subcard">
+                <div className="admin-subhead">
+                  <strong>Histórico publicado</strong>
+                  <p>
+                    Rollbacks criam uma nova versão publicada, preservando a trilha de versões
+                    anteriores para auditoria.
+                  </p>
+                </div>
+
+                {profileState.versions.length ? (
+                  <div className="admin-tenant-list">
+                    {profileState.versions.map((version) => (
+                      <article className="admin-tenant-card" key={version.version_id}>
+                        <div className="admin-tenant-head">
+                          <div>
+                            <strong>Versão {version.version_number}</strong>
+                            <p>
+                              {new Date(version.published_at).toLocaleString("pt-BR")} •{" "}
+                              {version.published_by_username || "autor não informado"}
+                            </p>
+                          </div>
+                          <div className="admin-chip-row">
+                            <span className="status-chip info">
+                              {version.source === "rollback" ? "Rollback" : "Publicação"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="admin-row-actions">
+                          <button
+                            className="action-button"
+                            type="button"
+                            onClick={() => void handleRollbackProfile(version.version_id)}
+                            disabled={
+                              pendingProfileAction === `rollback:${version.version_id}` ||
+                              version.version_id === profileState.published_version?.version_id
+                            }
+                          >
+                            {pendingProfileAction === `rollback:${version.version_id}`
+                              ? "Revertendo..."
+                              : "Reverter para esta versão"}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="audit-empty-card">
+                    <strong>Nenhuma versão publicada pela aplicação</strong>
+                    <p>O tenant ainda usa o perfil bootstrap carregado de arquivo.</p>
+                  </div>
+                )}
+              </section>
+            </>
+          ) : null}
         </div>
       )}
     </section>

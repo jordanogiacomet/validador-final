@@ -11,11 +11,15 @@ import {
   getApiSession,
   getApiSessionExpiresAtMs,
   getInitialSetupState,
+  getTenantValidationProfile,
   listAuditEvents,
   listJobs,
   listTenants,
   loginOperator,
+  publishTenantValidationProfileDraft,
   renewApiSession,
+  rollbackTenantValidationProfile,
+  saveTenantValidationProfileDraft,
   setApiSession,
   setApiSessionInvalidHandler,
   validateFile,
@@ -209,6 +213,76 @@ describe("api auth session helpers", () => {
     expect(requestUrl).toContain("tenant_id=default");
     expect(requestUrl).toContain("limit=25");
     expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
+  it("manages tenant validation profiles through authenticated admin helpers", async () => {
+    const profile = {
+      columns: {
+        item: "Item",
+      },
+      enabled_rules: ["duplicate_item"],
+      disabled_rules: [],
+      thresholds: {},
+      categories: [],
+      normalization: {
+        brand_aliases: {},
+        model_aliases: {},
+        model_brands: {},
+      },
+      suspicious_patterns: {
+        literal_patterns: [],
+        regex_patterns: [],
+      },
+      llm: {
+        enabled: false,
+      },
+    };
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          tenant_id: "default",
+          source: "file",
+          current_profile: profile,
+          draft: null,
+          published_version: null,
+          versions: [],
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    await getTenantValidationProfile("default");
+    await saveTenantValidationProfileDraft("default", profile);
+    await publishTenantValidationProfileDraft("default");
+    await rollbackTenantValidationProfile("default", "profile-1");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      "/admin/tenants/default/validation-profile",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(
+      "/admin/tenants/default/validation-profile/draft",
+    );
+    expect(fetchMock.mock.calls[2]?.[0]).toContain(
+      "/admin/tenants/default/validation-profile/publish",
+    );
+    expect(fetchMock.mock.calls[3]?.[0]).toContain(
+      "/admin/tenants/default/validation-profile/rollback",
+    );
+    const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      profile,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({
+      version_id: "profile-1",
+    });
   });
 
   it("lists recent jobs with an optional limit", async () => {
