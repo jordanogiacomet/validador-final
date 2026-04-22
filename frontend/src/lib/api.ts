@@ -27,10 +27,17 @@ import type {
 } from "@/lib/types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
-const DEPLOYED_BACKEND_PORT = "30091";
 const API_KEY_HEADER = "X-API-Key";
 const API_SESSION_STORAGE_KEY = "validator.api_session.v1";
 const PERSIST_RAW_API_SESSION_ENV = "NEXT_PUBLIC_PERSIST_RAW_API_SESSION";
+
+declare global {
+  interface Window {
+    __VALIDATOR_CONFIG__?: {
+      apiBaseUrl?: string;
+    };
+  }
+}
 
 let currentSession: LoginResponse | null = null;
 let sessionInvalidHandler: (() => void) | null = null;
@@ -56,13 +63,19 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl(): string {
+  const runtimeBaseUrl =
+    typeof window !== "undefined" ? window.__VALIDATOR_CONFIG__?.apiBaseUrl?.trim() : "";
+  if (runtimeBaseUrl) {
+    return runtimeBaseUrl.replace(/\/$/, "");
+  }
+
   const configuredBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configuredBaseUrl) {
     return configuredBaseUrl.replace(/\/$/, "");
   }
 
   if (typeof window !== "undefined") {
-    return `${window.location.protocol}//${window.location.hostname}:${DEPLOYED_BACKEND_PORT}`;
+    return window.location.origin;
   }
 
   return DEFAULT_API_BASE_URL;

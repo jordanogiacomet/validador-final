@@ -6,7 +6,6 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: nfs-client
   resources:
     requests:
       storage: 5Gi
@@ -19,7 +18,6 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: nfs-client
   resources:
     requests:
       storage: 5Gi
@@ -30,8 +28,13 @@ metadata:
   name: validador-final
   namespace: validador-final
 spec:
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: validador-final
@@ -40,26 +43,18 @@ spec:
       labels:
         app: validador-final
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: api
-          image: IMAGE_PLACEHOLDER
+          image: validador-final-api
           imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: validador-final-env
           env:
-            - name: VALIDATOR_FRONTEND_URL
-              value: http://192.168.0.20:30092
-            - name: VALIDATOR_FRONTEND_ORIGINS
-              value: http://192.168.0.20:30092,http://192.168.20.209:30092,http://192.168.0.20,http://192.168.20.209
-            - name: VALIDATOR_FRONTEND_ORIGIN_REGEX
-              value: "^https?://[^/]+(:30092)?$"
-            - name: VALIDATOR_JOB_EXECUTION_MODE
-              value: worker
-            - name: VALIDATOR_SQLITE_PATH
-              value: /app/results/operational.sqlite3
-            - name: VALIDATOR_OFFICIAL_TENANT_ID
-              value: redesim
             - name: VALIDATOR_BOOTSTRAP_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -72,26 +67,34 @@ spec:
                   name: validador-final-bootstrap-admin
                   key: password
                   optional: true
-            - name: VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET
-              value: "false"
             - name: VALIDATOR_SETUP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: validador-final-bootstrap-admin
                   key: setup-token
                   optional: true
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m
@@ -118,8 +121,13 @@ metadata:
   name: validador-final-worker
   namespace: validador-final
 spec:
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: validador-final-worker
@@ -128,21 +136,19 @@ spec:
       labels:
         app: validador-final-worker
     spec:
+      terminationGracePeriodSeconds: 120
       containers:
         - name: worker
-          image: IMAGE_PLACEHOLDER
+          image: validador-final-api
           imagePullPolicy: Always
           command:
             - python
             - -m
             - app.workers.validation_worker
+          envFrom:
+            - configMapRef:
+                name: validador-final-env
           env:
-            - name: VALIDATOR_JOB_EXECUTION_MODE
-              value: worker
-            - name: VALIDATOR_SQLITE_PATH
-              value: /app/results/operational.sqlite3
-            - name: VALIDATOR_OFFICIAL_TENANT_ID
-              value: redesim
             - name: VALIDATOR_BOOTSTRAP_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -155,18 +161,32 @@ spec:
                   name: validador-final-bootstrap-admin
                   key: password
                   optional: true
-            - name: VALIDATOR_BOOTSTRAP_ADMIN_FORCE_RESET
-              value: "false"
             - name: VALIDATOR_SETUP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: validador-final-bootstrap-admin
                   key: setup-token
                   optional: true
-            - name: VALIDATOR_JOB_WORKER_POLL_INTERVAL_SECONDS
-              value: "1"
-            - name: VALIDATOR_JOB_WORKER_LEASE_SECONDS
-              value: "120"
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "from app.workers.validation_worker import build_validation_worker; build_validation_worker()"
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "from app.workers.validation_worker import build_validation_worker; build_validation_worker()"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m

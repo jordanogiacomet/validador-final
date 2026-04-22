@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: validador-final
+  namespace: validador-final
+spec:
+  tls:
+    - hosts:
+        - validador.example.com
+        - api.validador.example.com
+      secretName: validador-final-tls
+  rules:
+    - host: validador.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: validador-final-frontend
+                port:
+                  name: http
+    - host: api.validador.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: validador-final
+                port:
+                  name: http

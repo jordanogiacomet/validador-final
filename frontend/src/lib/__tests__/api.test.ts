@@ -10,6 +10,7 @@ import {
   downloadApiFile,
   getApiSession,
   getApiSessionExpiresAtMs,
+  getApiBaseUrl,
   getInitialSetupState,
   getOperationalKpis,
   getTenantValidationProfile,
@@ -41,6 +42,21 @@ describe("api auth session helpers", () => {
     setApiSessionInvalidHandler(null);
     window.sessionStorage.clear();
     delete process.env.NEXT_PUBLIC_PERSIST_RAW_API_SESSION;
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    delete window.__VALIDATOR_CONFIG__;
+  });
+
+  it("uses runtime API base URL config before build-time env", () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "https://api-build.example.com";
+    window.__VALIDATOR_CONFIG__ = {
+      apiBaseUrl: "https://api-runtime.example.com/",
+    };
+
+    expect(getApiBaseUrl()).toBe("https://api-runtime.example.com");
+  });
+
+  it("falls back to same-origin API URLs in browser deployments", () => {
+    expect(getApiBaseUrl()).toBe(window.location.origin);
   });
 
   it("calls login without sending an existing X-API-Key header", async () => {

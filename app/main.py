@@ -59,8 +59,7 @@ app.add_middleware(
 app.include_router(router)
 
 
-@app.get("/health", response_model=HealthReport)
-async def health(response: Response) -> HealthReport:
+def _build_readiness_response(response: Response) -> HealthReport:
     from app.api import routes as api_routes
     from app.services import validation_service
 
@@ -71,6 +70,21 @@ async def health(response: Response) -> HealthReport:
     )
     response.status_code = get_health_status_code(report)
     return report
+
+
+@app.get("/health", response_model=HealthReport)
+async def health(response: Response) -> HealthReport:
+    return _build_readiness_response(response)
+
+
+@app.get("/readyz", response_model=HealthReport)
+async def readyz(response: Response) -> HealthReport:
+    return _build_readiness_response(response)
+
+
+@app.get("/livez")
+async def livez() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.get("/metrics", include_in_schema=False)

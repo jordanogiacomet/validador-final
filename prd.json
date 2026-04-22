@@ -1104,8 +1104,8 @@
         "Adicionar validações ou smoke checks de deploy compatíveis com o ambiente-alvo"
       ],
       "priority": 64,
-      "passes": false,
-      "notes": "Prioridade média para reduzir acoplamento do deploy a um ambiente específico e abrir caminho para crescimento seguro."
+      "passes": true,
+      "notes": "Implementado com manifests Kubernetes environment-neutral (ClusterIP + Ingress/TLS), configuração via ConfigMap, frontend com runtime-config.js/VALIDATOR_FRONTEND_API_BASE_URL, réplicas múltiplas para API/frontend/worker, probes separados /readyz e /livez, documentação e smoke/pytest de deploy."
     }
   ],
   "nonFunctionalRequirements": {

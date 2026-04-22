@@ -4,11 +4,10 @@ metadata:
   name: validador-final-frontend
   namespace: validador-final
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: validador-final-frontend
   ports:
     - name: http
       port: 3000
       targetPort: http
-      nodePort: 30092

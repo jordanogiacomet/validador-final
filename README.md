@@ -292,6 +292,27 @@ your protected branches:
 - `Frontend Checks`
 - `Authenticated Smoke`
 
+Portable Kubernetes Deployment
+
+Kubernetes manifests live under `deploy/k8s/` and are designed to be patched per environment rather
+than tied to a private IP or fixed NodePort. The services are internal `ClusterIP` services, ingress
+owns public exposure and TLS, and runtime values come from the `validador-final-env` ConfigMap.
+
+Before applying an environment overlay, configure:
+
+- API/frontend images
+- ingress hosts and TLS secret
+- `VALIDATOR_FRONTEND_API_BASE_URL`
+- `VALIDATOR_FRONTEND_ORIGINS` or `VALIDATOR_FRONTEND_ORIGIN_REGEX` when the frontend and API use
+  different origins
+- `VALIDATOR_OFFICIAL_TENANT_ID`
+- PVC storage class only if the cluster does not provide a suitable default RWX class
+
+The frontend Docker image writes `public/runtime-config.js` from
+`VALIDATOR_FRONTEND_API_BASE_URL` at startup, so API URL changes do not require rebuilding the
+frontend bundle. After rollout, use `deploy/k8s/smoke.sh` with `API_URL` and `FRONTEND_URL` to check
+rollouts plus `/readyz` and the frontend root.
+
 Operational Persistence
 
 Low-volume operational metadata can now share one optional SQLite database through

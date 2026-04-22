@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans } from "next/font/google";
+import Script from "next/script";
 import type { ReactNode } from "react";
 
 import "./globals.css";
@@ -22,7 +23,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR">
-      <body className={plexSans.variable}>{children}</body>
+      <body className={plexSans.variable}>
+        <Script src="/runtime-config.js" strategy="beforeInteractive" />
+        {children}
+      </body>
     </html>
   );
 }

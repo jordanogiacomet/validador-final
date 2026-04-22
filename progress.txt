@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 15:19 -02
+Last Updated: 2026-04-22 15:33 -02
 
 ---
 
@@ -59,6 +59,9 @@ Last Updated: 2026-04-22 15:19 -02
 - Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via the shared SQLite store or the legacy `VALIDATOR_API_KEY_STORE_PATH` fallback, and middleware resolves issued keys before legacy tenant `api_keys`.
 - Production auth hardening lives in `app/core/auth_policy.py`: `VALIDATOR_ENV=production` disables legacy YAML `api_keys` and seed YAML operators by default; break-glass exceptions are `VALIDATOR_ALLOW_LEGACY_API_KEYS_IN_PRODUCTION` and `VALIDATOR_ALLOW_SEED_OPERATORS_IN_PRODUCTION`.
 - Frontend issued `X-API-Key` secrets should remain memory-only by default in `frontend/src/lib/api.ts`; persist the raw secret only when `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` is explicitly configured for a controlled environment.
+- Published frontend API URLs should stay runtime-configurable via `/runtime-config.js` and `VALIDATOR_FRONTEND_API_BASE_URL`; do not reintroduce deployed NodePort fallbacks in `frontend/src/lib/api.ts`.
+- Kubernetes publication manifests should stay environment-neutral: use `ClusterIP` services plus ingress/TLS, and patch hosts, images, origins, and storage class per environment instead of hardcoding private IPs, NodePorts, or cluster-specific storage classes.
+- API Kubernetes probes should keep readiness and liveness separate: `/readyz` runs storage/policy health checks, while `/livez` stays lightweight for process liveness.
 - Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` owns issue/expire/revoke transitions plus audit emission, and middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`.
 - When issued API keys are persisted in shared storage, `AuthService.inspect_issued_api_key()` must reload records on cache miss before returning `MISSING`; otherwise a fresh login issued by another process/pod can be rejected immediately as `Invalid API key`.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
@@ -1320,4 +1323,23 @@ Expected architectural direction:
   - Operational KPI aggregation should stay service-owned; FastAPI routes should only resolve auth scope and date filters.
   - Store LLM usage metadata in generated result JSON so KPI reads do not depend on raw logs or live provider state.
   - Keep persisted `JobRecord` counters as a volume fallback because retention can remove result artifacts while job metadata remains useful for management reports.
+---
+## 2026-04-22 15:33 -02 - US-064
+- Tornado o deploy Kubernetes portável removendo IPs privados, NodePorts e storageClass hardcoded; serviços agora são `ClusterIP`, exposição pública fica em `Ingress` com TLS e a configuração operacional vem de `validador-final-env`.
+- Preparadas API, frontend e worker para múltiplas réplicas, com probes mais adequados: `/readyz` executa health checks de storage/política, `/livez` é liveness leve, e workers validam que conseguem construir sobre storage SQLite compartilhado.
+- Removido o fallback frontend para NodePort fixo e adicionado runtime config via `/runtime-config.js` + `VALIDATOR_FRONTEND_API_BASE_URL`, com Dockerfile/entrypoint do frontend para reutilizar a mesma imagem entre ambientes.
+- Adicionados documentação de deploy, `kubectl kustomize`/smoke script e testes de manifesto para bloquear regressões de IP/NodePort/storageClass e garantir Ingress/TLS, réplicas e probes.
+- Files changed: `AGENTS.md`, `README.md`, `app/api/auth.py`, `app/main.py`, `deploy/k8s/README.md`, `deploy/k8s/configmap.yaml`, `deploy/k8s/deployment.yaml`, `deploy/k8s/frontend-deployment.yaml`, `deploy/k8s/frontend-service.yaml`, `deploy/k8s/ingress.yaml`, `deploy/k8s/kustomization.yaml`, `deploy/k8s/service.yaml`, `deploy/k8s/smoke.sh`, `frontend/.dockerignore`, `frontend/.env.example`, `frontend/Dockerfile`, `frontend/docker-entrypoint.sh`, `frontend/public/runtime-config.js`, `frontend/src/app/layout.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/__tests__/api.test.ts`, `tests/test_deploy_manifests.py`, `tests/test_health.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+  - `cd frontend && npm run build`
+  - `kubectl kustomize deploy/k8s`
+- **Learnings for future iterations:**
+  - Published frontend API endpoints should be runtime config, not baked NodePort assumptions; `frontend/src/lib/api.ts` reads `/runtime-config.js` before build-time env.
+  - Keep Kubernetes manifests environment-neutral and patch ingress hosts, CORS origins, images, tenant IDs, and storage classes per target environment.
+  - Readiness and liveness should stay separate in published deploys so storage/auth-policy failures stop traffic without forcing process restarts.
 ---

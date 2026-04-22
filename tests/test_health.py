@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import app.main as main
 from app.core import health
 from app.core.auth_policy import (
     ALLOW_LEGACY_API_KEYS_IN_PRODUCTION_ENV,
@@ -64,6 +65,34 @@ def test_health_reports_storage_and_llm_checks(tmp_path: Path, monkeypatch) -> N
     ]
     assert all(check["ok"] is True for check in payload["checks"])
     assert all(check["latency_ms"] >= 0 for check in payload["checks"])
+
+
+def test_readyz_uses_structured_health_report(tmp_path: Path, monkeypatch) -> None:
+    _configure_health_dependencies(tmp_path, monkeypatch)
+    monkeypatch.setattr(health, "list_tenants", lambda: [])
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert [check["name"] for check in payload["checks"]] == [
+        "uploads",
+        "results",
+        "job_store",
+    ]
+
+
+def test_livez_is_lightweight_and_public(monkeypatch) -> None:
+    def fail_readiness_probe(*args, **kwargs):
+        raise AssertionError("liveness should not run readiness probes")
+
+    monkeypatch.setattr(main, "build_health_report", fail_readiness_probe)
+
+    response = client.get("/livez")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_health_returns_503_when_storage_check_fails(

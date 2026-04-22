@@ -214,6 +214,8 @@ If there are still stories with passes: false, end your response normally (anoth
 - Production auth policy belongs in `app/core/auth_policy.py`: use `VALIDATOR_ENV=production` policy helpers instead of reading production/security env vars ad hoc in routes, services, or frontend helpers.
 - Frontend auth secrets should remain memory-only by default in `frontend/src/lib/api.ts`; only persist the raw issued `X-API-Key` when `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` is explicitly configured.
 - Frontend operational job progress copy should stay centralized in `frontend/src/lib/presentation.ts`; when polling the actively opened lot, slow the cadence in hidden tabs instead of stopping entirely so ETA and terminal notifications can still surface after tab switches.
+- Frontend published API URLs should be runtime configuration through `/runtime-config.js` and `VALIDATOR_FRONTEND_API_BASE_URL`; do not reintroduce deployed NodePort fallbacks in `frontend/src/lib/api.ts`.
+- Kubernetes publication manifests should stay environment-neutral: use `ClusterIP` services plus ingress/TLS and patch hosts, images, origins, and storage class per environment instead of hardcoding private IPs, NodePorts, or a cluster-specific storage class.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows

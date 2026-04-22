@@ -24,9 +24,11 @@ _AUTH_STATE_KEY = "tenant_auth"
 _PUBLIC_EXACT_PATHS = {
     "/",
     "/health",
+    "/livez",
     "/login",
     "/metrics",
     "/openapi.json",
+    "/readyz",
     "/setup",
     "/operators/invitations/accept",
     "/operators/password-reset/complete",
