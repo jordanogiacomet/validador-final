@@ -12,6 +12,7 @@ import {
   describeIssue,
   filterDuplicatesForResultSearch,
   filterProblemGroupsForResultView,
+  formatDateTime,
   formatFieldName,
   getActiveResultFilterCount,
   getBulkConsolidatableSameNameDuplicates,
@@ -35,6 +36,7 @@ import {
 } from "@/lib/presentation";
 import type { DuplicateDisplayFilter, ResultFilterState } from "@/lib/presentation";
 import type {
+  CorrectionHistoryEntryPayload,
   DuplicateGroup,
   JobResultPayload,
   JobStatusResponse,
@@ -56,9 +58,11 @@ interface ResultWorkspaceProps {
   isReprocessing: boolean;
   isResolvingBulkSameNameDuplicates: boolean;
   isSavingReviewFlag: boolean;
+  revertingCorrectionEventId: string | null;
   onShowMore: (code: string) => void;
   onEditOccurrence: (occurrence: ProblemOccurrence) => void;
   onToggleReviewFlag: (rowIndex: number, status: ReviewFlagActionStatus) => void;
+  onRevertCorrection: (eventId: string) => void;
   onResolveDuplicate: (duplicate: DuplicateGroup) => void;
   onResolveBulkSameNameDuplicates: () => void;
   onReprocess: () => void;
@@ -117,6 +121,20 @@ const DUPLICATE_FILTER_LABELS: Record<DuplicateDisplayFilter, string> = {
   normal: "Mesmo nome",
   conflict: "Nome diferente",
 };
+
+const CORRECTION_ACTION_LABELS: Record<string, string> = {
+  row_update: "Edição de linha",
+  review_flag: "Marcação de revisão",
+  duplicate_resolution: "Consolidação de duplicidade",
+};
+
+function getCorrectionActionLabel(action: string): string {
+  return CORRECTION_ACTION_LABELS[action] || action.replaceAll("_", " ");
+}
+
+function getCorrectionActorLabel(entry: CorrectionHistoryEntryPayload): string {
+  return entry.actor_username || entry.actor_operator_id || entry.api_key_id || "Sessão atual";
+}
 
 function ResultGuideCard({
   job,
@@ -284,9 +302,11 @@ export function ResultWorkspace({
   isReprocessing,
   isResolvingBulkSameNameDuplicates,
   isSavingReviewFlag,
+  revertingCorrectionEventId,
   onShowMore,
   onEditOccurrence,
   onToggleReviewFlag,
+  onRevertCorrection,
   onResolveDuplicate,
   onResolveBulkSameNameDuplicates,
   onReprocess,
@@ -329,6 +349,7 @@ export function ResultWorkspace({
   const duplicates = activeData.duplicates ?? [];
   const groupedProblems = activeData.grouped_problems ?? {};
   const reviewFlags = activeData.review_flags ?? [];
+  const correctionHistory = !isPartial ? reportData?.correction_history ?? [] : [];
   const allGroups = sortProblemGroups(groupedProblems);
   const filteredGroupedProblems = filterProblemGroupsForResultView(
     groupedProblems,
@@ -377,6 +398,9 @@ export function ResultWorkspace({
   const hasActiveOperationalExportFilters =
     hasSearch || hasActiveFilters || duplicateFilter !== "all";
   const filteredOperationalExportCount = filteredDuplicates.length + searchProblemOccurrenceCount;
+  const hasPendingCsvCorrections =
+    hasPendingCorrections ||
+    correctionHistory.some((entry) => !entry.is_reverted && entry.action === "row_update");
 
   async function handleDownload(path: string, fallbackFileName: string) {
     try {
@@ -645,7 +669,7 @@ export function ResultWorkspace({
         </section>
       ) : null}
 
-      {!isPartial && hasPendingCorrections && currentJobId ? (
+      {!isPartial && hasPendingCsvCorrections && currentJobId ? (
         <section className="panel correction-card">
           <div className="panel-kicker">Depois de corrigir</div>
           <h2 className="panel-title">Planilha ajustada nesta sessão</h2>
@@ -674,6 +698,161 @@ export function ResultWorkspace({
             </button>
           </div>
           {downloadError ? <p className="inline-error">{downloadError}</p> : null}
+        </section>
+      ) : null}
+
+      {!isPartial && currentJobId ? (
+        <section className="panel audit-card" aria-label="Histórico de correções">
+          <div className="audit-head">
+            <div>
+              <div className="panel-kicker">Correções</div>
+              <h2 className="panel-title">Histórico manual deste lote</h2>
+              <p className="panel-copy">
+                A reversão segura funciona em ordem, sempre pela alteração elegível mais recente.
+              </p>
+            </div>
+          </div>
+
+          {correctionHistory.length ? (
+            <div className="audit-event-list">
+              {correctionHistory.map((entry) => {
+                const lineSummary = entry.row_indices.length
+                  ? entry.row_indices.map((rowIndex) => lineNumber(rowIndex)).join(", ")
+                  : entry.row_index !== null
+                    ? lineNumber(entry.row_index)
+                    : "-";
+                const statusChipKind = entry.is_reverted
+                  ? "warning"
+                  : entry.can_revert
+                    ? "success"
+                    : "info";
+                const summary =
+                  entry.action === "review_flag"
+                    ? `Linha ${lineSummary} mudou de ${entry.before_status || "clear"} para ${
+                        entry.after_status || "review"
+                      }.`
+                    : entry.action === "duplicate_resolution"
+                      ? `${entry.before_rows.length || entry.row_indices.length} linha(s) foram consolidadas em ${
+                          entry.after_rows
+                            .map((snapshot) => lineNumber(snapshot.row_index))
+                            .join(", ") || "-"
+                        }.`
+                      : `${entry.field_diffs.length} campo(s) ajustado(s) na linha ${lineSummary}.`;
+
+                return (
+                  <article className="audit-event-card" key={entry.event_id}>
+                    <div className="audit-event-head">
+                      <div className="audit-event-head-copy">
+                        <span className={`status-chip ${statusChipKind}`}>
+                          {entry.is_reverted
+                            ? `${getCorrectionActionLabel(entry.action)} desfeita`
+                            : getCorrectionActionLabel(entry.action)}
+                        </span>
+                        <p className="audit-event-summary">{summary}</p>
+                      </div>
+
+                      <time className="audit-event-time" dateTime={entry.created_at}>
+                        {formatDateTime(entry.created_at)}
+                      </time>
+                    </div>
+
+                    <dl className="audit-event-meta">
+                      <div>
+                        <dt>Quem</dt>
+                        <dd>{getCorrectionActorLabel(entry)}</dd>
+                      </div>
+                      <div>
+                        <dt>Linhas</dt>
+                        <dd>{lineSummary}</dd>
+                      </div>
+                      <div>
+                        <dt>Chave</dt>
+                        <dd>{entry.api_key_id || "-"}</dd>
+                      </div>
+                    </dl>
+
+                    {entry.field_diffs.length ? (
+                      <ul>
+                        {entry.field_diffs.map((diff) => (
+                          <li key={`${entry.event_id}-${diff.field}`}>
+                            <strong>{formatFieldName(diff.source_column || diff.field)}</strong>:{" "}
+                            <code>{diff.before || "-"}</code> para <code>{diff.after || "-"}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+
+                    {entry.action === "duplicate_resolution" &&
+                    (entry.before_rows.length || entry.after_rows.length) ? (
+                      <details>
+                        <summary>Ver antes e depois</summary>
+                        {entry.before_rows.length ? (
+                          <div>
+                            <strong>Antes</strong>
+                            <ul>
+                              {entry.before_rows.map((snapshot) => (
+                                <li key={`${entry.event_id}-before-${snapshot.row_index}`}>
+                                  Linha {lineNumber(snapshot.row_index)}:{" "}
+                                  {snapshot.row["Descrição"] ||
+                                    snapshot.row["descricao"] ||
+                                    snapshot.row["Descricao"] ||
+                                    "Sem descrição"}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {entry.after_rows.length ? (
+                          <div>
+                            <strong>Depois</strong>
+                            <ul>
+                              {entry.after_rows.map((snapshot) => (
+                                <li key={`${entry.event_id}-after-${snapshot.row_index}`}>
+                                  Linha {lineNumber(snapshot.row_index)}:{" "}
+                                  {snapshot.row["Descrição"] ||
+                                    snapshot.row["descricao"] ||
+                                    snapshot.row["Descricao"] ||
+                                    "Sem descrição"}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </details>
+                    ) : null}
+
+                    {!entry.is_reverted && entry.revert_blocked_reason ? (
+                      <p className="panel-copy">{entry.revert_blocked_reason}</p>
+                    ) : null}
+
+                    {entry.is_reverted && entry.reverted_at ? (
+                      <p className="panel-copy">
+                        Desfeita em {formatDateTime(entry.reverted_at)}.
+                      </p>
+                    ) : null}
+
+                    {entry.can_revert ? (
+                      <button
+                        className="action-button"
+                        type="button"
+                        disabled={revertingCorrectionEventId === entry.event_id}
+                        onClick={() => onRevertCorrection(entry.event_id)}
+                      >
+                        {revertingCorrectionEventId === entry.event_id
+                          ? "Desfazendo..."
+                          : "Desfazer correção"}
+                      </button>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="audit-empty-card">
+              <strong>Nenhuma correção manual foi registrada</strong>
+              <p>As próximas edições, marcações e consolidações aparecerão aqui com diff e reversão.</p>
+            </div>
+          )}
         </section>
       ) : null}
 

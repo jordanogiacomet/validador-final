@@ -162,7 +162,10 @@ export type AuditEventType =
   | "job_created"
   | "job_completed"
   | "job_reprocessed"
+  | "job_row_updated"
+  | "job_review_flag_updated"
   | "duplicates_resolved"
+  | "job_correction_reverted"
   | "legacy_api_key_rejected"
   | "api_key_issued"
   | "api_key_expired"
@@ -257,6 +260,59 @@ export interface ReviewFlagPayload {
   status: ReviewFlagStatus;
 }
 
+export type CorrectionAction =
+  | "row_update"
+  | "review_flag"
+  | "duplicate_resolution";
+
+export interface CorrectionFieldDiffPayload {
+  field: string;
+  source_column: string | null;
+  before: string;
+  after: string;
+}
+
+export interface CorrectionRowSnapshotPayload {
+  row_index: number;
+  row: Record<string, string>;
+}
+
+export interface CorrectionHistoryEntryPayload {
+  event_id: string;
+  event_type: AuditEventType | string;
+  action: CorrectionAction | string;
+  tenant_id: string;
+  job_id: string;
+  api_key_id: string | null;
+  created_at: string;
+  actor_operator_id: string | null;
+  actor_username: string | null;
+  actor_role: string | null;
+  row_index: number | null;
+  row_indices: number[];
+  kept_row_index: number | null;
+  current_kept_row_index: number | null;
+  deleted_row_indices: number[];
+  merged_columns: string[];
+  field_diffs: CorrectionFieldDiffPayload[];
+  before_status: string | null;
+  after_status: string | null;
+  before_rows: CorrectionRowSnapshotPayload[];
+  after_rows: CorrectionRowSnapshotPayload[];
+  is_reverted: boolean;
+  reverted_at: string | null;
+  reverted_by_event_id: string | null;
+  can_revert: boolean;
+  revert_blocked_reason: string | null;
+}
+
+export interface CorrectionRevertResponse {
+  job_id: string;
+  reverted_event_id: string;
+  revert_event_id: string;
+  action: CorrectionAction | string;
+}
+
 export interface RowReviewFlagResponse {
   job_id: string;
   row_index: number;
@@ -270,6 +326,7 @@ export interface JobResultPayload {
   duplicates: DuplicateGroup[];
   grouped_problems: Record<string, ProblemOccurrence[]>;
   review_flags?: ReviewFlagPayload[];
+  correction_history?: CorrectionHistoryEntryPayload[];
 }
 
 export interface JobStatusResponse {

@@ -19,6 +19,7 @@ import {
   publishTenantValidationProfileDraft,
   renewApiSession,
   rollbackTenantValidationProfile,
+  revertJobCorrection,
   saveTenantValidationProfileDraft,
   setApiSession,
   setApiSessionInvalidHandler,
@@ -213,6 +214,35 @@ describe("api auth session helpers", () => {
     expect(requestUrl).toContain("/audit?");
     expect(requestUrl).toContain("tenant_id=default");
     expect(requestUrl).toContain("limit=25");
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
+  it("reverts a correction through the authenticated job helper", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          job_id: "job-1",
+          reverted_event_id: "corr-1",
+          revert_event_id: "corr-2",
+          action: "row_update",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    await revertJobCorrection("job-1", "corr-1");
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/jobs/job-1/corrections/corr-1/revert");
+    expect(requestInit?.method).toBe("POST");
     expect(headers.get("X-API-Key")).toBe("vapi_example");
   });
 

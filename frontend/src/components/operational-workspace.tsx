@@ -20,6 +20,7 @@ import {
   getJobRow,
   listTenants,
   reprocessJob,
+  revertJobCorrection,
   resolveDuplicateRows,
   setJobRowReviewFlag,
   updateJobRow,
@@ -138,6 +139,14 @@ function buildRowCacheKey(jobId: string, rowIndex: number): string {
   return `${jobId}:${rowIndex}`;
 }
 
+function hasPendingCsvCorrections(reportData: JobResultPayload | null): boolean {
+  return Boolean(
+    reportData?.correction_history?.some(
+      (entry) => !entry.is_reverted && entry.action === "row_update",
+    ),
+  );
+}
+
 function deriveDefaultBanner(
   job: JobStatusResponse | null,
   reportData: JobResultPayload | null,
@@ -240,6 +249,9 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   const [isSavingDuplicateResolution, setIsSavingDuplicateResolution] = useState(false);
   const [isBulkResolvingSameNameDuplicates, setIsBulkResolvingSameNameDuplicates] = useState(false);
   const [isSavingReviewFlag, setIsSavingReviewFlag] = useState(false);
+  const [revertingCorrectionEventId, setRevertingCorrectionEventId] = useState<string | null>(
+    null,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const latestEditRequestRef = useRef(0);
@@ -321,6 +333,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
         const result = await getJobResult(completedJobId);
         if (!isCancelled) {
           setReportData(result);
+          setHasPendingCorrections(hasPendingCsvCorrections(result));
         }
       } catch (caughtError) {
         if (isCancelled) {
@@ -385,6 +398,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
     setCurrentJobId(jobId);
     setCurrentJob(job);
     setReportData(result);
+    setHasPendingCorrections(hasPendingCsvCorrections(result));
     setValidationScope(normalizeValidationScope(job.validation_scope));
   }
 
@@ -619,8 +633,13 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
           },
         };
       });
-      setHasPendingCorrections(true);
       closeEditModal();
+      setHasPendingCorrections(true);
+      try {
+        await loadCompletedJob(currentJobId);
+      } catch {
+        // Keep the optimistic correction state if the history refresh fails.
+      }
       setManualBanner({
         kind: "success",
         label: "Correção registrada",
@@ -660,6 +679,11 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
             }
           : currentValue,
       );
+      try {
+        await loadCompletedJob(currentJobId);
+      } catch {
+        // Preserve the immediate review-flag feedback even if the history refresh fails.
+      }
       setManualBanner({
         kind: status === "review" ? "warning" : "success",
         label: status === "review" ? "Linha marcada" : "Marcação removida",
@@ -678,6 +702,45 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       });
     } finally {
       setIsSavingReviewFlag(false);
+    }
+  }
+
+  async function handleRevertCorrection(eventId: string) {
+    if (!currentJobId) {
+      setManualBanner({
+        kind: "error",
+        label: "Reversão indisponível",
+        detail: "Nenhum job ativo foi identificado para desfazer a correção.",
+      });
+      return;
+    }
+
+    setRevertingCorrectionEventId(eventId);
+    try {
+      const payload = await revertJobCorrection(currentJobId, eventId);
+      await loadCompletedJob(currentJobId);
+      setManualBanner({
+        kind: "success",
+        label: "Correção desfeita",
+        detail:
+          payload.action === "duplicate_resolution"
+            ? "A consolidação foi revertida e o resultado do lote foi reconstruído."
+            : payload.action === "review_flag"
+              ? "A marcação de revisão voltou ao estado anterior."
+              : "O CSV corrigido voltou ao estado anterior para esta edição.",
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Não foi possível desfazer a correção selecionada.";
+      setManualBanner({
+        kind: "error",
+        label: "Falha ao desfazer",
+        detail: message,
+      });
+    } finally {
+      setRevertingCorrectionEventId(null);
     }
   }
 
@@ -953,9 +1016,11 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
             isReprocessing={isReprocessing}
             isResolvingBulkSameNameDuplicates={isBulkResolvingSameNameDuplicates}
             isSavingReviewFlag={isSavingReviewFlag}
+            revertingCorrectionEventId={revertingCorrectionEventId}
             onShowMore={showMoreProblemOccurrences}
             onEditOccurrence={handleEditOccurrence}
             onToggleReviewFlag={handleToggleReviewFlag}
+            onRevertCorrection={handleRevertCorrection}
             onResolveDuplicate={handleResolveDuplicate}
             onResolveBulkSameNameDuplicates={handleResolveBulkSameNameDuplicates}
             onReprocess={handleReprocess}

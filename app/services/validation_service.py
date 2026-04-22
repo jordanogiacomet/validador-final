@@ -1212,6 +1212,7 @@ class OperationalExportKind(StrEnum):
 @dataclass(frozen=True)
 class DuplicateCsvResolution:
     kept_row_index: int
+    current_kept_row_index: int
     deleted_row_indices: list[int]
     remaining_rows: int
     merged_columns: list[str]
@@ -1220,6 +1221,7 @@ class DuplicateCsvResolution:
 @dataclass(frozen=True)
 class ReviewFlagUpdate:
     row_index: int
+    previous_status: str
     status: str
     review_flags: list[dict[str, object]]
 
@@ -1563,6 +1565,7 @@ def set_job_row_review_flag(
         raise ValueError(f"Row index not found in job result: {row_index}")
 
     review_flag_indices = _load_review_flag_indices(job)
+    previous_status = "review" if row_index in review_flag_indices else "clear"
     if status == "review":
         review_flag_indices.add(row_index)
     else:
@@ -1571,6 +1574,7 @@ def set_job_row_review_flag(
     _write_review_flag_indices(job, review_flag_indices)
     return ReviewFlagUpdate(
         row_index=row_index,
+        previous_status=previous_status,
         status=status,
         review_flags=_build_review_flags_payload(
             review_flag_indices,
@@ -1775,6 +1779,24 @@ def delete_job_csv_rows(
     _write_tenant_csv(df, file_path, tenant_config)
     _store_job_csv_context(job_id, job, file_path, tenant_config, df)
     return len(df)
+
+
+def replace_job_csv_rows(
+    job_id: str,
+    job_service: JobService,
+    *,
+    rows: list[dict[str, object]],
+) -> int:
+    job, file_path, tenant_config, df = _get_job_csv_context(job_id, job_service)
+    columns = [str(column) for column in df.columns.tolist()]
+    normalized_rows = [
+        {column: row.get(column, "") for column in columns}
+        for row in rows
+    ]
+    updated_df = pd.DataFrame(normalized_rows, columns=columns)
+    _write_tenant_csv(updated_df, file_path, tenant_config)
+    _store_job_csv_context(job_id, job, file_path, tenant_config, updated_df)
+    return len(updated_df)
 
 
 def _is_missing_csv_value(value: object) -> bool:
@@ -2027,8 +2049,12 @@ def resolve_duplicate_csv_rows_and_refresh(
     _store_job_csv_context(job_id, job, file_path, tenant_config, df)
 
     rerun_job_validation(job_id, job_service)
+    current_kept_row_index = keep_row_index - sum(
+        1 for row_index in deleted_row_indices if row_index < keep_row_index
+    )
     return DuplicateCsvResolution(
         kept_row_index=keep_row_index,
+        current_kept_row_index=current_kept_row_index,
         deleted_row_indices=deleted_row_indices,
         remaining_rows=len(df),
         merged_columns=merged_columns,
@@ -2057,6 +2083,17 @@ def read_job_csv_row(
         for field_name in tenant_config.columns
     }
     return row, resolved_columns
+
+
+def read_all_job_csv_rows(
+    job_id: str,
+    job_service: JobService,
+) -> list[dict[str, str]]:
+    _, _, _, df = _get_job_csv_context(job_id, job_service)
+    return [
+        {str(column): "" if value is None else str(value) for column, value in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
 
 
 def create_reprocess_job(

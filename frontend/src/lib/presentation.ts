@@ -100,7 +100,10 @@ const AUDIT_EVENT_ORDER = [
   "job_created",
   "job_completed",
   "job_reprocessed",
+  "job_row_updated",
+  "job_review_flag_updated",
   "duplicates_resolved",
+  "job_correction_reverted",
   "api_key_issued",
   "api_key_renewed",
   "api_key_revoked",
@@ -111,7 +114,10 @@ const AUDIT_EVENT_LABELS: Record<string, string> = {
   job_created: "Lote criado",
   job_completed: "Lote concluído",
   job_reprocessed: "Reprocessamento criado",
+  job_row_updated: "Linha corrigida",
+  job_review_flag_updated: "Marcação atualizada",
   duplicates_resolved: "Duplicidade consolidada",
+  job_correction_reverted: "Correção desfeita",
   api_key_issued: "Chave emitida",
   api_key_expired: "Chave expirada",
   api_key_revoked: "Chave revogada",
@@ -122,7 +128,10 @@ const AUDIT_EVENT_TONES: Record<string, StatusChipKind> = {
   job_created: "info",
   job_completed: "success",
   job_reprocessed: "info",
+  job_row_updated: "warning",
+  job_review_flag_updated: "warning",
   duplicates_resolved: "success",
+  job_correction_reverted: "success",
   api_key_issued: "info",
   api_key_expired: "warning",
   api_key_revoked: "warning",
@@ -555,6 +564,18 @@ function readAuditDetailStringArray(details: Record<string, unknown>, key: strin
   return value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry));
 }
 
+function readAuditDetailObjectArray(
+  details: Record<string, unknown>,
+  key: string,
+): Array<Record<string, unknown>> {
+  const value = details[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(isAuditRecord);
+}
+
 function formatAuditDetailValue(key: string, value: unknown): string {
   if (value === null || value === undefined || value === "") {
     return "";
@@ -811,6 +832,49 @@ export function summarizeAuditEvent(event: AuditEventResponse): string {
           ? `${remainingRows} linha(s) restantes no CSV corrigido.`
           : "",
       ]) || "Consolidação de duplicidade registrada."
+    );
+  }
+
+  if (event.event_type === "job_row_updated") {
+    const rowIndex = readAuditDetailNumber(details, "row_index");
+    const fieldDiffs = readAuditDetailObjectArray(details, "field_diffs");
+    const fieldNames = fieldDiffs
+      .map((diff) => readAuditDetailString(diff, "source_column") || readAuditDetailString(diff, "field"))
+      .filter((value): value is string => Boolean(value));
+
+    return (
+      joinAuditSummaryParts([
+        rowIndex !== null ? `Linha ${lineNumber(rowIndex)} corrigida.` : "",
+        fieldNames.length
+          ? `Campos: ${fieldNames.map((fieldName) => formatFieldName(fieldName)).join(", ")}.`
+          : "",
+      ]) || "Correção manual registrada."
+    );
+  }
+
+  if (event.event_type === "job_review_flag_updated") {
+    const rowIndex = readAuditDetailNumber(details, "row_index");
+    const beforeStatus = readAuditDetailString(details, "before_status");
+    const afterStatus = readAuditDetailString(details, "after_status");
+
+    return (
+      joinAuditSummaryParts([
+        rowIndex !== null ? `Linha ${lineNumber(rowIndex)} atualizada.` : "",
+        beforeStatus || afterStatus ? `Marcação: ${beforeStatus || "-"} para ${afterStatus || "-"}.` : "",
+      ]) || "Marcação manual registrada."
+    );
+  }
+
+  if (event.event_type === "job_correction_reverted") {
+    return (
+      joinAuditSummaryParts([
+        readAuditDetailString(details, "reverted_action")
+          ? `Ação revertida: ${readAuditDetailString(details, "reverted_action").replaceAll("_", " ")}.`
+          : "",
+        readAuditDetailString(details, "reverted_event_id")
+          ? `Histórico ${readAuditDetailString(details, "reverted_event_id")}.`
+          : "",
+      ]) || "Correção desfeita com segurança."
     );
   }
 

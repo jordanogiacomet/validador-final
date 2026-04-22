@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 12:45 -02
+Last Updated: 2026-04-22 14:23 -02
 
 ---
 
@@ -38,6 +38,7 @@ Last Updated: 2026-04-22 12:45 -02
 - Frontend result filtering/search should stay in shared presentation helpers over the existing result payload, and local filters/search should reset when `currentJobId` changes.
 - Frontend category result filters derive available categories from `CATEGORY_*` grouped problem codes unless the backend explicitly adds category metadata to the result payload.
 - Mutable review markers for completed results should be stored as tenant-scoped sidecar files under `results/{tenant_id}/{job_id}/review_flags.json` and overlaid into the result payload at read time, leaving generated JSON/PDF artifacts immutable.
+- Manual correction history should be persisted as job-scoped audit events with structured diffs and overlaid into `GET /jobs/{job_id}/result`; safe rollback stays LIFO so only the latest eligible correction can be undone before the next reprocess.
 - Low-volume operational persistence (jobs, audit events, issued API keys, managed operators) should go through `app/core/operational_sqlite.py` when `VALIDATOR_SQLITE_PATH` is configured; keep the legacy `VALIDATOR_*_STORE_PATH` JSON env vars as migration fallback.
 - Keep artifact-local outputs on the filesystem even when operational metadata moves to SQLite: uploaded CSVs, generated result/report files, per-job `review_flags.json`, and the LLM cache remain file-based.
 - Operational artifact retention should stay in `app/services/retention_service.py` with env-backed `RetentionPolicy`; use `GET /retention/plan` for dry-run inspection and `POST /retention/cleanup` for execution.
@@ -1267,4 +1268,21 @@ Expected architectural direction:
   - ETA/andamento copy should stay in `frontend/src/lib/presentation.ts` so the process card and recent-jobs list do not drift.
   - If the operational UI needs to react while the tab is hidden, keep the active-job poller on a slower cadence instead of fully pausing it.
   - Vitest partial mocks of `@/lib/api` that instantiate `ApiError` should reexport the real class explicitly to avoid missing-export failures in the full suite.
+---
+## 2026-04-22 14:23 -02 - US-061
+- Implementado histórico estruturado de correções manuais por lote usando eventos append-only no `AuditService` para edição de linha, marcação de revisão, consolidação de duplicidade e reversão, com diff antes/depois e ator autenticado quando disponível.
+- Sobreposto o histórico no payload de `GET /jobs/{job_id}/result`, adicionada reversão segura em ordem LIFO via `POST /jobs/{job_id}/corrections/{event_id}/revert`, e mantida a consistência do lineage bloqueando rollback depois que o lote de origem já gerou reprocessamento.
+- Exibido o histórico no frontend operacional dentro da workspace de resultado, com diff legível, estado de reversão, botão de desfazer para a correção elegível mais recente e refresh automático do lote após cada mutação.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/core/audit.py`, `app/services/audit_service.py`, `app/services/correction_history_service.py`, `app/services/validation_service.py`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/result-workspace.tsx`, `frontend/src/components/result-workspace.test.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/lib/types.ts`, `tests/test_api.py`, `tests/test_audit.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the new correction-history panel and rollback action is still recommended before publishing.
+- **Learnings for future iterations:**
+  - Manual correction history should reuse the shared `AuditService` with structured `actor_*` details instead of creating a parallel per-job store.
+  - Safe rollback is intentionally LIFO: only the latest eligible correction can be reverted, which keeps CSV state and job lineage consistent without guessing through later edits.
+  - `GET /jobs/{job_id}/result` is the right place to overlay mutable operational data such as review flags and correction history, leaving generated result artifacts immutable on disk.
 ---

@@ -1056,8 +1056,8 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 61,
-      "passes": false,
-      "notes": "Prioridade média porque a camada de correção já existe, mas ainda sem trilha completa de mudança e rollback seguro."
+      "passes": true,
+      "notes": "Implementado com trilha estruturada de correções no AuditService para edições de linha, marcações de revisão e consolidações de duplicidade, sobreposta ao payload de resultado por lote e com rollback seguro em ordem LIFO antes do próximo reprocessamento."
     },
     {
       "id": "US-062",

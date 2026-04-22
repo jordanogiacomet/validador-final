@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  CorrectionHistoryEntryPayload,
   JobResultPayload,
   JobStatusResponse,
   SummaryPayload,
@@ -41,7 +42,9 @@ function buildJob(overrides: Partial<JobStatusResponse> = {}): JobStatusResponse
   };
 }
 
-function buildReport(): JobResultPayload {
+function buildReport(
+  overrides: Partial<JobResultPayload> = {},
+): JobResultPayload {
   const summary: SummaryPayload = {
     total_rows: 1,
     validated_rows: 1,
@@ -58,29 +61,40 @@ function buildReport(): JobResultPayload {
     duplicates: [],
     grouped_problems: {},
     review_flags: [],
+    correction_history: [],
+    ...overrides,
   };
 }
 
-function renderWorkspace(job: JobStatusResponse | null, onOpenRelatedJob?: (jobId: string) => void) {
+function renderWorkspace(
+  job: JobStatusResponse | null,
+  options: {
+    onOpenRelatedJob?: (jobId: string) => void;
+    reportData?: JobResultPayload;
+    onRevertCorrection?: (eventId: string) => void;
+  } = {},
+) {
   return render(
     <ResultWorkspace
       job={job}
       currentJobId={job?.job_id ?? null}
       validationScope="zero_items"
-      reportData={buildReport()}
+      reportData={options.reportData ?? buildReport()}
       previewData={null}
       hasPendingCorrections={false}
       visibleProblemOccurrencesByCode={{}}
       isReprocessing={false}
       isResolvingBulkSameNameDuplicates={false}
       isSavingReviewFlag={false}
+      revertingCorrectionEventId={null}
       onShowMore={vi.fn()}
       onEditOccurrence={vi.fn()}
       onToggleReviewFlag={vi.fn()}
+      onRevertCorrection={options.onRevertCorrection ?? vi.fn()}
       onResolveDuplicate={vi.fn()}
       onResolveBulkSameNameDuplicates={vi.fn()}
       onReprocess={vi.fn()}
-      onOpenRelatedJob={onOpenRelatedJob}
+      onOpenRelatedJob={options.onOpenRelatedJob}
     />,
   );
 }
@@ -105,7 +119,7 @@ describe("ResultWorkspace job lineage", () => {
         job_id: "child-1",
         parent_job_id: "parent-0",
       }),
-      onOpenRelatedJob,
+      { onOpenRelatedJob },
     );
 
     const link = screen.getByRole("button", { name: /Lote originado de parent-0/ });
@@ -120,7 +134,7 @@ describe("ResultWorkspace job lineage", () => {
         job_id: "parent-0",
         latest_retry_job_id: "child-1",
       }),
-      onOpenRelatedJob,
+      { onOpenRelatedJob },
     );
 
     const link = screen.getByRole("button", {
@@ -128,5 +142,87 @@ describe("ResultWorkspace job lineage", () => {
     });
     fireEvent.click(link);
     expect(onOpenRelatedJob).toHaveBeenCalledWith("child-1");
+  });
+
+  it("renders correction history with diff and revert action", () => {
+    const onRevertCorrection = vi.fn();
+    const correctionHistory: CorrectionHistoryEntryPayload[] = [
+      {
+        event_id: "corr-2",
+        event_type: "job_review_flag_updated",
+        action: "review_flag",
+        tenant_id: "default",
+        job_id: "job-1",
+        api_key_id: "issued-1",
+        created_at: "2026-04-22T13:00:00Z",
+        actor_operator_id: "operator-1",
+        actor_username: "operador.teste",
+        actor_role: "operator",
+        row_index: 1,
+        row_indices: [],
+        kept_row_index: null,
+        current_kept_row_index: null,
+        deleted_row_indices: [],
+        merged_columns: [],
+        field_diffs: [],
+        before_status: "clear",
+        after_status: "review",
+        before_rows: [],
+        after_rows: [],
+        is_reverted: false,
+        reverted_at: null,
+        reverted_by_event_id: null,
+        can_revert: true,
+        revert_blocked_reason: null,
+      },
+      {
+        event_id: "corr-1",
+        event_type: "job_row_updated",
+        action: "row_update",
+        tenant_id: "default",
+        job_id: "job-1",
+        api_key_id: "issued-1",
+        created_at: "2026-04-22T12:55:00Z",
+        actor_operator_id: "operator-1",
+        actor_username: "operador.teste",
+        actor_role: "operator",
+        row_index: 1,
+        row_indices: [],
+        kept_row_index: null,
+        current_kept_row_index: null,
+        deleted_row_indices: [],
+        merged_columns: [],
+        field_diffs: [
+          {
+            field: "complemento",
+            source_column: "Complemento",
+            before: "",
+            after: "Detalhe revisado",
+          },
+        ],
+        before_status: null,
+        after_status: null,
+        before_rows: [],
+        after_rows: [],
+        is_reverted: false,
+        reverted_at: null,
+        reverted_by_event_id: null,
+        can_revert: false,
+        revert_blocked_reason: "Desfaça primeiro a correção mais recente.",
+      },
+    ];
+
+    renderWorkspace(buildJob(), {
+      reportData: buildReport({ correction_history: correctionHistory }),
+      onRevertCorrection,
+    });
+
+    expect(screen.getByLabelText("Histórico de correções")).toBeDefined();
+    expect(screen.getByText("Histórico manual deste lote")).toBeDefined();
+    expect(screen.getByText(/Complemento/)).toBeDefined();
+    expect(screen.getByText("Desfaça primeiro a correção mais recente.")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Desfazer correção" }));
+    expect(onRevertCorrection).toHaveBeenCalledWith("corr-2");
   });
 });

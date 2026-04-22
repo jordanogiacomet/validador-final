@@ -58,6 +58,26 @@ def test_audit_service_can_filter_by_tenant_and_limit():
     assert events[0].event_id != first.event_id
 
 
+def test_audit_service_can_filter_by_job_id():
+    service = AuditService()
+    service.record_event(
+        AuditEventType.JOB_CREATED,
+        tenant_id="tenant-a",
+        job_id="job-1",
+    )
+    latest = service.record_event(
+        AuditEventType.JOB_COMPLETED,
+        tenant_id="tenant-a",
+        job_id="job-2",
+    )
+
+    events = service.list_events(tenant_id="tenant-a", job_id="job-2")
+
+    assert len(events) == 1
+    assert events[0].event_id == latest.event_id
+    assert events[0].job_id == "job-2"
+
+
 def test_audit_service_filters_by_actor_target_type_period_and_excludes_admin_when_needed():
     service = AuditService()
     earlier = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)

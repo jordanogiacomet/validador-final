@@ -66,6 +66,7 @@ class AuditService:
         self,
         *,
         tenant_id: str | None = None,
+        job_id: str | None = None,
         actor_operator_id: str | None = None,
         target_operator_id: str | None = None,
         event_types: list[AuditEventType | str] | None = None,
@@ -80,6 +81,9 @@ class AuditService:
             events = [
                 event for event in events if event.tenant_id == resolved_tenant_id
             ]
+
+        if job_id is not None:
+            events = [event for event in events if event.job_id == job_id]
 
         if not include_administrative:
             events = [

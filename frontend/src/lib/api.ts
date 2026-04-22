@@ -1,6 +1,7 @@
 import type {
   AuditEventResponse,
   APIKeyRenewalResponse,
+  CorrectionRevertResponse,
   InitialAdminSetupPayload,
   InitialSetupState,
   DuplicateResolutionResponse,
@@ -843,6 +844,16 @@ export async function reprocessJob(jobId: string): Promise<UploadResponse> {
     method: "POST",
   });
   return readResponse<UploadResponse>(response);
+}
+
+export async function revertJobCorrection(
+  jobId: string,
+  eventId: string,
+): Promise<CorrectionRevertResponse> {
+  const response = await apiFetch(`/jobs/${jobId}/corrections/${eventId}/revert`, {
+    method: "POST",
+  });
+  return readResponse<CorrectionRevertResponse>(response);
 }
 
 function resolveDownloadFileName(

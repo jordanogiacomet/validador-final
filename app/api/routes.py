@@ -14,7 +14,7 @@ from app.api.auth import (
     get_authenticated_tenant,
     resolve_request_tenant_id,
 )
-from app.core.audit import AuditEvent, AuditEventType, AuditPrincipal
+from app.core.audit import AuditEvent, AuditPrincipal
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.retention import RetentionPolicy
 from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
@@ -31,6 +31,14 @@ from app.core.validation_scope import (
     parse_validation_scope,
 )
 from app.services.auth_service import AuthServiceError, EffectiveOperator
+from app.services.correction_history_service import (
+    CorrectionHistoryConflictError,
+    get_job_result_payload_with_history,
+    resolve_duplicate_rows_with_history,
+    revert_job_correction,
+    set_job_row_review_flag_with_history,
+    update_job_row_with_history,
+)
 from app.services.runtime import (
     build_audit_service,
     build_job_service,
@@ -55,15 +63,11 @@ from app.services.validation_service import (
     get_job_csv_download,
     get_job_operational_export,
     get_job_report_download,
-    get_job_result_payload,
     get_job_xlsx_export,
     prepare_upload_content_for_job,
     read_job_csv_row,
-    resolve_duplicate_csv_rows_and_refresh,
     run_upload_preflight,
     run_validation_job,
-    set_job_row_review_flag,
-    update_job_csv_row,
 )
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -448,6 +452,54 @@ class RowReviewFlagResponse(BaseModel):
     row_index: int
     status: str
     review_flags: list[ReviewFlagPayload]
+
+
+class CorrectionFieldDiffResponse(BaseModel):
+    field: str
+    source_column: str | None = None
+    before: str
+    after: str
+
+
+class CorrectionRowSnapshotResponse(BaseModel):
+    row_index: int
+    row: dict[str, str]
+
+
+class CorrectionHistoryEntryResponse(BaseModel):
+    event_id: str
+    event_type: str
+    action: str
+    tenant_id: str
+    job_id: str
+    api_key_id: str | None = None
+    created_at: datetime
+    actor_operator_id: str | None = None
+    actor_username: str | None = None
+    actor_role: str | None = None
+    row_index: int | None = None
+    row_indices: list[int] = Field(default_factory=list)
+    kept_row_index: int | None = None
+    current_kept_row_index: int | None = None
+    deleted_row_indices: list[int] = Field(default_factory=list)
+    merged_columns: list[str] = Field(default_factory=list)
+    field_diffs: list[CorrectionFieldDiffResponse] = Field(default_factory=list)
+    before_status: str | None = None
+    after_status: str | None = None
+    before_rows: list[CorrectionRowSnapshotResponse] = Field(default_factory=list)
+    after_rows: list[CorrectionRowSnapshotResponse] = Field(default_factory=list)
+    is_reverted: bool = False
+    reverted_at: datetime | None = None
+    reverted_by_event_id: str | None = None
+    can_revert: bool = False
+    revert_blocked_reason: str | None = None
+
+
+class CorrectionRevertResponse(BaseModel):
+    job_id: str
+    reverted_event_id: str
+    revert_event_id: str
+    action: str
 
 
 class DuplicateResolutionRequest(BaseModel):
@@ -1657,7 +1709,11 @@ async def download_result(request: Request, job_id: str) -> dict:
     _get_authorized_job(request, job_id)
 
     try:
-        return get_job_result_payload(job_id, job_service)
+        return get_job_result_payload_with_history(
+            job_id,
+            job_service,
+            audit_service,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except ValueError as exc:
@@ -1772,12 +1828,16 @@ async def update_job_row(
     payload: RowUpdateRequest,
 ) -> RowUpdateResponse:
     _get_authorized_job(request, job_id)
+    auth = get_authenticated_tenant(request)
     try:
-        updated_row = update_job_csv_row(
+        updated_row = update_job_row_with_history(
             job_id,
             job_service,
+            audit_service,
             row_index=row_index,
             updates=payload.updates,
+            api_key_id=auth.api_key_id,
+            actor=_build_request_audit_actor(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -1828,12 +1888,16 @@ async def update_job_row_review_flag(
     payload: RowReviewFlagRequest,
 ) -> RowReviewFlagResponse:
     _get_authorized_job(request, job_id)
+    auth = get_authenticated_tenant(request)
     try:
-        update = set_job_row_review_flag(
+        update = set_job_row_review_flag_with_history(
             job_id,
             job_service,
+            audit_service,
             row_index=row_index,
             status=payload.status,
+            api_key_id=auth.api_key_id,
+            actor=_build_request_audit_actor(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -1859,7 +1923,7 @@ async def resolve_duplicate_rows(
     job_id: str,
     payload: DuplicateResolutionRequest,
 ) -> DuplicateResolutionResponse:
-    job = _get_authorized_job(request, job_id)
+    _get_authorized_job(request, job_id)
     auth = get_authenticated_tenant(request)
     normalized_indices = sorted(set(payload.row_indices))
     if payload.keep_row_index not in normalized_indices:
@@ -1869,10 +1933,13 @@ async def resolve_duplicate_rows(
         )
 
     try:
-        resolution = resolve_duplicate_csv_rows_and_refresh(
+        resolution = resolve_duplicate_rows_with_history(
             job_id,
             job_service,
             row_indices=normalized_indices,
+            audit_service=audit_service,
+            api_key_id=auth.api_key_id,
+            actor=_build_request_audit_actor(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -1883,26 +1950,51 @@ async def resolve_duplicate_rows(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from None
 
-    audit_service.record_event(
-        AuditEventType.DUPLICATES_RESOLVED,
-        tenant_id=job.tenant_id,
-        job_id=job.job_id,
-        api_key_id=auth.api_key_id,
-        details={
-            "row_indices": normalized_indices,
-            "kept_row_index": resolution.kept_row_index,
-            "deleted_row_indices": resolution.deleted_row_indices,
-            "remaining_rows": resolution.remaining_rows,
-            "merged_columns": resolution.merged_columns,
-        },
-    )
-
     return DuplicateResolutionResponse(
         job_id=job_id,
         kept_row_index=resolution.kept_row_index,
         deleted_row_indices=resolution.deleted_row_indices,
         remaining_rows=resolution.remaining_rows,
         merged_columns=resolution.merged_columns,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/corrections/{event_id}/revert",
+    response_model=CorrectionRevertResponse,
+)
+async def revert_job_correction_route(
+    request: Request,
+    job_id: str,
+    event_id: str,
+) -> CorrectionRevertResponse:
+    _get_authorized_job(request, job_id)
+    auth = get_authenticated_tenant(request)
+    try:
+        result = revert_job_correction(
+            job_id,
+            event_id=event_id,
+            job_service=job_service,
+            audit_service=audit_service,
+            api_key_id=auth.api_key_id,
+            actor=_build_request_audit_actor(request),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except CorrectionHistoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+    return CorrectionRevertResponse(
+        job_id=result.job_id,
+        reverted_event_id=result.reverted_event_id,
+        revert_event_id=result.revert_event_id,
+        action=result.action.value,
     )
 
 

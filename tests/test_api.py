@@ -2907,6 +2907,265 @@ def test_update_job_row_review_flag_rejects_missing_result_row():
     Path(result_path).unlink(missing_ok=True)
 
 
+def test_result_payload_exposes_correction_history_and_lifo_revert():
+    csv_path = Path(tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name)
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, job_service)
+    headers, login_payload = login_headers()
+
+    row_update_response = client.patch(
+        f"/jobs/{job.job_id}/rows/1",
+        json={"updates": {"complemento": "Detalhe revisado"}},
+        headers=headers,
+    )
+    assert row_update_response.status_code == 200
+
+    review_flag_response = client.patch(
+        f"/jobs/{job.job_id}/rows/1/flag",
+        json={"status": "review"},
+        headers=headers,
+    )
+    assert review_flag_response.status_code == 200
+
+    result_response = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert result_response.status_code == 200
+    result_payload = result_response.json()
+    assert result_payload["review_flags"] == [{"row_index": 1, "status": "review"}]
+
+    history = result_payload["correction_history"]
+    assert [entry["action"] for entry in history[:2]] == ["review_flag", "row_update"]
+
+    review_entry = history[0]
+    row_entry = history[1]
+
+    assert review_entry["actor_operator_id"] == login_payload["operator_id"]
+    assert review_entry["actor_role"] == login_payload["role"]
+    assert review_entry["before_status"] == "clear"
+    assert review_entry["after_status"] == "review"
+    assert review_entry["can_revert"] is True
+
+    assert row_entry["row_index"] == 1
+    assert row_entry["field_diffs"] == [
+        {
+            "field": "complemento",
+            "source_column": "Complemento",
+            "before": "",
+            "after": "Detalhe revisado",
+        }
+    ]
+    assert row_entry["can_revert"] is False
+    assert "Desfaça primeiro" in row_entry["revert_blocked_reason"]
+
+    early_revert = client.post(
+        f"/jobs/{job.job_id}/corrections/{row_entry['event_id']}/revert",
+        headers=headers,
+    )
+    assert early_revert.status_code == 409
+
+    revert_review = client.post(
+        f"/jobs/{job.job_id}/corrections/{review_entry['event_id']}/revert",
+        headers=headers,
+    )
+    assert revert_review.status_code == 200
+    assert revert_review.json()["action"] == "review_flag"
+
+    result_after_review_revert = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert result_after_review_revert.status_code == 200
+    review_reverted_payload = result_after_review_revert.json()
+    assert review_reverted_payload["review_flags"] == []
+
+    review_history = {
+        entry["event_id"]: entry
+        for entry in review_reverted_payload["correction_history"]
+    }
+    assert review_history[review_entry["event_id"]]["is_reverted"] is True
+    assert review_history[row_entry["event_id"]]["can_revert"] is True
+
+    revert_row = client.post(
+        f"/jobs/{job.job_id}/corrections/{row_entry['event_id']}/revert",
+        headers=headers,
+    )
+    assert revert_row.status_code == 200
+    assert revert_row.json()["action"] == "row_update"
+
+    result_after_row_revert = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert result_after_row_revert.status_code == 200
+    history_after_row_revert = {
+        entry["event_id"]: entry
+        for entry in result_after_row_revert.json()["correction_history"]
+    }
+    assert history_after_row_revert[row_entry["event_id"]]["is_reverted"] is True
+    assert "Detalhe revisado" not in csv_path.read_text(encoding="utf-8")
+
+    correction_events = audit_service.list_events(tenant_id="default", job_id=job.job_id)
+    assert [event.event_type.value for event in correction_events[:4]] == [
+        "job_correction_reverted",
+        "job_correction_reverted",
+        "job_review_flag_updated",
+        "job_row_updated",
+    ]
+
+    csv_path.unlink(missing_ok=True)
+    refreshed_job = job_service.get_job(job.job_id)
+    if refreshed_job and refreshed_job.result_path:
+        Path(refreshed_job.result_path).unlink(missing_ok=True)
+    if refreshed_job and refreshed_job.report_path:
+        Path(refreshed_job.report_path).unlink(missing_ok=True)
+
+
+def test_duplicate_resolution_history_can_be_reverted_and_reapplied():
+    csv_content = (
+        "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+        "001,,Mesa antiga,MarcaAntiga,ModeloAntigo,SNAntigo,"
+        "SalaAntiga,CCAntigo,DetalheAntigo,ObsAntiga\n"
+        "001,,Mesa reserva,MarcaAnterior,ModeloAnterior,SNAnterior,"
+        "SalaAnterior,CCAnterior,DetalheAnterior,ObsAnterior\n"
+        "001,,Mesa atual,,ModeloAtual,,SalaAtual,CCAtual,,\n"
+    )
+    csv_path = Path(tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name)
+    csv_path.write_text(csv_content, encoding="utf-8")
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="duplicados.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, job_service)
+    headers, _login_payload = login_headers()
+
+    resolution_response = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1, 2], "keep_row_index": 2},
+        headers=headers,
+    )
+    assert resolution_response.status_code == 200
+
+    result_response = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert result_response.status_code == 200
+    history = result_response.json()["correction_history"]
+    duplicate_entry = history[0]
+
+    assert duplicate_entry["action"] == "duplicate_resolution"
+    assert duplicate_entry["before_rows"][0]["row_index"] == 0
+    assert duplicate_entry["after_rows"] == [
+        {
+            "row_index": 0,
+            "row": {
+                "Item": "001",
+                "Placa Anterior": "",
+                "Descrição": "Mesa atual",
+                "Marca": "MarcaAnterior",
+                "Modelo": "ModeloAtual",
+                "NS": "SNAnterior",
+                "Local": "SalaAtual",
+                "CC": "CCAtual",
+                "Complemento": "DetalheAnterior",
+                "Observação": "ObsAnterior",
+            },
+        }
+    ]
+    assert duplicate_entry["can_revert"] is True
+
+    revert_response = client.post(
+        f"/jobs/{job.job_id}/corrections/{duplicate_entry['event_id']}/revert",
+        headers=headers,
+    )
+    assert revert_response.status_code == 200
+    assert revert_response.json()["action"] == "duplicate_resolution"
+
+    reverted_csv = csv_path.read_text(encoding="utf-8")
+    assert "Mesa antiga" in reverted_csv
+    assert "Mesa reserva" in reverted_csv
+    assert "Mesa atual" in reverted_csv
+
+    reverted_result = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert reverted_result.status_code == 200
+    reverted_payload = reverted_result.json()
+    assert reverted_payload["duplicates"]
+    reverted_history = {
+        entry["event_id"]: entry
+        for entry in reverted_payload["correction_history"]
+    }
+    assert reverted_history[duplicate_entry["event_id"]]["is_reverted"] is True
+
+    second_resolution = client.post(
+        f"/jobs/{job.job_id}/duplicates/resolve",
+        json={"row_indices": [0, 1, 2], "keep_row_index": 2},
+        headers=headers,
+    )
+    assert second_resolution.status_code == 200
+
+    reapplied_result = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert reapplied_result.status_code == 200
+    duplicate_entries = [
+        entry
+        for entry in reapplied_result.json()["correction_history"]
+        if entry["action"] == "duplicate_resolution"
+    ]
+    assert duplicate_entries[0]["is_reverted"] is False
+    assert duplicate_entries[0]["can_revert"] is True
+    assert duplicate_entries[1]["is_reverted"] is True
+
+    csv_path.unlink(missing_ok=True)
+    refreshed_job = job_service.get_job(job.job_id)
+    if refreshed_job and refreshed_job.result_path:
+        Path(refreshed_job.result_path).unlink(missing_ok=True)
+    if refreshed_job and refreshed_job.report_path:
+        Path(refreshed_job.report_path).unlink(missing_ok=True)
+
+
+def test_correction_revert_is_blocked_after_source_job_reprocesses():
+    csv_path = Path(tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name)
+    csv_path.write_text(CSV_CONTENT, encoding="utf-8")
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_path=str(csv_path),
+        file_name="lote.csv",
+        params={"validation_scope": "all_items"},
+    )
+    run_validation_job(job.job_id, job_service)
+    headers, _login_payload = login_headers()
+
+    update_response = client.patch(
+        f"/jobs/{job.job_id}/rows/1",
+        json={"updates": {"complemento": "Detalhe revisado"}},
+        headers=headers,
+    )
+    assert update_response.status_code == 200
+
+    result_response = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+    assert result_response.status_code == 200
+    correction_event_id = result_response.json()["correction_history"][0]["event_id"]
+
+    reprocess_response = client.post(f"/jobs/{job.job_id}/reprocess", headers=headers)
+    assert reprocess_response.status_code == 200
+
+    blocked_revert = client.post(
+        f"/jobs/{job.job_id}/corrections/{correction_event_id}/revert",
+        headers=headers,
+    )
+    assert blocked_revert.status_code == 409
+    assert "já gerou um reprocessamento" in blocked_revert.json()["detail"]
+
+    new_job = job_service.get_job(reprocess_response.json()["job_id"])
+    csv_path.unlink(missing_ok=True)
+    if new_job and new_job.file_path:
+        Path(new_job.file_path).unlink(missing_ok=True)
+    if new_job and new_job.result_path:
+        Path(new_job.result_path).unlink(missing_ok=True)
+    if new_job and new_job.report_path:
+        Path(new_job.report_path).unlink(missing_ok=True)
+
+
 def test_resolve_duplicate_rows_keeps_highest_occurrence_and_merges_missing_fields():
     csv_content = (
         "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
