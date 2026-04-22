@@ -66,6 +66,7 @@ from app.services.validation_service import (
     UploadPreflightError,
     build_job_upload_path,
     build_tenant_upload_template_xlsx,
+    build_upload_scope_preview,
     create_reprocess_job,
     get_job_csv_download,
     get_job_operational_export,
@@ -164,6 +165,25 @@ class UploadPreflightResponse(BaseModel):
     missing_columns: list[str] = Field(default_factory=list)
     guidance: list[str] = Field(default_factory=list)
     issues: list[UploadPreflightIssueResponse] = Field(default_factory=list)
+
+
+class UploadScopePreviewCategoryResponse(BaseModel):
+    category: str
+    label: str
+    row_count: int
+
+
+class UploadScopePreviewScopeResponse(BaseModel):
+    validation_scope: ValidationScope
+    estimated_rows_in_scope: int
+    estimated_rows_out_of_scope: int
+    category_counts: list[UploadScopePreviewCategoryResponse] = Field(default_factory=list)
+
+
+class UploadScopePreviewResponse(BaseModel):
+    source_total_rows: int
+    duplicate_group_count: int
+    scopes: list[UploadScopePreviewScopeResponse] = Field(default_factory=list)
 
 
 class TenantListItemResponse(BaseModel):
@@ -705,6 +725,31 @@ def _build_upload_preflight_response(
         issues=[
             UploadPreflightIssueResponse(code=issue.code, message=issue.message)
             for issue in result.issues
+        ],
+    )
+
+
+def _build_upload_scope_preview_response(
+    result,
+) -> UploadScopePreviewResponse:
+    return UploadScopePreviewResponse(
+        source_total_rows=result.source_total_rows,
+        duplicate_group_count=result.duplicate_group_count,
+        scopes=[
+            UploadScopePreviewScopeResponse(
+                validation_scope=scope.validation_scope,
+                estimated_rows_in_scope=scope.estimated_rows_in_scope,
+                estimated_rows_out_of_scope=scope.estimated_rows_out_of_scope,
+                category_counts=[
+                    UploadScopePreviewCategoryResponse(
+                        category=category.category,
+                        label=category.label,
+                        row_count=category.row_count,
+                    )
+                    for category in scope.category_counts
+                ],
+            )
+            for scope in result.scopes
         ],
     )
 
@@ -1777,6 +1822,39 @@ async def run_retention_cleanup(
         api_key_id=auth.api_key_id,
     )
     return _build_retention_run_response(result)
+
+
+@router.post("/validate/preview", response_model=UploadScopePreviewResponse)
+async def preview_validation_scope(
+    request: Request,
+    file: UploadFile,
+    tenant_id: str | None = None,
+) -> UploadScopePreviewResponse:
+    get_authenticated_tenant(request)
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    uploaded_file_name = Path(file.filename or "lote.csv").name or "lote.csv"
+    content = await file.read()
+    tenant_config = load_tenant_config(resolved_tenant_id)
+
+    try:
+        preview = build_upload_scope_preview(
+            file_name=uploaded_file_name,
+            content=content,
+            tenant_config=tenant_config,
+        )
+    except UploadPreflightError as exc:
+        preflight = _build_upload_preflight_response(exc.result)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": exc.detail,
+                "preflight": preflight.model_dump(mode="json"),
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return _build_upload_scope_preview_response(preview)
 
 
 @router.post("/validate", response_model=UploadResponse)

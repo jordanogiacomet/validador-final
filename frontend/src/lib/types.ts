@@ -265,6 +265,25 @@ export interface UploadPreflightPayload {
   issues: UploadPreflightIssue[];
 }
 
+export interface UploadScopePreviewCategoryPayload {
+  category: string;
+  label: string;
+  row_count: number;
+}
+
+export interface UploadScopePreviewScopePayload {
+  validation_scope: ValidationScope;
+  estimated_rows_in_scope: number;
+  estimated_rows_out_of_scope: number;
+  category_counts: UploadScopePreviewCategoryPayload[];
+}
+
+export interface UploadScopePreviewPayload {
+  source_total_rows: number;
+  duplicate_group_count: number;
+  scopes: UploadScopePreviewScopePayload[];
+}
+
 export interface SummaryPayload {
   total_rows: number;
   validated_rows?: number;

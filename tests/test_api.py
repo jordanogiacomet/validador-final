@@ -183,6 +183,13 @@ DUPLICATE_SCOPE_CSV_CONTENT = (
     "001,,Armario,MarcaA,ModeloB,SN3,Sala3,CC3,Detalhe armario completo validado,\n"
 )
 
+EMPRESA_EXEMPLO_SCOPE_PREVIEW_CSV_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "001,,Ar condicionado split,MarcaX,ModeloY,SN1,Sala1,CC1,12000 BTU,Obs\n"
+    "002,PA-100,Televisor LED,MarcaZ,ModeloW,SN2,Sala2,CC2,55 polegadas,Obs\n"
+    "001,,Ar condicionado janela,MarcaA,ModeloB,SN3,Sala3,CC3,7500 BTU,Obs\n"
+)
+
 REDESIM_CSV_CONTENT = (
     "especie_id;base_id;;item_anterior;item;descricao;marca;modelo;ns;complemento;observacao;cc;cc_descricao;local;latitude;longitude;gps;usuario;foto_complementar_memento;\n"
     "1;144;uuid-1;;001;MONITOR;Dell;P2419H;SN1;;;8327;A27;MATRIZ;;;;Leticia;;\n"
@@ -2552,6 +2559,62 @@ def test_validate_rejects_preflight_failure_without_creating_job():
         "Descrição",
     ]
     assert payload["preflight"]["missing_columns"] == []
+    assert payload["preflight"]["issues"][0]["code"] == "delimiter_mismatch"
+    assert job_service.list_jobs(tenant_id="default") == []
+
+
+def test_preview_validation_scope_returns_counts_without_creating_job():
+    files = {
+        "file": (
+            "scope.csv",
+            BytesIO(EMPRESA_EXEMPLO_SCOPE_PREVIEW_CSV_CONTENT.encode()),
+            "text/csv",
+        )
+    }
+
+    response = client.post(
+        "/validate/preview?tenant_id=empresa_exemplo",
+        files=files,
+        headers=auth_headers("empresa-exemplo-local-test-key"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    scopes = {entry["validation_scope"]: entry for entry in payload["scopes"]}
+
+    assert payload["source_total_rows"] == 3
+    assert payload["duplicate_group_count"] == 1
+    assert scopes["zero_items"]["estimated_rows_in_scope"] == 2
+    assert scopes["duplicate_items"]["estimated_rows_in_scope"] == 2
+    assert scopes["all_items"]["estimated_rows_in_scope"] == 3
+    assert scopes["all_items"]["category_counts"] == [
+        {"category": "ar_condicionado", "label": "AR CONDICIONADO", "row_count": 2},
+        {"category": "tv", "label": "TV", "row_count": 1},
+    ]
+    assert job_service.list_jobs(tenant_id="empresa_exemplo") == []
+
+
+def test_preview_validation_scope_reuses_preflight_error_payload():
+    files = {
+        "file": (
+            "lote.csv",
+            BytesIO(SEMICOLON_CSV_CONTENT.encode()),
+            "text/csv",
+        )
+    }
+
+    response = client.post(
+        "/validate/preview?tenant_id=default",
+        files=files,
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert (
+        payload["detail"]
+        == "O delimitador do CSV nao corresponde ao layout esperado para esta empresa."
+    )
     assert payload["preflight"]["issues"][0]["code"] == "delimiter_mismatch"
     assert job_service.list_jobs(tenant_id="default") == []
 

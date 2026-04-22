@@ -2,7 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, listTenants, validateFile } from "@/lib/api";
+import { ApiError, listTenants, previewValidationScope, validateFile } from "@/lib/api";
 
 import { OperationalWorkspace } from "./operational-workspace";
 
@@ -40,16 +40,19 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     listTenants: vi.fn(),
+    previewValidationScope: vi.fn(),
     validateFile: vi.fn(),
   };
 });
 
 const listTenantsMock = vi.mocked(listTenants);
+const previewValidationScopeMock = vi.mocked(previewValidationScope);
 const validateFileMock = vi.mocked(validateFile);
 
 describe("OperationalWorkspace upload preflight", () => {
   beforeEach(() => {
     listTenantsMock.mockReset();
+    previewValidationScopeMock.mockReset();
     validateFileMock.mockReset();
 
     listTenantsMock.mockResolvedValue([
@@ -59,6 +62,30 @@ describe("OperationalWorkspace upload preflight", () => {
         is_default: true,
       },
     ]);
+    previewValidationScopeMock.mockResolvedValue({
+      source_total_rows: 3,
+      duplicate_group_count: 1,
+      scopes: [
+        {
+          validation_scope: "zero_items",
+          estimated_rows_in_scope: 1,
+          estimated_rows_out_of_scope: 2,
+          category_counts: [],
+        },
+        {
+          validation_scope: "duplicate_items",
+          estimated_rows_in_scope: 2,
+          estimated_rows_out_of_scope: 1,
+          category_counts: [],
+        },
+        {
+          validation_scope: "all_items",
+          estimated_rows_in_scope: 3,
+          estimated_rows_out_of_scope: 0,
+          category_counts: [],
+        },
+      ],
+    });
   });
 
   it("renders inline preflight guidance when the upload is rejected before job creation", async () => {
@@ -104,6 +131,10 @@ describe("OperationalWorkspace upload preflight", () => {
     fireEvent.click(screen.getByRole("button", { name: "Iniciar conferência" }));
 
     await waitFor(() => {
+      expect(previewValidationScopeMock).toHaveBeenCalledWith({
+        file: expect.any(File),
+        tenantId: "default",
+      });
       expect(validateFileMock).toHaveBeenCalledWith({
         file: expect.any(File),
         tenantId: "default",
@@ -124,5 +155,120 @@ describe("OperationalWorkspace upload preflight", () => {
       screen.getByText("O arquivo atual parece usar o delimitador ';'."),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Iniciar conferência" })).toBeDefined();
+  });
+
+  it("updates the selected scope preview locally after the file preview is loaded", async () => {
+    render(<OperationalWorkspace initialTenantId="default" />);
+
+    const fileInput = await screen.findByLabelText("Planilha CSV ou XLSX");
+    fireEvent.change(fileInput, {
+      target: {
+        files: [new File(["Item,Descricao\n001,Mesa\n"], "lote.csv", { type: "text/csv" })],
+      },
+    });
+
+    expect(
+      await screen.findByText(
+        "1 de 3 linha(s) entrarão porque estão cadastradas do zero.",
+      ),
+    ).toBeDefined();
+    expect(previewValidationScopeMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("radio", { name: /Somente duplicados/i }));
+
+    expect(
+      await screen.findByText(
+        "2 de 3 linha(s) entrarão porque pertencem a 1 grupo(s) com Item repetido.",
+      ),
+    ).toBeDefined();
+    expect(previewValidationScopeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads the preview when the tenant changes", async () => {
+    listTenantsMock.mockResolvedValue([
+      {
+        tenant_id: "default",
+        display_name: "Default Tenant",
+        is_default: true,
+      },
+      {
+        tenant_id: "empresa_exemplo",
+        display_name: "Empresa Exemplo",
+        is_default: false,
+      },
+    ]);
+    previewValidationScopeMock
+      .mockResolvedValueOnce({
+        source_total_rows: 3,
+        duplicate_group_count: 1,
+        scopes: [
+          {
+            validation_scope: "zero_items",
+            estimated_rows_in_scope: 1,
+            estimated_rows_out_of_scope: 2,
+            category_counts: [],
+          },
+          {
+            validation_scope: "duplicate_items",
+            estimated_rows_in_scope: 2,
+            estimated_rows_out_of_scope: 1,
+            category_counts: [],
+          },
+          {
+            validation_scope: "all_items",
+            estimated_rows_in_scope: 3,
+            estimated_rows_out_of_scope: 0,
+            category_counts: [],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        source_total_rows: 2,
+        duplicate_group_count: 0,
+        scopes: [
+          {
+            validation_scope: "zero_items",
+            estimated_rows_in_scope: 2,
+            estimated_rows_out_of_scope: 0,
+            category_counts: [{ category: "tv", label: "TV", row_count: 2 }],
+          },
+          {
+            validation_scope: "duplicate_items",
+            estimated_rows_in_scope: 0,
+            estimated_rows_out_of_scope: 2,
+            category_counts: [],
+          },
+          {
+            validation_scope: "all_items",
+            estimated_rows_in_scope: 2,
+            estimated_rows_out_of_scope: 0,
+            category_counts: [{ category: "tv", label: "TV", row_count: 2 }],
+          },
+        ],
+      });
+
+    render(<OperationalWorkspace initialTenantId="default" />);
+
+    const fileInput = await screen.findByLabelText("Planilha CSV ou XLSX");
+    fireEvent.change(fileInput, {
+      target: {
+        files: [new File(["Item,Descricao\n001,Mesa\n"], "lote.csv", { type: "text/csv" })],
+      },
+    });
+
+    await screen.findByText("1 de 3 linha(s) entrarão porque estão cadastradas do zero.");
+
+    fireEvent.change(screen.getByLabelText("Empresa"), {
+      target: { value: "empresa_exemplo" },
+    });
+
+    expect(
+      await screen.findByText("2 de 2 linha(s) entrarão porque estão cadastradas do zero."),
+    ).toBeDefined();
+    expect(screen.getByText("TV: 2")).toBeDefined();
+    expect(previewValidationScopeMock).toHaveBeenNthCalledWith(2, {
+      file: expect.any(File),
+      tenantId: "empresa_exemplo",
+    });
   });
 });

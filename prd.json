@@ -1106,6 +1106,187 @@
       "priority": 64,
       "passes": true,
       "notes": "Implementado com manifests Kubernetes environment-neutral (ClusterIP + Ingress/TLS), configuração via ConfigMap, frontend com runtime-config.js/VALIDATOR_FRONTEND_API_BASE_URL, réplicas múltiplas para API/frontend/worker, probes separados /readyz e /livez, documentação e smoke/pytest de deploy."
+    },
+    {
+      "id": "US-065",
+      "title": "Exibir prévia de escopo antes de criar o lote",
+      "description": "Como operador, preciso entender quantas linhas e quais tipos de ocorrência entram no escopo escolhido antes de iniciar o lote para evitar processamento errado e retrabalho.",
+      "acceptanceCriteria": [
+        "Exibir uma prévia operacional do escopo selecionado antes da criação do job, incluindo contagem estimada de linhas e categorias relevantes quando possível",
+        "Explicar em linguagem simples a diferença prática entre opções como validação completa, foco em duplicidades e recortes equivalentes existentes no produto",
+        "Atualizar a prévia imediatamente quando o operador trocar arquivo, tenant ou tipo de processamento aplicável",
+        "Não criar lote apenas para mostrar essa prévia quando o problema puder ser detectado no preflight",
+        "Adicionar testes backend/frontend para cálculo, renderização e transições de estado da prévia",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 65,
+      "passes": true,
+      "notes": "Implementado com `POST /validate/preview` reaproveitando o preflight do upload para calcular contagens de todos os escopos sem criar job, e com o frontend exibindo a prévia operacional por arquivo/empresa antes da criação do lote."
+    },
+    {
+      "id": "US-066",
+      "title": "Simplificar os estados de login, setup inicial e troca obrigatória de senha",
+      "description": "Como operador ou administrador, preciso encontrar um fluxo de acesso claro e sem excesso de informação para entrar no sistema, concluir setup inicial ou trocar senha obrigatória sem confusão.",
+      "acceptanceCriteria": [
+        "Separar visual e semanticamente os estados de login comum, primeiro setup e troca obrigatória de senha",
+        "Reduzir jargão técnico e instruções concorrentes na mesma tela de acesso",
+        "Apresentar mensagens de erro, bloqueio e recuperação de forma contextual ao estado atual do usuário",
+        "Preservar os fluxos de autenticação, convite, setup inicial e first-login já existentes sem regressão funcional",
+        "Adicionar testes de frontend para renderização, transição entre estados e mensagens principais",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 66,
+      "passes": false,
+      "notes": "Story de UX para reduzir carga cognitiva na porta de entrada do produto."
+    },
+    {
+      "id": "US-067",
+      "title": "Reorganizar o workspace de resultado por prioridade operacional",
+      "description": "Como operador, preciso revisar o resultado em uma interface mais focada e progressiva para corrigir primeiro o que importa sem me perder em painéis secundários.",
+      "acceptanceCriteria": [
+        "Reestruturar a tela de resultado em blocos de prioridade operacional como corrigir agora, duplicidades, exportação e histórico",
+        "Manter painéis secundários como auditoria e controles administrativos sob demanda para reduzir ruído visual no fluxo principal",
+        "Destacar ações prioritárias e artefatos principais sem exigir varredura extensa da tela",
+        "Preservar os fluxos já existentes de filtro, correção, reprocessamento, downloads e lineage",
+        "Adicionar testes de frontend para ordem de apresentação, disclosures e estados principais do workspace",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 67,
+      "passes": false,
+      "notes": "Story de UX para reduzir densidade excessiva na revisão do lote e melhorar velocidade de decisão."
+    },
+    {
+      "id": "US-068",
+      "title": "Garantir revisão acessível por teclado e modais robustos",
+      "description": "Como operador, preciso navegar e corrigir o resultado só com teclado e com foco previsível para trabalhar com mais velocidade e acessibilidade.",
+      "acceptanceCriteria": [
+        "Adicionar foco visível consistente para controles interativos relevantes do frontend operacional",
+        "Garantir ordem de tab previsível, fechamento por Escape e trap de foco nos modais principais",
+        "Permitir concluir os fluxos críticos de busca, filtro, revisão, edição e confirmação usando teclado",
+        "Preservar o comportamento atual de mouse/touch sem regressão visual relevante",
+        "Adicionar testes de frontend para foco, navegação por teclado e comportamento dos modais",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 68,
+      "passes": false,
+      "notes": "Story de UX/acessibilidade focada em reduzir atrito operacional e risco de não conformidade."
+    },
+    {
+      "id": "US-069",
+      "title": "Melhorar estados de loading, vazio e erro no fluxo operacional",
+      "description": "Como operador, preciso receber feedback claro durante carregamentos, falhas e estados vazios para entender o que está acontecendo e qual é a próxima ação esperada.",
+      "acceptanceCriteria": [
+        "Eliminar telas aparentemente vazias durante hidratação de sessão, abertura inicial e carregamentos principais do fluxo operacional",
+        "Exibir estados de loading, vazio e erro com mensagem operacional e próxima ação clara em upload, acompanhamento de lote, resultado e auditoria",
+        "Evitar que falhas locais secundárias derrubem ou poluam o fluxo principal desnecessariamente",
+        "Preservar os fluxos já existentes de autenticação, upload, polling/notificação e resultado sem regressão funcional",
+        "Adicionar testes de frontend para renderização dos principais estados transitórios e de erro",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 69,
+      "passes": false,
+      "notes": "Story de UX para reduzir sensação de lentidão, ambiguidade e abandono em pontos críticos da jornada."
+    },
+    {
+      "id": "US-070",
+      "title": "Medir distribuição real de volume de upload por tenant",
+      "description": "Como gestor de produto e operação, preciso medir tamanho médio, p95 e pico horário de uploads por tenant para calibrar limites, UX de upload e capacidade percebida com base em uso real.",
+      "acceptanceCriteria": [
+        "Instrumentar uploads com tamanho do arquivo, tenant_id, formato, resultado do preflight e bucket horário sem introduzir labels de alta cardinalidade em métricas",
+        "Consolidar por tenant e período o tamanho médio, p95, máximo e volume total horário de uploads",
+        "Tratar 50 MB por hora como limite operacional inicial monitorado, com visibilidade clara quando ele for excedido",
+        "Disponibilizar esses indicadores em superfície operacional já existente ou em endpoint/KPI equivalente protegido por autorização adequada",
+        "Adicionar testes para agregação, autorização e consistência dos cálculos",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 70,
+      "passes": false,
+      "notes": "Story derivada da necessidade de substituir estimativas por telemetria real de volume antes de endurecer budgets definitivos por tenant."
+    },
+    {
+      "id": "US-071",
+      "title": "Otimizar revisão e consolidação de duplicados em mobile",
+      "description": "Como operador, preciso revisar, comparar e consolidar duplicados no mobile com baixa fricção para que dois operadores consigam atuar simultaneamente nesse fluxo sem depender sempre de desktop.",
+      "acceptanceCriteria": [
+        "Criar layout mobile-first para a área de duplicidades sem depender de tabela horizontal para as ações principais",
+        "Garantir que filtros, galeria de fotos, comparação entre ocorrências e ação de consolidar/corrigir permaneçam utilizáveis em viewport estreita",
+        "Priorizar os fluxos de `Nomes iguais`, `Nomes diferentes`, merge e correção direta de duplicados no mobile",
+        "Preservar o fluxo desktop existente sem regressão e manter a implementação tenant-agnostic",
+        "Adicionar feedback claro quando o lote ativo mudar de estado ou for alterado por outra ação operacional relevante enquanto o operador está no mobile",
+        "Adicionar testes de frontend para responsividade, estados críticos e fluxo principal de duplicidades no mobile",
+        "Frontend typecheck, lint e testes passam"
+      ],
+      "priority": 71,
+      "passes": false,
+      "notes": "Story guiada pelo uso real de dois operadores simultâneos em mobile para merge e correção de duplicados."
+    },
+    {
+      "id": "US-072",
+      "title": "Restringir o editor JSON de perfil ao modo técnico avançado",
+      "description": "Como time técnico, preciso acessar o editor JSON completo do perfil de validação sem expor essa complexidade ao fluxo administrativo comum para reduzir erro de configuração e sobrecarga cognitiva.",
+      "acceptanceCriteria": [
+        "Manter o editor JSON bruto de perfil disponível apenas em modo técnico ou para papéis explicitamente autorizados",
+        "Separar visualmente o modo guiado de administração do modo avançado baseado em JSON",
+        "Exibir validação de schema, diff resumido e warnings de publicação antes de salvar ou publicar alterações feitas no JSON bruto",
+        "Preservar histórico, rollback e auditoria existentes para mudanças de perfil feitas pelo modo técnico",
+        "Não rebaixar o editor JSON para requisito de UX do tenant admin comum",
+        "Adicionar testes de backend/frontend para autorização, validação e publicação pelo modo técnico",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 72,
+      "passes": false,
+      "notes": "Story derivada da confirmação de que o editor JSON é superfície de uso do time técnico, não do tenant admin operacional."
+    },
+    {
+      "id": "US-073",
+      "title": "Enxugar o payload inicial de /jobs/{job_id}/result para o frontend",
+      "description": "Como operador, preciso abrir o resultado do lote com menor latência e menos travamentos para começar a revisão sem baixar de imediato payloads pesados que a tela inicial não usa.",
+      "acceptanceCriteria": [
+        "Criar contrato slim, versionado ou segmentado para o carregamento inicial do resultado, evitando enviar por padrão payloads completos não usados na primeira renderização",
+        "Permitir carregamento sob demanda de detalhes pesados como conjuntos completos de linhas ou seções equivalentes quando realmente necessários",
+        "Atualizar o frontend para consumir o novo contrato sem quebrar filtros, correções, downloads protegidos, histórico e auditoria do lote",
+        "Aproveitar o fato de que `/jobs/{job_id}/result` não possui consumidores externos além do frontend para simplificar a evolução do contrato",
+        "Adicionar medições de payload e tempo de abertura do resultado antes/depois da mudança",
+        "Adicionar testes backend e frontend para compatibilidade funcional e regressões de fluxo",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 73,
+      "passes": false,
+      "notes": "Story orientada por performance percebida: a tela principal deve carregar primeiro o que o operador realmente precisa para revisar."
+    },
+    {
+      "id": "US-074",
+      "title": "Sinalizar PDF e JSON desatualizados após correções no CSV",
+      "description": "Como operador, preciso saber quando PDF e JSON ficaram desatualizados depois de corrigir o CSV para não baixar ou compartilhar artefatos antigos achando que representam o estado atual do lote.",
+      "acceptanceCriteria": [
+        "Qualquer edição manual, marcação relevante ou consolidação de duplicidade que altere o CSV corrigido deve marcar PDF e JSON do lote como desatualizados até novo reprocessamento",
+        "O CSV corrigido deve permanecer disponível como artefato principal enquanto PDF e JSON estiverem stale",
+        "Frontend deve exibir estado visual explícito de artefato desatualizado com contexto suficiente para o operador entender o motivo",
+        "Se downloads stale continuarem permitidos por motivo de auditoria, eles devem ser identificados claramente como desatualizados no frontend",
+        "Novo reprocessamento deve limpar o estado stale e gerar artefatos atualizados",
+        "Adicionar testes backend e frontend para transição de estado, downloads e regeneração após reprocessamento",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 74,
+      "passes": false,
+      "notes": "Escolha de produto: preservar auditabilidade sem permitir que o operador confunda artefatos antigos com o resultado corrigido mais recente."
+    },
+    {
+      "id": "US-075",
+      "title": "Substituir polling agressivo do lote ativo por SSE com fallback",
+      "description": "Como operador, preciso acompanhar progresso e conclusão do lote em tempo real com menos carga de rede e menos ruído visual para que a experiência pareça rápida e estável mesmo em sessões longas.",
+      "acceptanceCriteria": [
+        "Adicionar canal SSE para progresso, transições de estado e evento terminal do lote ativo",
+        "Frontend deve consumir SSE por padrão no lote em foco e fazer fallback automático para polling quando SSE não estiver disponível",
+        "Evitar duplicidade de eventos, notificações e atualizações de estado entre SSE e fallback",
+        "Reduzir substancialmente o volume de requisições periódicas do lote ativo sem perder ETA, notificações e atualização após troca de aba",
+        "Manter a implementação tenant-agnostic e compatível com o modo worker existente",
+        "Adicionar testes backend e frontend para stream, reconexão, fallback e estados terminais",
+        "Ruff lint, pytest, frontend typecheck, lint e testes passam"
+      ],
+      "priority": 75,
+      "passes": false,
+      "notes": "WebSocket é aceitável, mas SSE é a opção preferencial por simplicidade operacional para o fluxo de progresso do lote ativo."
     }
   ],
   "nonFunctionalRequirements": {
@@ -1126,6 +1307,50 @@
       "No global hardcoded prompt as the only audit source",
       "No mixing of API, validation rules, and report rendering in the same new abstraction"
     ]
+  },
+  "uxPerformanceContext": {
+    "dataVolume": {
+      "averageRealFileSizeMb": null,
+      "p95RealFileSizeMb": null,
+      "confirmedOperationalUpperBoundMbPerHour": 50,
+      "notes": [
+        "Average and p95 real file sizes are still unknown and should be instrumented by tenant.",
+        "Until telemetry is available, treat 50 MB per hour as the confirmed upper operational bound."
+      ]
+    },
+    "mobileOperationalUsage": {
+      "simultaneousOperators": 2,
+      "primaryWorkflows": [
+        "merge duplicate groups",
+        "correct duplicate rows"
+      ],
+      "designImplication": "Mobile UX should prioritize duplicate review and correction flows over full desktop parity."
+    },
+    "profileAdministration": {
+      "jsonProfileEditorAudience": [
+        "technical_team"
+      ],
+      "selfServiceAudience": [],
+      "designImplication": "The JSON profile editor can remain an advanced technical surface and does not need to be optimized for ordinary tenant admins."
+    },
+    "resultApiConsumption": {
+      "frontendOnly": true,
+      "externalIntegrations": false,
+      "designImplication": "The /jobs/{job_id}/result contract can be slimmed, versioned, or split as long as the first-party frontend is updated together."
+    },
+    "artifactFreshnessPolicy": {
+      "preservePreviousPdfAndJsonUntilReprocess": true,
+      "markPdfAndJsonAsStaleAfterCsvCorrection": true,
+      "preferCorrectedCsvAsPrimaryArtifactWhileStale": true,
+      "requireReprocessForFreshPdfAndJson": true,
+      "designImplication": "Preserve auditability without letting operators confuse outdated PDF/JSON artifacts with the latest corrected CSV."
+    },
+    "activeJobRealtimeStrategy": {
+      "preferredTransport": "sse",
+      "websocketAccepted": true,
+      "pollingFallback": true,
+      "scope": "active job progress and terminal state updates"
+    }
   },
   "seedTenants": [
     {

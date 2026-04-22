@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 15:33 -02
+Last Updated: 2026-04-22 18:31 -02
 
 ---
 
@@ -13,6 +13,7 @@ Last Updated: 2026-04-22 15:33 -02
 - Prefer rule-based validation with reusable abstractions over hardcoded validation chains.
 - Keep API handlers thin and delegate orchestration to services.
 - Upload preflight should run in `app/services/validation_service.py` before `job_service.create_job(...)`; on failure, return a top-level `preflight` payload with detected/missing columns so the frontend can render inline corrections without creating a doomed job.
+- Scope previews should also stay in `app/services/validation_service.py`: compute all scope counts from the preflighted file in one `/validate/preview` call, then let the frontend switch scopes locally without creating a job or reuploading per scope change.
 - Accept XLSX uploads by converting them to tenant-configured CSV at ingress in `app/services/validation_service.py`; keep downstream job execution, duplicate correction, and report flows on the shared CSV artifact.
 - Keep validation logic, job orchestration, and report rendering in separate modules.
 - Preserve the distinction between collected items and zero-created items as a core domain concept.
@@ -1342,4 +1343,21 @@ Expected architectural direction:
   - Published frontend API endpoints should be runtime config, not baked NodePort assumptions; `frontend/src/lib/api.ts` reads `/runtime-config.js` before build-time env.
   - Keep Kubernetes manifests environment-neutral and patch ingress hosts, CORS origins, images, tenant IDs, and storage classes per target environment.
   - Readiness and liveness should stay separate in published deploys so storage/auth-policy failures stop traffic without forcing process restarts.
+---
+## 2026-04-22 18:31 -02 - US-065
+- Implementada a prévia operacional de escopo antes da criação do lote: o backend agora expõe `POST /validate/preview`, reaproveita o mesmo preflight do upload e calcula, sem criar job, quantas linhas entram em cada recorte (`itens do zero`, `duplicados`, `todos os itens`) e quais categorias relevantes aparecem no arquivo.
+- Atualizado o fluxo frontend de upload para buscar essa prévia ao trocar arquivo/empresa, mostrar contagens por escopo no próprio seletor, explicar em linguagem simples o impacto prático de cada opção e atualizar a leitura selecionada localmente sem novo round-trip ao trocar apenas o rádio.
+- Adicionados testes focados de service/API para cálculo e reaproveitamento do payload de preflight, além de testes frontend para renderização da prévia, troca local de escopo e recarga da prévia ao mudar a empresa.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/services/validation_service.py`, `frontend/src/app/globals.css`, `frontend/src/components/operational-workspace.test.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/upload-panel.test.tsx`, `frontend/src/components/upload-panel.tsx`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/lib/api.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/lib/types.ts`, `tests/test_api.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the new scope-preview flow is still recommended before publishing.
+- **Learnings for future iterations:**
+  - A prévia de escopo deve reutilizar exatamente o mesmo preflight do upload para evitar divergência entre o que a UI antecipa e o que o `POST /validate` realmente aceita.
+  - Vale calcular todos os recortes em uma única leitura normalizada do arquivo e deixar a troca entre rádios no frontend puramente local; isso reduz round-trips e mantém a resposta imediata ao operador.
+  - As contagens por categoria ficam mais úteis quando o backend devolve apenas dados estruturados por escopo e o frontend monta a cópia operacional em `frontend/src/lib/presentation.ts`.
 ---

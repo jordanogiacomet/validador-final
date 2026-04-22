@@ -19,6 +19,7 @@ import {
   getJobResult,
   getJobRow,
   listTenants,
+  previewValidationScope,
   reprocessJob,
   revertJobCorrection,
   resolveDuplicateRows,
@@ -27,8 +28,6 @@ import {
   validateFile,
 } from "@/lib/api";
 import {
-  INITIAL_PROBLEM_OCCURRENCES,
-  PROBLEM_OCCURRENCES_STEP,
   buildFinalScopeCopy,
   buildPreviewReportData,
   formatJobFailureMessage,
@@ -56,6 +55,7 @@ import type {
   RowReadResponse,
   TenantListItem,
   UploadPreflightPayload,
+  UploadScopePreviewPayload,
   ValidationScope,
 } from "@/lib/types";
 import { useActiveJobs } from "@/hooks/use-active-jobs";
@@ -231,14 +231,14 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   const [uploadPreflight, setUploadPreflight] = useState<UploadPreflightPayload | null>(
     null,
   );
+  const [scopePreview, setScopePreview] = useState<UploadScopePreviewPayload | null>(null);
+  const [scopePreviewError, setScopePreviewError] = useState<string | null>(null);
+  const [isScopePreviewLoading, setIsScopePreviewLoading] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<JobStatusResponse | null>(null);
   const [reportData, setReportData] = useState<JobResultPayload | null>(null);
   const [manualBanner, setManualBanner] = useState<BannerState | null>(null);
   const [hasPendingCorrections, setHasPendingCorrections] = useState(false);
-  const [visibleProblemOccurrencesByCode, setVisibleProblemOccurrencesByCode] = useState<
-    Record<string, number>
-  >({});
   const [editModalState, setEditModalState] = useState<EditModalState | null>(null);
   const [editValue, setEditValue] = useState("");
   const [isEditModalLoading, setIsEditModalLoading] = useState(false);
@@ -255,6 +255,7 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const latestEditRequestRef = useRef(0);
+  const latestScopePreviewRequestRef = useRef(0);
   const notificationPermissionRequestedRef = useRef(false);
 
   useJobTerminalNotification(currentJob);
@@ -300,6 +301,61 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
       isCancelled = true;
     };
   }, [fallbackTenant, initialTenantId, selectedTenantId]);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setScopePreview(null);
+      setScopePreviewError(null);
+      setIsScopePreviewLoading(false);
+      return;
+    }
+
+    const previewFile = selectedFile;
+    const requestId = latestScopePreviewRequestRef.current + 1;
+    latestScopePreviewRequestRef.current = requestId;
+    setIsScopePreviewLoading(true);
+    setScopePreview(null);
+    setScopePreviewError(null);
+
+    async function loadScopePreview() {
+      try {
+        const preview = await previewValidationScope({
+          file: previewFile,
+          tenantId: selectedTenantId,
+        });
+        if (latestScopePreviewRequestRef.current !== requestId) {
+          return;
+        }
+        setScopePreview(preview);
+        setUploadPreflight(null);
+      } catch (caughtError) {
+        if (latestScopePreviewRequestRef.current !== requestId) {
+          return;
+        }
+
+        const preflightPayload = extractUploadPreflightPayload(caughtError);
+        if (preflightPayload) {
+          setScopePreview(null);
+          setScopePreviewError(null);
+          setUploadPreflight(preflightPayload);
+          return;
+        }
+
+        setScopePreview(null);
+        setScopePreviewError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Nao foi possivel estimar o recorte desta planilha.",
+        );
+      } finally {
+        if (latestScopePreviewRequestRef.current === requestId) {
+          setIsScopePreviewLoading(false);
+        }
+      }
+    }
+
+    void loadScopePreview();
+  }, [selectedFile, selectedTenantId]);
 
   useJobPolling({
     jobId: currentJobId,
@@ -386,7 +442,6 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   }
 
   function resetWorkspaceState() {
-    setVisibleProblemOccurrencesByCode({});
     closeEditModal();
     setRowCache({});
     setDuplicateModalState(null);
@@ -943,13 +998,6 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
     }
   }
 
-  function showMoreProblemOccurrences(code: string) {
-    setVisibleProblemOccurrencesByCode((currentValue) => ({
-      ...currentValue,
-      [code]: (currentValue[code] || INITIAL_PROBLEM_OCCURRENCES) + PROBLEM_OCCURRENCES_STEP,
-    }));
-  }
-
   const effectiveValidationScope = currentJob?.validation_scope || validationScope;
   const organizationLabel = getTenantLabel(tenants, currentJob?.tenant_id || selectedTenantId);
   const banner = manualBanner || deriveDefaultBanner(currentJob, reportData, effectiveValidationScope);
@@ -968,20 +1016,26 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
             isTenantLoading={isTenantLoading}
             tenantError={tenantError}
             uploadPreflight={uploadPreflight}
+            scopePreview={scopePreview}
+            isScopePreviewLoading={isScopePreviewLoading}
+            scopePreviewError={scopePreviewError}
             onTenantChange={(tenantId) => {
               setSelectedTenantId(tenantId);
               setManualBanner(null);
               setUploadPreflight(null);
+              setScopePreview(null);
+              setScopePreviewError(null);
             }}
             onTemplateDownload={handleDownloadTemplate}
             onValidationScopeChange={(scope) => {
               setValidationScope(scope);
-              setUploadPreflight(null);
             }}
             onFileChange={(file) => {
               setSelectedFile(file);
               setSelectedFileName(file?.name || null);
               setUploadPreflight(null);
+              setScopePreview(null);
+              setScopePreviewError(null);
             }}
             onSubmit={handleSubmit}
           />
@@ -1012,12 +1066,10 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
             reportData={reportData}
             previewData={previewData}
             hasPendingCorrections={hasPendingCorrections}
-            visibleProblemOccurrencesByCode={visibleProblemOccurrencesByCode}
             isReprocessing={isReprocessing}
             isResolvingBulkSameNameDuplicates={isBulkResolvingSameNameDuplicates}
             isSavingReviewFlag={isSavingReviewFlag}
             revertingCorrectionEventId={revertingCorrectionEventId}
-            onShowMore={showMoreProblemOccurrences}
             onEditOccurrence={handleEditOccurrence}
             onToggleReviewFlag={handleToggleReviewFlag}
             onRevertCorrection={handleRevertCorrection}

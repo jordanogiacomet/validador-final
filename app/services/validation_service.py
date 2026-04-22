@@ -6,6 +6,7 @@ import re
 import shutil
 import time
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from app.core.canonical_fields import (
     DEFAULT_TENANT_COLUMNS,
     resolve_source_column_name,
 )
+from app.core.duplicate_items import group_duplicate_item_row_indices
 from app.core.engine import ValidationEngine, ValidationExecutionPlan
 from app.core.issue import ValidationIssue
 from app.core.job import JobRecord, JobStatus
@@ -37,7 +39,12 @@ from app.core.validation_scope import (
     parse_validation_scope,
 )
 from app.rules.brand_model_consistency import BrandModelConsistencyRule
-from app.rules.category_rules import CategoryCriticalCheckRule, CategoryRequiredFieldsRule
+from app.rules.category_rules import (
+    CategoryCriticalCheckRule,
+    CategoryRequiredFieldsRule,
+    classify_category,
+    get_category_label,
+)
 from app.rules.integrity import DuplicateItemRule, FlagConsistencyRule
 from app.rules.llm_audit import (
     LLM_AUDIT_METADATA_KEY,
@@ -104,6 +111,28 @@ class UploadPreflightResult:
 
 
 @dataclass(frozen=True)
+class UploadScopePreviewCategory:
+    category: str
+    label: str
+    row_count: int
+
+
+@dataclass(frozen=True)
+class UploadScopePreviewScope:
+    validation_scope: ValidationScope
+    estimated_rows_in_scope: int
+    estimated_rows_out_of_scope: int
+    category_counts: list[UploadScopePreviewCategory]
+
+
+@dataclass(frozen=True)
+class UploadScopePreviewResult:
+    source_total_rows: int
+    duplicate_group_count: int
+    scopes: list[UploadScopePreviewScope]
+
+
+@dataclass(frozen=True)
 class _CsvLayoutProbe:
     encoding: str
     delimiter: str
@@ -153,6 +182,11 @@ DATE_TIME_VALUE_PATTERNS = (
     re.compile(r"^\d{2}/\d{2}/\d{4}(?: \d{2}:\d{2}(?::\d{2})?)?$"),
     re.compile(r"^\d{2}-\d{2}-\d{4}(?: \d{2}:\d{2}(?::\d{2})?)?$"),
     re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$"),
+)
+SCOPE_PREVIEW_ORDER = (
+    ValidationScope.ZERO_ITEMS,
+    ValidationScope.DUPLICATE_ITEMS,
+    ValidationScope.ALL_ITEMS,
 )
 
 
@@ -1066,6 +1100,93 @@ def prepare_upload_content_for_job(
     raise ValueError(f"Unsupported upload format: {file_extension or 'unknown'}")
 
 
+def _build_upload_scope_category_counts(
+    normalized_rows: list[dict[str, str | int | float | None]],
+    scoped_row_indices: list[int],
+    tenant_config: TenantConfig,
+) -> list[UploadScopePreviewCategory]:
+    if not tenant_config.categories:
+        return []
+
+    category_counts: Counter[str] = Counter()
+    category_labels: dict[str, str] = {}
+
+    for idx in scoped_row_indices:
+        descricao = normalized_rows[idx].get("descricao")
+        if not descricao or not str(descricao).strip():
+            continue
+        category = classify_category(str(descricao), tenant_config.categories)
+        if category is None:
+            continue
+        category_counts[category.name] += 1
+        category_labels.setdefault(category.name, get_category_label(category))
+
+    ordered_categories = sorted(
+        category_counts.items(),
+        key=lambda item: (-item[1], category_labels[item[0]].casefold(), item[0]),
+    )
+    return [
+        UploadScopePreviewCategory(
+            category=category_name,
+            label=category_labels[category_name],
+            row_count=row_count,
+        )
+        for category_name, row_count in ordered_categories
+    ]
+
+
+def build_upload_scope_preview(
+    *,
+    file_name: str | None,
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> UploadScopePreviewResult:
+    run_upload_preflight(
+        file_name=file_name,
+        content=content,
+        tenant_config=tenant_config,
+    )
+    _, stored_content = prepare_upload_content_for_job(
+        file_name=file_name,
+        content=content,
+        tenant_config=tenant_config,
+    )
+
+    ensure_rules_registered()
+    engine = ValidationEngine(tenant=tenant_config)
+    df = _read_tenant_csv_from_content(stored_content, tenant_config)
+    raw_rows = _dataframe_to_raw_rows(df)
+    normalized_rows = engine.normalize_rows(raw_rows)
+
+    duplicate_group_count = len(group_duplicate_item_row_indices(normalized_rows))
+    source_total_rows = len(normalized_rows)
+    scope_previews: list[UploadScopePreviewScope] = []
+
+    for validation_scope in SCOPE_PREVIEW_ORDER:
+        scoped_row_indices = engine.get_scoped_row_indices(
+            normalized_rows,
+            validation_scope=validation_scope,
+        )
+        scope_previews.append(
+            UploadScopePreviewScope(
+                validation_scope=validation_scope,
+                estimated_rows_in_scope=len(scoped_row_indices),
+                estimated_rows_out_of_scope=source_total_rows - len(scoped_row_indices),
+                category_counts=_build_upload_scope_category_counts(
+                    normalized_rows,
+                    scoped_row_indices,
+                    tenant_config,
+                ),
+            )
+        )
+
+    return UploadScopePreviewResult(
+        source_total_rows=source_total_rows,
+        duplicate_group_count=duplicate_group_count,
+        scopes=scope_previews,
+    )
+
+
 def build_tenant_upload_template_xlsx(
     tenant_config: TenantConfig,
 ) -> tuple[bytes, str]:
@@ -1116,6 +1237,20 @@ def _read_raw_csv_headers(file_path: Path, tenant_config: TenantConfig) -> list[
             return []
 
 
+def _read_raw_csv_headers_from_content(
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> list[str]:
+    reader = csv.reader(
+        StringIO(content.decode(tenant_config.csv.encoding)),
+        delimiter=tenant_config.csv.delimiter,
+    )
+    try:
+        return next(reader)
+    except StopIteration:
+        return []
+
+
 def _read_tenant_csv(file_path: Path, tenant_config: TenantConfig) -> pd.DataFrame:
     df = pd.read_csv(
         file_path,
@@ -1123,6 +1258,21 @@ def _read_tenant_csv(file_path: Path, tenant_config: TenantConfig) -> pd.DataFra
         **_build_csv_read_kwargs(tenant_config),
     )
     raw_headers = _read_raw_csv_headers(file_path, tenant_config)
+    if raw_headers and len(raw_headers) == len(df.columns):
+        df.columns = raw_headers
+    return df
+
+
+def _read_tenant_csv_from_content(
+    content: bytes,
+    tenant_config: TenantConfig,
+) -> pd.DataFrame:
+    df = pd.read_csv(
+        BytesIO(content),
+        dtype=str,
+        **_build_csv_read_kwargs(tenant_config),
+    )
+    raw_headers = _read_raw_csv_headers_from_content(content, tenant_config)
     if raw_headers and len(raw_headers) == len(df.columns):
         df.columns = raw_headers
     return df

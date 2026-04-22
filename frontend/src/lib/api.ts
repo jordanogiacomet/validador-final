@@ -22,6 +22,7 @@ import type {
   TenantValidationProfileData,
   TenantValidationProfileResponse,
   UploadPreflightPayload,
+  UploadScopePreviewPayload,
   UploadResponse,
   ValidationScope,
 } from "@/lib/types";
@@ -344,6 +345,15 @@ export function extractUploadPreflightPayload(
   const payload = error.payload as Record<string, unknown>;
   const preflight = payload.preflight;
   return isUploadPreflightPayload(preflight) ? preflight : null;
+}
+
+function isUploadScopePreviewPayload(value: unknown): value is UploadScopePreviewPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<UploadScopePreviewPayload>;
+  return typeof candidate.source_total_rows === "number" && Array.isArray(candidate.scopes);
 }
 
 async function shouldInvalidateSession(
@@ -772,6 +782,27 @@ export async function validateFile(params: {
     body: formData,
   });
   return readResponse<UploadResponse>(response);
+}
+
+export async function previewValidationScope(params: {
+  file: File;
+  tenantId: string;
+}): Promise<UploadScopePreviewPayload> {
+  const formData = new FormData();
+  formData.append("file", params.file);
+
+  const query = new URLSearchParams({
+    tenant_id: params.tenantId,
+  });
+  const response = await apiFetch(`/validate/preview?${query.toString()}`, {
+    method: "POST",
+    body: formData,
+  });
+  const payload = await readResponse<unknown>(response);
+  if (!isUploadScopePreviewPayload(payload)) {
+    throw new Error("A API retornou uma prévia de escopo em formato inválido.");
+  }
+  return payload;
 }
 
 export async function downloadTenantTemplate(tenantId: string): Promise<void> {

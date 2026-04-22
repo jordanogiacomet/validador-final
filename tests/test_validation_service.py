@@ -13,11 +13,13 @@ import app.services.validation_service as validation_service
 from app.core.job import JobStatus
 from app.core.llm_cache import LLM_CACHE_PATH_ENV
 from app.core.tenant_loader import load_tenant_config
+from app.core.validation_scope import ValidationScope
 from app.rules.llm_audit import set_default_client
 from app.services.job_service import JobService
 from app.services.validation_service import (
     OperationalExportKind,
     UploadPreflightError,
+    build_upload_scope_preview,
     delete_job_csv_rows,
     delete_job_csv_rows_and_refresh,
     get_job_csv_download,
@@ -56,6 +58,13 @@ REDESIM_V2_DUPLICATE_CONTENT = (
 EMPRESA_EXEMPLO_LLM_CONTENT = (
     "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
     "900,,Mesa,Acme,Model X,SN900,Sala 9,CC9,Detalhe completo com gavetas laterais cromadas,Obs\n"
+)
+
+EMPRESA_EXEMPLO_SCOPE_PREVIEW_CONTENT = (
+    "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
+    "001,,Ar condicionado split,MarcaX,ModeloY,SN1,Sala1,CC1,12000 BTU,Obs\n"
+    "002,PA-100,Televisor LED,MarcaZ,ModeloW,SN2,Sala2,CC2,55 polegadas,Obs\n"
+    "001,,Ar condicionado janela,MarcaA,ModeloB,SN3,Sala3,CC3,7500 BTU,Obs\n"
 )
 
 EMPRESA_EXEMPLO_LLM_BATCH_CONTENT = (
@@ -1261,6 +1270,42 @@ def test_run_upload_preflight_accepts_valid_default_xlsx():
     assert "Item" in result.detected_columns
     assert result.missing_columns == []
     assert result.guidance == []
+
+
+def test_build_upload_scope_preview_counts_rows_and_categories_for_all_scopes():
+    tenant_config = load_tenant_config("empresa_exemplo")
+
+    result = build_upload_scope_preview(
+        file_name="inventario.csv",
+        content=EMPRESA_EXEMPLO_SCOPE_PREVIEW_CONTENT.encode("utf-8"),
+        tenant_config=tenant_config,
+    )
+
+    scopes = {scope.validation_scope: scope for scope in result.scopes}
+
+    assert result.source_total_rows == 3
+    assert result.duplicate_group_count == 1
+
+    zero_scope = scopes[ValidationScope.ZERO_ITEMS]
+    assert zero_scope.estimated_rows_in_scope == 2
+    assert zero_scope.estimated_rows_out_of_scope == 1
+    assert [(entry.category, entry.row_count) for entry in zero_scope.category_counts] == [
+        ("ar_condicionado", 2),
+    ]
+
+    duplicate_scope = scopes[ValidationScope.DUPLICATE_ITEMS]
+    assert duplicate_scope.estimated_rows_in_scope == 2
+    assert duplicate_scope.estimated_rows_out_of_scope == 1
+    assert [
+        (entry.category, entry.row_count) for entry in duplicate_scope.category_counts
+    ] == [("ar_condicionado", 2)]
+
+    all_items_scope = scopes[ValidationScope.ALL_ITEMS]
+    assert all_items_scope.estimated_rows_in_scope == 3
+    assert all_items_scope.estimated_rows_out_of_scope == 0
+    assert [
+        (entry.category, entry.row_count) for entry in all_items_scope.category_counts
+    ] == [("ar_condicionado", 2), ("tv", 1)]
 
 
 def test_run_upload_preflight_rejects_unsupported_extension():

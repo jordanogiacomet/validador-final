@@ -194,6 +194,7 @@ If there are still stories with passes: false, end your response normally (anoth
 - Keep API handlers thin
 - API endpoints should delegate orchestration to services
 - Upload preflight belongs in `app/services/validation_service.py`: validate layout/encoding/header before `job_service.create_job(...)`, and return a top-level `preflight` payload on failure so the frontend can show inline corrections without creating a doomed job.
+- Upload scope preview also belongs in `app/services/validation_service.py`: `POST /validate/preview` should reuse the same preflight path, compute all scope counts from the normalized file without creating a job, and let the frontend switch scopes locally from that single preview payload.
 - Spreadsheet uploads beyond raw CSV should also be normalized in `app/services/validation_service.py` and stored as tenant-configured CSV artifacts before downstream job/correction/report flows run, so the rest of the pipeline stays generic.
 - Dedicated worker mode should keep the API enqueue-only and rely on shared SQLite-backed `JobService` claims/leases; keep inline/background execution as the local/test fallback, not the production default.
 - Operational artifact retention belongs in `app/services/retention_service.py`; routes should expose dry-run/execution only and leave policy parsing, active/recent/preserved job protection, file deletion, LLM-cache pruning, audit, and structured logs to the service.

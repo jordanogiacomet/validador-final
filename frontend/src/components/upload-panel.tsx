@@ -1,10 +1,17 @@
 import React from "react";
 import type { FormEvent } from "react";
 
-import { getValidationScopeLabel } from "@/lib/presentation";
+import {
+  buildUploadScopePreviewDetail,
+  buildUploadScopePreviewSummary,
+  getUploadScopePreviewScope,
+  getValidationScopeLabel,
+  getValidationScopeOptionDescription,
+} from "@/lib/presentation";
 import type {
   TenantListItem,
   UploadPreflightPayload,
+  UploadScopePreviewPayload,
   ValidationScope,
 } from "@/lib/types";
 
@@ -17,6 +24,9 @@ interface UploadPanelProps {
   isTenantLoading: boolean;
   tenantError: string | null;
   uploadPreflight: UploadPreflightPayload | null;
+  scopePreview: UploadScopePreviewPayload | null;
+  isScopePreviewLoading: boolean;
+  scopePreviewError: string | null;
   onTenantChange: (tenantId: string) => void;
   onTemplateDownload: () => void;
   onValidationScopeChange: (scope: ValidationScope) => void;
@@ -33,6 +43,9 @@ export function UploadPanel({
   isTenantLoading,
   tenantError,
   uploadPreflight,
+  scopePreview,
+  isScopePreviewLoading,
+  scopePreviewError,
   onTenantChange,
   onTemplateDownload,
   onValidationScopeChange,
@@ -41,6 +54,8 @@ export function UploadPanel({
 }: UploadPanelProps) {
   const hasMultipleTenants = tenants.length > 1;
   const selectedTenant = tenants.find((tenant) => tenant.tenant_id === selectedTenantId);
+  const selectedScopePreview = getUploadScopePreviewScope(scopePreview, validationScope);
+  const previewDetail = buildUploadScopePreviewDetail(validationScope, scopePreview);
 
   return (
     <section className="panel control-card">
@@ -142,7 +157,10 @@ export function UploadPanel({
           <label>O que deseja conferir?</label>
           <div className="scope-options">
             {(["zero_items", "duplicate_items", "all_items"] as ValidationScope[]).map((scope) => (
-              <label className="scope-option" key={scope}>
+              <label
+                className={`scope-option ${validationScope === scope ? "scope-option-selected" : ""}`.trim()}
+                key={scope}
+              >
                 <div className="scope-option-head">
                   <input
                     checked={validationScope === scope}
@@ -152,16 +170,39 @@ export function UploadPanel({
                     onChange={() => onValidationScopeChange(scope)}
                   />
                   <strong>{getValidationScopeLabel(scope)}</strong>
+                  <span className="scope-option-badge">
+                    {isScopePreviewLoading
+                      ? "Lendo..."
+                      : getUploadScopePreviewScope(scopePreview, scope)
+                        ? `${getUploadScopePreviewScope(scopePreview, scope)?.estimated_rows_in_scope} linha(s)`
+                        : "Sem leitura"}
+                  </span>
                 </div>
-                <span>
-                  {scope === "zero_items"
-                    ? "Conferir somente bens cadastrados do zero."
-                    : scope === "duplicate_items"
-                      ? "Conferir somente itens repetidos."
-                      : "Conferir todas as linhas da planilha."}
-                </span>
+                <span>{getValidationScopeOptionDescription(scope, scopePreview)}</span>
               </label>
             ))}
+          </div>
+          <div className="scope-preview-card" aria-live="polite">
+            <div className="panel-kicker panel-kicker-inline">Prévia do recorte</div>
+            <strong>{buildUploadScopePreviewSummary(validationScope, scopePreview)}</strong>
+            {isScopePreviewLoading ? (
+              <p className="file-help">Lendo a planilha para estimar o recorte operacional.</p>
+            ) : null}
+            {scopePreviewError ? <p className="inline-error">{scopePreviewError}</p> : null}
+            {!isScopePreviewLoading && previewDetail ? <p className="file-help">{previewDetail}</p> : null}
+            {selectedScopePreview?.category_counts.length ? (
+              <div className="scope-preview-categories">
+                {selectedScopePreview.category_counts.map((category) => (
+                  <span className="scope-preview-chip" key={category.category}>
+                    {category.label}: {category.row_count}
+                  </span>
+                ))}
+              </div>
+            ) : scopePreview && !scopePreviewError ? (
+              <p className="file-help">
+                Nenhuma categoria relevante foi identificada neste recorte com o cabeçalho atual.
+              </p>
+            ) : null}
           </div>
         </div>
 

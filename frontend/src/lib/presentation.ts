@@ -11,6 +11,8 @@ import type {
   StatusChip,
   StatusChipKind,
   SummaryPayload,
+  UploadScopePreviewPayload,
+  UploadScopePreviewScopePayload,
   ValidationScope,
 } from "@/lib/types";
 
@@ -270,6 +272,55 @@ export function getValidationScopeLabel(scope: ValidationScope): string {
   return "Itens cadastrados do zero";
 }
 
+export function getUploadScopePreviewScope(
+  preview: UploadScopePreviewPayload | null,
+  scope: ValidationScope,
+): UploadScopePreviewScopePayload | null {
+  if (!preview) {
+    return null;
+  }
+
+  return (
+    preview.scopes.find((entry) => normalizeValidationScope(entry.validation_scope) === scope) ||
+    null
+  );
+}
+
+export function getValidationScopeOptionDescription(
+  scope: ValidationScope,
+  preview: UploadScopePreviewPayload | null,
+): string {
+  const scopePreview = getUploadScopePreviewScope(preview, scope);
+
+  if (!scopePreview) {
+    if (isAllItemsScope(scope)) {
+      return "Use quando precisar revisar a planilha inteira antes de liberar o lote.";
+    }
+
+    if (isDuplicateItemsScope(scope)) {
+      return "Use quando o foco for tratar somente grupos com Item repetido.";
+    }
+
+    return "Use quando o foco for revisar somente bens cadastrados do zero.";
+  }
+
+  if (isAllItemsScope(scope)) {
+    return `Vai revisar ${scopePreview.estimated_rows_in_scope} linha(s) reconhecidas no arquivo. Nenhuma fica fora deste recorte.`;
+  }
+
+  if (isDuplicateItemsScope(scope)) {
+    return (
+      `Vai revisar ${scopePreview.estimated_rows_in_scope} linha(s) com Item repetido em ` +
+      `${preview?.duplicate_group_count ?? 0} grupo(s) duplicado(s).`
+    );
+  }
+
+  return (
+    `Vai revisar ${scopePreview.estimated_rows_in_scope} item(ns) cadastrados do zero. ` +
+    `${scopePreview.estimated_rows_out_of_scope} linha(s) com placa anterior ficam fora.`
+  );
+}
+
 export function buildFinalScopeCopy(scope: ValidationScope): string {
   if (isAllItemsScope(scope)) {
     return "Todos os itens foram validados. PDF, JSON e CSV estão disponíveis.";
@@ -280,6 +331,56 @@ export function buildFinalScopeCopy(scope: ValidationScope): string {
   }
 
   return "Itens cadastrados do zero validados. PDF, JSON e CSV estão disponíveis.";
+}
+
+export function buildUploadScopePreviewSummary(
+  scope: ValidationScope,
+  preview: UploadScopePreviewPayload | null,
+): string {
+  const scopePreview = getUploadScopePreviewScope(preview, scope);
+  if (!preview || !scopePreview) {
+    return "Selecione um arquivo para estimar quantas linhas entram no lote antes de iniciar o processamento.";
+  }
+
+  if (isAllItemsScope(scope)) {
+    return `${scopePreview.estimated_rows_in_scope} de ${preview.source_total_rows} linha(s) entrarão no lote completo.`;
+  }
+
+  if (isDuplicateItemsScope(scope)) {
+    return (
+      `${scopePreview.estimated_rows_in_scope} de ${preview.source_total_rows} linha(s) entrarão ` +
+      `porque pertencem a ${preview.duplicate_group_count} grupo(s) com Item repetido.`
+    );
+  }
+
+  return (
+    `${scopePreview.estimated_rows_in_scope} de ${preview.source_total_rows} linha(s) entrarão ` +
+    "porque estão cadastradas do zero."
+  );
+}
+
+export function buildUploadScopePreviewDetail(
+  scope: ValidationScope,
+  preview: UploadScopePreviewPayload | null,
+): string | null {
+  const scopePreview = getUploadScopePreviewScope(preview, scope);
+  if (!preview || !scopePreview) {
+    return null;
+  }
+
+  if (scopePreview.estimated_rows_out_of_scope <= 0) {
+    return "Este recorte cobre todas as linhas reconhecidas na prévia.";
+  }
+
+  if (isDuplicateItemsScope(scope)) {
+    return `${scopePreview.estimated_rows_out_of_scope} linha(s) ficarão fora porque não fazem parte de grupos duplicados.`;
+  }
+
+  if (isZeroItemsScope(scope)) {
+    return `${scopePreview.estimated_rows_out_of_scope} linha(s) ficarão fora porque já têm placa anterior.`;
+  }
+
+  return `${scopePreview.estimated_rows_out_of_scope} linha(s) ficarão fora deste recorte inicial.`;
 }
 
 function looksLikeCsvFailure(message: string): boolean {

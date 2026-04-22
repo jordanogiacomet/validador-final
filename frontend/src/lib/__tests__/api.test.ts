@@ -18,6 +18,7 @@ import {
   listJobs,
   listTenants,
   loginOperator,
+  previewValidationScope,
   publishTenantValidationProfileDraft,
   renewApiSession,
   rollbackTenantValidationProfile,
@@ -467,6 +468,48 @@ describe("api auth session helpers", () => {
       expect(preflight?.missing_columns).toEqual(["Complemento"]);
       expect(preflight?.issues[0]?.code).toBe("missing_columns");
     }
+  });
+
+  it("loads the scope preview through the authenticated upload helper", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          source_total_rows: 3,
+          duplicate_group_count: 1,
+          scopes: [
+            {
+              validation_scope: "zero_items",
+              estimated_rows_in_scope: 1,
+              estimated_rows_out_of_scope: 2,
+              category_counts: [],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    const payload = await previewValidationScope({
+      file: new File(["Item,Descricao\n001,Mesa\n"], "lote.csv", {
+        type: "text/csv",
+      }),
+      tenantId: "default",
+    });
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/validate/preview?");
+    expect(requestUrl).toContain("tenant_id=default");
+    expect(requestInit?.method).toBe("POST");
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+    expect(payload.source_total_rows).toBe(3);
   });
 
   it("keeps the issued session secret in memory by default", () => {
