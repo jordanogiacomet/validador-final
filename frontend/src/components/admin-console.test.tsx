@@ -20,6 +20,7 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    ApiError: actual.ApiError,
     createAdminTenant: vi.fn(),
     createOperatorAccount: vi.fn(),
     createOperatorInvitation: vi.fn(),

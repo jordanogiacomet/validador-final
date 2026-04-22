@@ -1040,7 +1040,7 @@
         "Frontend typecheck, lint e testes passam"
       ],
       "priority": 60,
-      "passes": false,
+      "passes": true,
       "notes": "Prioridade média para melhorar previsibilidade operacional sem alterar a semântica do motor de validação."
     },
     {

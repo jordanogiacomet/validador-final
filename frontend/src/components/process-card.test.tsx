@@ -68,4 +68,22 @@ describe("ProcessCard", () => {
       ),
     ).toBeDefined();
   });
+
+  it("shows ETA copy for a running lot when progress is already measurable", () => {
+    renderCard(
+      buildJob({
+        status: "running",
+        current_step: "validating_batches",
+        status_title: "Validação",
+        status_detail: "Processando.",
+        total_rows: 100,
+        source_total_rows: 100,
+        processed_rows: 40,
+        created_at: "2026-04-18T12:00:00Z",
+        updated_at: "2026-04-18T12:02:00Z",
+      }),
+    );
+
+    expect(screen.getByText(/ETA aproximado: 3 min/)).toBeDefined();
+  });
 });

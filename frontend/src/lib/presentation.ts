@@ -61,6 +61,16 @@ export interface DuplicateFilterCounts {
   conflict: number;
 }
 
+type JobEtaLike = Pick<
+  JobStatusResponse | JobListItemResponse,
+  | "status"
+  | "cancel_requested"
+  | "processed_rows"
+  | "total_rows"
+  | "created_at"
+  | "updated_at"
+>;
+
 function getReviewFlagRowIndices(reviewFlags: ReviewFlagPayload[] | undefined): Set<number> {
   return new Set(
     (reviewFlags ?? [])
@@ -1625,10 +1635,99 @@ export function formatStatusChip(
   return { label: "Em processamento", kind: "info" };
 }
 
+function formatApproximateDuration(milliseconds: number): string {
+  if (milliseconds < 45_000) {
+    return "menos de 1 min";
+  }
+
+  const totalMinutes = Math.max(1, Math.round(milliseconds / 60_000));
+  if (totalMinutes < 60) {
+    return `${totalMinutes} min`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (!minutes) {
+    return `${hours} h`;
+  }
+
+  return `${hours} h ${minutes} min`;
+}
+
+export function estimateJobRemainingMs(job: JobEtaLike | null): number | null {
+  if (
+    !job ||
+    job.cancel_requested ||
+    job.status !== "running" ||
+    job.total_rows <= 0 ||
+    job.processed_rows <= 0 ||
+    job.processed_rows >= job.total_rows
+  ) {
+    return null;
+  }
+
+  const createdAtMs = Date.parse(job.created_at ?? "");
+  const updatedAtMs = Date.parse(job.updated_at ?? "");
+  if (
+    !Number.isFinite(createdAtMs) ||
+    !Number.isFinite(updatedAtMs) ||
+    updatedAtMs <= createdAtMs
+  ) {
+    return null;
+  }
+
+  const elapsedMs = updatedAtMs - createdAtMs;
+  if (elapsedMs < 15_000) {
+    return null;
+  }
+
+  const processedPerMillisecond = job.processed_rows / elapsedMs;
+  if (!Number.isFinite(processedPerMillisecond) || processedPerMillisecond <= 0) {
+    return null;
+  }
+
+  return Math.max(
+    0,
+    Math.round((job.total_rows - job.processed_rows) / processedPerMillisecond),
+  );
+}
+
+export function formatJobEta(job: JobEtaLike | null): string | null {
+  if (!job || job.cancel_requested || job.status !== "running") {
+    return null;
+  }
+
+  if (job.total_rows <= 0) {
+    return "ETA ainda indisponivel";
+  }
+
+  if (job.processed_rows <= 0) {
+    return "ETA apos as primeiras linhas";
+  }
+
+  if (job.processed_rows >= job.total_rows) {
+    return "Finalizando lote";
+  }
+
+  const remainingMs = estimateJobRemainingMs(job);
+  if (remainingMs === null) {
+    return "ETA ainda incerto";
+  }
+
+  return `ETA aproximado: ${formatApproximateDuration(remainingMs)}`;
+}
+
 export function describeJobProgress(
   job: Pick<
     JobStatusResponse | JobListItemResponse,
-    "status" | "cancel_requested" | "status_detail" | "processed_rows" | "total_rows"
+    | "status"
+    | "cancel_requested"
+    | "status_detail"
+    | "processed_rows"
+    | "total_rows"
+    | "created_at"
+    | "updated_at"
   >,
 ): string {
   if (job.cancel_requested) {
@@ -1641,10 +1740,12 @@ export function describeJobProgress(
 
   if (job.status === "running") {
     if (job.total_rows > 0) {
-      return `${job.processed_rows} de ${job.total_rows} itens processados.`;
+      const baseProgress = `${job.processed_rows} de ${job.total_rows} itens processados`;
+      const etaLabel = formatJobEta(job);
+      return etaLabel ? `${baseProgress} • ${etaLabel}` : `${baseProgress}.`;
     }
 
-    return job.status_detail || "Processando lote.";
+    return formatJobEta(job) || job.status_detail || "Processando lote.";
   }
 
   if (job.status === "canceled") {

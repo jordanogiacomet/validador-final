@@ -75,6 +75,7 @@ Last Updated: 2026-04-22 12:45 -02
 - Job reprocess lineage belongs on `JobRecord.parent_job_id` + `latest_retry_job_id`; `JobService.register_reprocess_link` owns both the link mutation and the `job_reprocessed` audit event, so new reprocess orchestrations stay tenant-agnostic and route through the shared helper instead of duplicating lineage bookkeeping.
 - Validation job cancellation should use cooperative checkpoints through long service/engine loops; do not rely only on batch-end polling for large CSV reads, global indexing, row validation, or artifact preparation.
 - Persisted jobs loaded as `running` with `cancel_requested=true` should be finalized as `canceled` by `JobService` so restarts do not leave inactive work stuck as "Cancelando".
+- Frontend job progress/ETA copy should stay in `frontend/src/lib/presentation.ts`, and the actively opened lot should keep a slower hidden-tab polling cadence so terminal notifications still work after tab switches.
 - Frontend Vitest runs vanilla `tsc --noEmit` with `jsx: preserve`, so any component rendered by `@testing-library/react` must `import React from "react"` explicitly — otherwise the compiled output still references a missing `React` identifier at runtime.
 - Tenant-scoped operator management should keep seed operators in tenant config as bootstrap data and overlay runtime create/disable/password changes through `AuthService` storage instead of mutating tenant YAML from the API.
 - RBAC/permission decisions should stay in `AuthService`; FastAPI routes pass authenticated actor context plus target tenant/action and then use the canonical tenant returned by the service.
@@ -1249,4 +1250,21 @@ Expected architectural direction:
   - A retenção de artefatos deve continuar no service layer; as rotas só resolvem o tenant autenticado e delegam dry-run/execução.
   - Use `preserve_artifacts=true` em `JobRecord.params` para impedir que a limpeza remova artefatos de um job específico.
   - A retenção do cache LLM remove entradas antigas dentro do arquivo compartilhado em vez de apagar o arquivo inteiro.
+---
+## 2026-04-22 13:56 -02 - US-060
+- Implementado ETA operacional no frontend a partir do progresso já exposto pelo job, reaproveitando helpers compartilhados para o card principal e a lista de lotes recentes.
+- Mantido o polling do lote aberto em cadência reduzida quando a aba fica oculta e adicionadas notificações browser one-shot para conclusão, falha ou cancelamento quando a permissão estiver disponível.
+- Ajustada a suíte frontend para cobrir ETA, polling em aba oculta, notificação terminal e um mock parcial de `@/lib/api` que precisava reexportar `ApiError` para manter o `npm run test` reproduzível.
+- Files changed: `frontend/src/lib/presentation.ts`, `frontend/src/lib/__tests__/presentation.test.ts`, `frontend/src/components/process-card.tsx`, `frontend/src/components/process-card.test.tsx`, `frontend/src/components/operational-workspace.tsx`, `frontend/src/components/admin-console.test.tsx`, `frontend/src/hooks/use-job-polling.ts`, `frontend/src/hooks/use-job-polling.test.tsx`, `frontend/src/hooks/use-job-terminal-notification.ts`, `frontend/src/hooks/use-job-terminal-notification.test.tsx`, `AGENTS.md`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of hidden-tab notifications and ETA copy is still recommended before publishing.
+- **Learnings for future iterations:**
+  - ETA/andamento copy should stay in `frontend/src/lib/presentation.ts` so the process card and recent-jobs list do not drift.
+  - If the operational UI needs to react while the tab is hidden, keep the active-job poller on a slower cadence instead of fully pausing it.
+  - Vitest partial mocks of `@/lib/api` that instantiate `ApiError` should reexport the real class explicitly to avoid missing-export failures in the full suite.
 ---

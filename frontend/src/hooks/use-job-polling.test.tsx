@@ -96,7 +96,7 @@ describe("useJobPolling", () => {
     );
   });
 
-  it("pauses API calls while the tab is hidden and resumes when visible", async () => {
+  it("keeps polling at the hidden cadence and refreshes immediately when visible again", async () => {
     const onJobUpdate = vi.fn();
     getJobMock.mockResolvedValue(buildJob());
     Object.defineProperty(document, "visibilityState", {
@@ -114,10 +114,22 @@ describe("useJobPolling", () => {
     );
 
     await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getJobMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4999);
+    });
+
+    expect(getJobMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
 
-    expect(getJobMock).not.toHaveBeenCalled();
+    expect(getJobMock).toHaveBeenCalledTimes(2);
 
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -128,6 +140,6 @@ describe("useJobPolling", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(getJobMock).toHaveBeenCalledTimes(1);
+    expect(getJobMock).toHaveBeenCalledTimes(3);
   });
 });

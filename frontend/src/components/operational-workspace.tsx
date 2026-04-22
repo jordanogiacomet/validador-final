@@ -58,6 +58,10 @@ import type {
   ValidationScope,
 } from "@/lib/types";
 import { useActiveJobs } from "@/hooks/use-active-jobs";
+import {
+  requestJobNotificationPermission,
+  useJobTerminalNotification,
+} from "@/hooks/use-job-terminal-notification";
 import { useJobPolling } from "@/hooks/use-job-polling";
 
 const FALLBACK_TENANT: TenantListItem = {
@@ -239,6 +243,9 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const latestEditRequestRef = useRef(0);
+  const notificationPermissionRequestedRef = useRef(false);
+
+  useJobTerminalNotification(currentJob);
 
   useEffect(() => {
     let isCancelled = false;
@@ -454,6 +461,10 @@ export function OperationalWorkspace({ initialTenantId }: OperationalWorkspacePr
     setManualBanner(null);
     setUploadPreflight(null);
     setIsSubmitting(true);
+    if (!notificationPermissionRequestedRef.current) {
+      requestJobNotificationPermission();
+      notificationPermissionRequestedRef.current = true;
+    }
 
     try {
       const uploadPayload = await validateFile({

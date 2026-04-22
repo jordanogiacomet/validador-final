@@ -68,11 +68,8 @@ export function useJobPolling({
       if (isCancelled) {
         return;
       }
-
-      if (document.visibilityState === "hidden") {
-        scheduleNext(hiddenIntervalMs);
-        return;
-      }
+      const nextDelayMs =
+        document.visibilityState === "hidden" ? hiddenIntervalMs : intervalMs;
 
       try {
         const nextJob = await getJob(targetJobId);
@@ -86,7 +83,7 @@ export function useJobPolling({
           clearTimer();
           return;
         }
-        scheduleNext(intervalMs);
+        scheduleNext(nextDelayMs);
       } catch (caughtError) {
         if (isCancelled) {
           return;
@@ -98,7 +95,7 @@ export function useJobPolling({
             ? caughtError.message
             : "Falha ao consultar o lote.";
         onErrorRef.current?.(message);
-        scheduleNext(computeBackoffDelay(intervalMs, maxIntervalMs, errorCount));
+        scheduleNext(computeBackoffDelay(nextDelayMs, maxIntervalMs, errorCount));
       }
     }
 

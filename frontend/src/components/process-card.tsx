@@ -4,6 +4,7 @@ import {
   PROCESS_STEPS,
   buildProcessGuidance,
   formatDateTime,
+  formatJobEta,
   formatJobFailureMessage,
   formatStatusChip,
   getValidationScopeLabel,
@@ -52,6 +53,8 @@ export function ProcessCard({
         ? "Aguardando início do processamento"
         : "Preparando contagem das linhas"
     : "Nenhum lote em andamento";
+  const etaLabel = formatJobEta(job);
+  const progressCopy = etaLabel ? `${progressLabel} • ${etaLabel}` : progressLabel;
 
   return (
     <section className="panel process-card">
@@ -67,7 +70,7 @@ export function ProcessCard({
       <div className="progress-block" aria-label="Progresso do lote">
         <div className="progress-copy">
           <strong>{progressPercent}%</strong>
-          <span>{progressLabel}</span>
+          <span>{progressCopy}</span>
         </div>
         <div
           className="progress-track"

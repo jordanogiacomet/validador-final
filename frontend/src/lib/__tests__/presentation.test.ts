@@ -5,11 +5,13 @@ import {
   buildResultFilterGroups,
   buildScopeSummaryCopy,
   describeIssue,
+  describeJobProgress,
   filterDuplicates,
   filterDuplicatesForResultSearch,
   filterProblemGroupsForReviewFlags,
   filterProblemGroupsForResultView,
   filterProblemGroupsForResultSearch,
+  formatJobEta,
   formatStatusChip,
   getBulkConsolidatableSameNameDuplicates,
   getDuplicateFilterCounts,
@@ -65,6 +67,46 @@ describe("presentation helpers", () => {
         warning_count: 0,
       }, "duplicate_items"),
     ).toContain("Somente duplicados");
+  });
+
+  it("formats ETA copy when a running lot already has stable progress", () => {
+    expect(
+      formatJobEta({
+        status: "running",
+        cancel_requested: false,
+        processed_rows: 40,
+        total_rows: 100,
+        created_at: "2026-04-18T12:00:00Z",
+        updated_at: "2026-04-18T12:02:00Z",
+      }),
+    ).toBe("ETA aproximado: 3 min");
+  });
+
+  it("keeps ETA honest while there is not enough progress history yet", () => {
+    expect(
+      formatJobEta({
+        status: "running",
+        cancel_requested: false,
+        processed_rows: 0,
+        total_rows: 100,
+        created_at: "2026-04-18T12:00:00Z",
+        updated_at: "2026-04-18T12:00:10Z",
+      }),
+    ).toBe("ETA apos as primeiras linhas");
+  });
+
+  it("adds ETA to running progress copy when available", () => {
+    expect(
+      describeJobProgress({
+        status: "running",
+        cancel_requested: false,
+        status_detail: "Processando lote.",
+        processed_rows: 40,
+        total_rows: 100,
+        created_at: "2026-04-18T12:00:00Z",
+        updated_at: "2026-04-18T12:02:00Z",
+      }),
+    ).toBe("40 de 100 itens processados • ETA aproximado: 3 min");
   });
 
   it("describes duplicate issues with operational copy", () => {

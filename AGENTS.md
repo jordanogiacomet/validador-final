@@ -211,6 +211,7 @@ If there are still stories with passes: false, end your response normally (anoth
 - Audit payload conventions live centrally in `app/core/audit.py`: reuse structured `details` keys such as `actor_operator_id`, `target_operator_id`, and `result`, and rely on centralized sanitization there instead of redacting secrets ad hoc in each service/route.
 - Production auth policy belongs in `app/core/auth_policy.py`: use `VALIDATOR_ENV=production` policy helpers instead of reading production/security env vars ad hoc in routes, services, or frontend helpers.
 - Frontend auth secrets should remain memory-only by default in `frontend/src/lib/api.ts`; only persist the raw issued `X-API-Key` when `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` is explicitly configured.
+- Frontend operational job progress copy should stay centralized in `frontend/src/lib/presentation.ts`; when polling the actively opened lot, slow the cadence in hidden tabs instead of stopping entirely so ETA and terminal notifications can still surface after tab switches.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows
