@@ -243,6 +243,55 @@ export VALIDATOR_FRONTEND_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
 uvicorn app.main:app --reload
 ```
 
+Continuous Integration
+
+GitHub Actions now runs the repository quality gates on pushes and pull requests that touch the
+backend, frontend, tests, deploy manifests, or the workflow itself.
+
+Runner assumptions:
+
+- Python 3.11
+- Node.js 20
+
+Local equivalents for the CI jobs:
+
+Backend checks:
+
+```bash
+source .venv/bin/activate
+pip install -e '.[dev]'
+ruff check app tests
+pytest
+```
+
+Frontend checks:
+
+```bash
+cd frontend
+npm ci
+npm run typecheck
+npm run lint
+npm run test
+```
+
+Authenticated smoke journey:
+
+```bash
+source .venv/bin/activate
+pip install -e '.[dev]'
+pytest tests/test_api.py -k authenticated_smoke_login_upload_and_fetch_result
+```
+
+The smoke check is API-level and uses FastAPI `TestClient`, so it does not require a separately
+running backend server, worker, or frontend dev server.
+
+To make failed runs block normal promotion, mark these workflow jobs as required status checks on
+your protected branches:
+
+- `Backend Checks`
+- `Frontend Checks`
+- `Authenticated Smoke`
+
 Operational Persistence
 
 Low-volume operational metadata can now share one optional SQLite database through

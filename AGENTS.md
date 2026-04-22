@@ -237,6 +237,7 @@ If there are still stories with passes: false, end your response normally (anoth
 - For core or rule changes, add or update automated tests
 - For tenant config changes, test valid and invalid loading paths when relevant
 - For API changes, keep handlers thin and test behavior at the appropriate layer
+- Keep the CI smoke journey at the API layer in `tests/test_api.py`; the authenticated `login -> validate -> /jobs/{job_id} -> /jobs/{job_id}/result` probe should stay `TestClient`-based so it remains reproducible in GitHub Actions without separate services.
 - For job changes, verify lifecycle transitions and persisted metadata
 - Do not skip tests for shared abstractions that will affect future stories
 

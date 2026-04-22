@@ -1072,8 +1072,8 @@
         "Os checks automatizados devem ficar estáveis e reproduzíveis no repositório"
       ],
       "priority": 62,
-      "passes": false,
-      "notes": "Prioridade média porque a suíte local é boa, mas ainda falta enforcement automatizado de qualidade na entrega."
+      "passes": true,
+      "notes": "Implementado com GitHub Actions para backend, frontend e smoke autenticado da API, além de documentação dos comandos locais equivalentes e nota de required status checks para bloquear promoção normal."
     },
     {
       "id": "US-063",

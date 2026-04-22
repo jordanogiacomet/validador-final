@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 14:23 -02
+Last Updated: 2026-04-22 14:33 -02
 
 ---
 
@@ -19,6 +19,7 @@ Last Updated: 2026-04-22 14:23 -02
 - Use `progress.txt` to record assumptions, gotchas, and reusable learnings for future iterations.
 - Only mark a story as passed when implementation is complete and quality checks pass.
 - Quality gates are: `ruff check app tests` (lint) and `pytest` (tests). No mypy/pyright installed.
+- Keep CI as three explicit jobs: backend (`ruff` + `pytest`), frontend (`npm run typecheck`/`lint`/`test`), and an API-level smoke probe (`pytest tests/test_api.py -k authenticated_smoke_login_upload_and_fetch_result`) so the authenticated main flow is reproducible without separate services.
 - Run `ruff check --fix app tests` to auto-fix import sorting issues before committing.
 - Use `Path(__file__).resolve().parent` for module-relative paths instead of hardcoded relative paths.
 - Tenant configs use typed Pydantic sub-models (`CategoryConfig`, `LLMConfig`) — keep them in `app/core/tenant_config.py`.
@@ -1285,4 +1286,20 @@ Expected architectural direction:
   - Manual correction history should reuse the shared `AuditService` with structured `actor_*` details instead of creating a parallel per-job store.
   - Safe rollback is intentionally LIFO: only the latest eligible correction can be reverted, which keeps CSV state and job lineage consistent without guessing through later edits.
   - `GET /jobs/{job_id}/result` is the right place to overlay mutable operational data such as review flags and correction history, leaving generated result artifacts immutable on disk.
+---
+## 2026-04-22 14:33 -02 - US-062
+- Added `.github/workflows/ci.yml` with backend, frontend, and authenticated smoke jobs for push/pull_request/workflow_dispatch, filtered to code/test/deploy/workflow changes.
+- Added an explicit API smoke test in `tests/test_api.py` covering login, authenticated upload, job status, and result retrieval; documented prerequisites, local equivalent commands, and required status-check setup in `README.md`.
+- Files changed: `AGENTS.md`, `.github/workflows/ci.yml`, `README.md`, `tests/test_api.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `pytest tests/test_api.py -k authenticated_smoke_login_upload_and_fetch_result`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- **Learnings for future iterations:**
+  - Keep the CI smoke path API-level over `tests/test_api.py` so automation can validate `login -> validate -> job/result` without booting separate backend/frontend processes.
+  - GitHub Actions failures only block promotion when the corresponding jobs are configured as required status checks on protected branches; document that expectation alongside the workflow.
+  - Path-filtered CI triggers keep enforcement focused on runtime, test, deploy, and workflow changes instead of spending runs on bookkeeping-only edits.
 ---

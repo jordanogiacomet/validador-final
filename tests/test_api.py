@@ -1864,6 +1864,49 @@ def test_upload_and_validate_creates_job():
     assert audit_events[1].details["validation_scope"] == "zero_items"
 
 
+def test_authenticated_smoke_login_upload_and_fetch_result():
+    headers, login_payload = login_headers()
+    job = None
+
+    try:
+        upload_response = client.post(
+            "/validate?tenant_id=default",
+            files={"file": ("smoke.csv", BytesIO(CSV_CONTENT.encode()), "text/csv")},
+            headers=headers,
+        )
+
+        assert upload_response.status_code == 200
+        upload_payload = upload_response.json()
+        assert upload_payload["tenant_id"] == login_payload["tenant_id"]
+        assert upload_payload["validation_scope"] == "zero_items"
+
+        job = job_service.get_job(upload_payload["job_id"])
+        assert job is not None
+
+        status_response = client.get(f"/jobs/{job.job_id}", headers=headers)
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert status_payload["job_id"] == job.job_id
+        assert status_payload["tenant_id"] == login_payload["tenant_id"]
+        assert status_payload["status"] in {"queued", "running", "completed"}
+        assert status_payload["file_name"] == "smoke.csv"
+
+        result_response = client.get(f"/jobs/{job.job_id}/result", headers=headers)
+        assert result_response.status_code == 200
+        result_payload = result_response.json()
+        assert result_payload["summary"]["source_total_rows"] == 2
+        assert result_payload["summary"]["total_rows"] >= 1
+        assert result_payload["row_results"]
+        assert result_payload["row_results"][0]["item"] == "002"
+    finally:
+        if job is not None and job.file_path:
+            Path(job.file_path).unlink(missing_ok=True)
+        if job is not None and job.result_path:
+            Path(job.result_path).unlink(missing_ok=True)
+        if job is not None and job.report_path:
+            Path(job.report_path).unlink(missing_ok=True)
+
+
 def test_upload_and_validate_accepts_xlsx_and_matches_csv_result():
     csv_response = client.post(
         "/validate?tenant_id=default",
