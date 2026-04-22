@@ -1024,8 +1024,8 @@
         "Ruff lint e pytest passam"
       ],
       "priority": 59,
-      "passes": false,
-      "notes": "Prioridade média porque o sistema já persiste artefatos importantes, mas ainda sem ciclo de vida explícito."
+      "passes": true,
+      "notes": "Implementado com RetentionPolicy configurável por variáveis VALIDATOR_RETENTION_*_DAYS, serviço tenant-scoped para dry-run/cleanup, proteção de jobs ativos/recentes/preservados, auditoria/log estruturado e endpoints GET /retention/plan + POST /retention/cleanup."
     },
     {
       "id": "US-060",

@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 12:28 -02
+Last Updated: 2026-04-22 12:45 -02
 
 ---
 
@@ -40,6 +40,8 @@ Last Updated: 2026-04-22 12:28 -02
 - Mutable review markers for completed results should be stored as tenant-scoped sidecar files under `results/{tenant_id}/{job_id}/review_flags.json` and overlaid into the result payload at read time, leaving generated JSON/PDF artifacts immutable.
 - Low-volume operational persistence (jobs, audit events, issued API keys, managed operators) should go through `app/core/operational_sqlite.py` when `VALIDATOR_SQLITE_PATH` is configured; keep the legacy `VALIDATOR_*_STORE_PATH` JSON env vars as migration fallback.
 - Keep artifact-local outputs on the filesystem even when operational metadata moves to SQLite: uploaded CSVs, generated result/report files, per-job `review_flags.json`, and the LLM cache remain file-based.
+- Operational artifact retention should stay in `app/services/retention_service.py` with env-backed `RetentionPolicy`; use `GET /retention/plan` for dry-run inspection and `POST /retention/cleanup` for execution.
+- Retention cleanup must protect queued/running jobs, recently updated artifacts, and jobs with `preserve_artifacts=true` before deleting uploads/results/reports/review_flags or pruning LLM cache entries.
 - Frontend review-marker filtering should stay in `frontend/src/lib/presentation.ts` over `review_flags`, and local review filters should reset together with search/result filters when `currentJobId` changes.
 - For `Nomes iguais`, duplicate resolution should be framed as consolidation: keep one physical CSV row only as an implementation detail, ignore photo/media and date/time enrichment, and preserve the survivor's non-empty allowed value on conflicts.
 - Bulk consolidation over duplicate groups should stay conservative for now: only process `Nomes iguais` groups with exactly 2 occurrences, and execute them from the highest row indices downward so CSV reindexing does not invalidate the remaining groups.
@@ -1233,4 +1235,18 @@ Expected architectural direction:
   - Use `app/core/auth_policy.py` for production-vs-local auth policy instead of checking environment variables directly in middleware or services.
   - Seed operators remain useful bootstrap data in tenant YAML, but production login should rely on managed operator records unless a break-glass seed exception is intentionally enabled.
   - Frontend tests that need persistent raw session storage must set `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true`; the default auth helper behavior is memory-only.
+---
+
+## 2026-04-22 12:45 -02 - US-059
+- Implementada política de retenção operacional em `app/core/retention.py`, configurável por `VALIDATOR_RETENTION_UPLOAD_DAYS`, `VALIDATOR_RETENTION_RESULT_DAYS`, `VALIDATOR_RETENTION_REPORT_DAYS`, `VALIDATOR_RETENTION_REVIEW_FLAGS_DAYS` e `VALIDATOR_RETENTION_LLM_CACHE_DAYS`.
+- Adicionado `RetentionService` para inspecionar ou executar limpeza tenant-scoped de uploads, resultados, relatórios e `review_flags`, protegendo jobs ativos, artefatos recentes, paths compartilhados com jobs protegidos e jobs marcados com `preserve_artifacts=true`.
+- Adicionada poda do cache de LLM por idade, endpoints autenticados `GET /retention/plan` e `POST /retention/cleanup`, evento de auditoria `artifact_retention_run` e log estruturado `retention.cleanup.completed`.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/core/audit.py`, `app/core/llm_cache.py`, `app/core/retention.py`, `app/services/retention_service.py`, `app/services/runtime.py`, `app/services/validation_service.py`, `tests/test_api.py`, `tests/test_llm_cache.py`, `tests/test_retention_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+- **Learnings for future iterations:**
+  - A retenção de artefatos deve continuar no service layer; as rotas só resolvem o tenant autenticado e delegam dry-run/execução.
+  - Use `preserve_artifacts=true` em `JobRecord.params` para impedir que a limpeza remova artefatos de um job específico.
+  - A retenção do cache LLM remove entradas antigas dentro do arquivo compartilhado em vez de apagar o arquivo inteiro.
 ---

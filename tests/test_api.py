@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -365,6 +366,62 @@ def test_operator_audit_view_keeps_operational_events_and_hides_admin_events():
     returned_event_ids = {event["event_id"] for event in payload}
     assert job_event.event_id in returned_event_ids
     assert admin_event.event_id not in returned_event_ids
+
+
+def test_retention_plan_and_cleanup_are_available_through_api(tmp_path, monkeypatch):
+    uploads_dir = tmp_path / "uploads"
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(validation_service, "UPLOADS_DIR", uploads_dir)
+    monkeypatch.setattr(validation_service, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("VALIDATOR_RETENTION_UPLOAD_DAYS", "7")
+    monkeypatch.setenv("VALIDATOR_RETENTION_RESULT_DAYS", "off")
+    monkeypatch.setenv("VALIDATOR_RETENTION_REPORT_DAYS", "off")
+    monkeypatch.setenv("VALIDATOR_RETENTION_REVIEW_FLAGS_DAYS", "off")
+    monkeypatch.setenv("VALIDATOR_RETENTION_LLM_CACHE_DAYS", "off")
+
+    upload_path = uploads_dir / "default" / "old.csv"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_text(CSV_CONTENT, encoding="utf-8")
+    old_datetime = datetime.now(UTC) - timedelta(days=40)
+    old_timestamp = old_datetime.timestamp()
+    os.utime(upload_path, (old_timestamp, old_timestamp))
+
+    job = job_service.create_job(
+        tenant_id="default",
+        file_name="old.csv",
+        file_path=str(upload_path),
+    )
+    job_service.start_job(job.job_id)
+    job = job_service.complete_job(job.job_id, total_rows=1)
+    job.file_path = str(upload_path)
+    job.created_at = old_datetime
+    job.updated_at = old_datetime
+    job_service.save_job(job.job_id)
+
+    plan_response = client.get("/retention/plan", headers=auth_headers())
+
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+    assert plan_payload["dry_run"] is True
+    assert plan_payload["artifact_count"] == 1
+    assert plan_payload["artifacts"][0]["kind"] == "upload"
+    assert upload_path.exists()
+
+    cleanup_response = client.post("/retention/cleanup", headers=auth_headers())
+
+    assert cleanup_response.status_code == 200
+    cleanup_payload = cleanup_response.json()
+    assert cleanup_payload["dry_run"] is False
+    assert cleanup_payload["artifact_count"] == 1
+    assert not upload_path.exists()
+
+    retention_events = [
+        event
+        for event in audit_service.list_events(tenant_id="default")
+        if event.event_type == AuditEventType.ARTIFACT_RETENTION_RUN
+    ]
+    assert len(retention_events) == 1
+    assert retention_events[0].details["artifact_count"] == 1
 
 
 def test_protected_routes_require_api_key():

@@ -16,6 +16,7 @@ from app.api.auth import (
 )
 from app.core.audit import AuditEvent, AuditEventType, AuditPrincipal
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
+from app.core.retention import RetentionPolicy
 from app.core.tenant_config import DEFAULT_TENANT_ID, OperatorRole
 from app.core.tenant_loader import list_tenants, load_tenant_config, tenant_ids_match
 from app.core.tenant_profile import (
@@ -30,7 +31,11 @@ from app.core.validation_scope import (
     parse_validation_scope,
 )
 from app.services.auth_service import AuthServiceError, EffectiveOperator
-from app.services.runtime import build_audit_service, build_job_service
+from app.services.runtime import (
+    build_audit_service,
+    build_job_service,
+    build_retention_service,
+)
 from app.services.tenant_admin_service import (
     TenantAdminRecord,
     TenantAdminService,
@@ -84,6 +89,10 @@ def _build_tenant_profile_service() -> TenantProfileService:
 tenant_admin_service = _build_tenant_admin_service()
 tenant_profile_service = _build_tenant_profile_service()
 job_service = build_job_service(audit_service=audit_service)
+retention_service = build_retention_service(
+    job_service=job_service,
+    audit_service=audit_service,
+)
 
 LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 LOGIN_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@-]+$")
@@ -464,6 +473,30 @@ class AuditEventResponse(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class RetentionArtifactResponse(BaseModel):
+    kind: str
+    path: str
+    tenant_id: str | None = None
+    job_id: str | None = None
+    size_bytes: int = 0
+    reference_time: datetime | None = None
+
+
+class RetentionRunResponse(BaseModel):
+    tenant_id: str
+    dry_run: bool
+    policy: dict[str, int | None]
+    scanned_jobs: int
+    protected_artifacts: int
+    retained_artifacts: int
+    artifact_count: int
+    artifacts: list[RetentionArtifactResponse] = Field(default_factory=list)
+    llm_cache_entries_removed: int = 0
+    llm_cache_entries_remaining: int = 0
+    started_at: datetime
+    finished_at: datetime
+
+
 class APIKeyRevocationResponse(BaseModel):
     tenant_id: str
     api_key_id: str
@@ -571,6 +604,26 @@ def _build_audit_event_response(event: AuditEvent) -> AuditEventResponse:
         api_key_id=event.api_key_id,
         created_at=event.created_at,
         details=event.details,
+    )
+
+
+def _build_retention_run_response(result) -> RetentionRunResponse:
+    return RetentionRunResponse(
+        tenant_id=result.tenant_id,
+        dry_run=result.dry_run,
+        policy=result.policy.as_dict(),
+        scanned_jobs=result.scanned_jobs,
+        protected_artifacts=result.protected_artifacts,
+        retained_artifacts=result.retained_artifacts,
+        artifact_count=result.artifact_count,
+        artifacts=[
+            RetentionArtifactResponse(**artifact.as_dict())
+            for artifact in result.artifacts
+        ],
+        llm_cache_entries_removed=result.llm_cache_entries_removed,
+        llm_cache_entries_remaining=result.llm_cache_entries_remaining,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
     )
 
 
@@ -1451,6 +1504,44 @@ async def list_audit_events(
         limit=limit,
     )
     return [_build_audit_event_response(event) for event in events]
+
+
+@router.get("/retention/plan", response_model=RetentionRunResponse)
+async def inspect_retention_cleanup(
+    request: Request,
+    tenant_id: str | None = None,
+) -> RetentionRunResponse:
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    try:
+        policy = RetentionPolicy.from_env()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+    result = retention_service.inspect(
+        tenant_id=resolved_tenant_id,
+        policy=policy,
+    )
+    return _build_retention_run_response(result)
+
+
+@router.post("/retention/cleanup", response_model=RetentionRunResponse)
+async def run_retention_cleanup(
+    request: Request,
+    tenant_id: str | None = None,
+) -> RetentionRunResponse:
+    auth = get_authenticated_tenant(request)
+    resolved_tenant_id = resolve_request_tenant_id(request, tenant_id)
+    try:
+        policy = RetentionPolicy.from_env()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+    result = retention_service.cleanup(
+        tenant_id=resolved_tenant_id,
+        policy=policy,
+        api_key_id=auth.api_key_id,
+    )
+    return _build_retention_run_response(result)
 
 
 @router.post("/validate", response_model=UploadResponse)

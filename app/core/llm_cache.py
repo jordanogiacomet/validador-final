@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Final, Protocol
 
@@ -19,6 +20,12 @@ LLM_CACHE_PAYLOAD_FIELDS: Final[tuple[str, ...]] = (
     "complemento",
     "observacao",
 )
+
+
+@dataclass(frozen=True)
+class LLMCachePruneResult:
+    removed_entries: int
+    remaining_entries: int
 
 
 class LLMResponseCache(Protocol):
@@ -69,6 +76,39 @@ class FileLLMResponseCache:
                 "response_text": response_text,
             }
             self._write_entries(entries)
+
+    def prune_expired(
+        self,
+        *,
+        ttl_seconds: int,
+        dry_run: bool = False,
+    ) -> LLMCachePruneResult:
+        if ttl_seconds <= 0:
+            return LLMCachePruneResult(removed_entries=0, remaining_entries=0)
+
+        with self._get_lock():
+            entries = self._read_entries()
+            current_time = self._clock()
+            retained_entries: dict[str, dict[str, object]] = {}
+            removed_entries = 0
+            for cache_key, entry in entries.items():
+                created_at = entry.get("created_at")
+                if (
+                    not isinstance(created_at, (int, float))
+                    or current_time - float(created_at) > ttl_seconds
+                ):
+                    removed_entries += 1
+                    continue
+                retained_entries[cache_key] = entry
+
+            if not dry_run and removed_entries:
+                self._write_entries(retained_entries)
+
+        remaining_entries = len(entries) - removed_entries
+        return LLMCachePruneResult(
+            removed_entries=removed_entries,
+            remaining_entries=remaining_entries,
+        )
 
     def _get_lock(self) -> threading.RLock:
         path_key = str(self.path.resolve())

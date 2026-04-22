@@ -12,6 +12,7 @@ class AuditEventType(StrEnum):
     JOB_COMPLETED = "job_completed"
     JOB_REPROCESSED = "job_reprocessed"
     DUPLICATES_RESOLVED = "duplicates_resolved"
+    ARTIFACT_RETENTION_RUN = "artifact_retention_run"
     AUTH_LOGIN_FAILED = "auth_login_failed"
     LEGACY_API_KEY_REJECTED = "legacy_api_key_rejected"
     INITIAL_SETUP_FAILED = "initial_setup_failed"

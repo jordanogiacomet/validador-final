@@ -272,6 +272,22 @@ def _resolve_job_review_flags_path(job: JobRecord) -> Path:
     return build_job_review_flags_path(job.tenant_id, job.job_id)
 
 
+def resolve_job_upload_path(job: JobRecord) -> Path:
+    return _resolve_job_upload_path(job)
+
+
+def resolve_job_result_path(job: JobRecord) -> Path:
+    return _resolve_job_result_path(job)
+
+
+def resolve_job_report_path(job: JobRecord) -> Path:
+    return _resolve_job_report_path(job)
+
+
+def resolve_job_review_flags_path(job: JobRecord) -> Path:
+    return _resolve_job_review_flags_path(job)
+
+
 def _build_csv_read_kwargs(tenant_config: TenantConfig) -> dict[str, str | bool]:
     return {
         "sep": tenant_config.csv.delimiter,

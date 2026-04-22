@@ -86,6 +86,35 @@ def test_file_llm_response_cache_handles_parallel_writes(tmp_path):
         assert cache.get(f"key-{index}", ttl_seconds=60) == f"response-{index}"
 
 
+def test_file_llm_response_cache_prunes_expired_entries(tmp_path):
+    now = 1000.0
+    cache = FileLLMResponseCache(tmp_path / "llm_cache.json", clock=lambda: now)
+    cache.set("old-key", "old-response")
+
+    now = 1100.0
+    cache.set("fresh-key", "fresh-response")
+
+    result = cache.prune_expired(ttl_seconds=60)
+
+    assert result.removed_entries == 1
+    assert result.remaining_entries == 1
+    assert cache.get("old-key", ttl_seconds=600) is None
+    assert cache.get("fresh-key", ttl_seconds=600) == "fresh-response"
+
+
+def test_file_llm_response_cache_prune_dry_run_keeps_entries(tmp_path):
+    now = 1000.0
+    cache = FileLLMResponseCache(tmp_path / "llm_cache.json", clock=lambda: now)
+    cache.set("old-key", "old-response")
+
+    now = 1100.0
+    result = cache.prune_expired(ttl_seconds=60, dry_run=True)
+
+    assert result.removed_entries == 1
+    assert result.remaining_entries == 0
+    assert cache.get("old-key", ttl_seconds=600) == "old-response"
+
+
 def test_resolve_force_refresh_accepts_boolean_and_string_values():
     assert resolve_force_refresh(True) is True
     assert resolve_force_refresh("true") is True
