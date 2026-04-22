@@ -1008,8 +1008,8 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 58,
-      "passes": false,
-      "notes": "Prioridade alta para reduzir risco real de produção em autenticação e gestão de segredos."
+      "passes": true,
+      "notes": "Implementado modo de produção `VALIDATOR_ENV=production` com desativação padrão de `api_keys` legadas em YAML e operadores seed sem overlay persistido, exceções explícitas auditáveis/visíveis no `/health`, rejeição auditada de chaves legadas em produção e frontend mantendo o segredo emitido em memória por padrão."
     },
     {
       "id": "US-059",

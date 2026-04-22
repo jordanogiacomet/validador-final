@@ -100,6 +100,16 @@ async def api_key_auth_middleware(
         issued_key = auth_service.inspect_issued_api_key(api_key)
         if issued_key.status is IssuedAPIKeyStatus.MISSING:
             match = resolve_tenant_api_key(api_key)
+            if match is None:
+                disabled_legacy_match = resolve_tenant_api_key(
+                    api_key,
+                    enforce_runtime_policy=False,
+                )
+                if disabled_legacy_match is not None:
+                    auth_service.record_legacy_api_key_rejected(
+                        tenant_id=disabled_legacy_match.tenant.tenant_id,
+                        api_key_id=disabled_legacy_match.api_key.key_id,
+                    )
         else:
             match = None
     except ValueError as exc:

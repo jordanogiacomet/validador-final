@@ -8,6 +8,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from app.core.auth_policy import (
+    describe_insecure_production_auth_exceptions,
+    is_production_mode,
+)
 from app.core.operational_sqlite import OperationalSQLiteStore, is_sqlite_path
 from app.core.tenant_config import TenantConfig
 from app.core.tenant_loader import list_tenants, load_tenant_config
@@ -116,6 +120,21 @@ def _probe_tenant_llm(
     return probe_llm_provider(tenant.llm.model, timeout_ms=timeout_ms)
 
 
+def _probe_auth_policy(
+    *,
+    tenant_lister: Callable[[], list[str]],
+    tenant_loader: Callable[[str], TenantConfig],
+) -> str:
+    if not is_production_mode():
+        raise _SkipHealthCheck
+
+    tenants = [tenant_loader(tenant_id) for tenant_id in tenant_lister()]
+    issues = describe_insecure_production_auth_exceptions(tenants)
+    if issues:
+        raise ValueError("; ".join(issues))
+    return "production auth policy enforced"
+
+
 def build_health_report(
     *,
     uploads_dir: Path,
@@ -132,6 +151,14 @@ def build_health_report(
         ("uploads", True, lambda: probe_directory_storage(uploads_dir)),
         ("results", True, lambda: probe_directory_storage(results_dir)),
         ("job_store", True, lambda: probe_job_store_storage(job_store_path)),
+        (
+            "auth_policy",
+            True,
+            lambda: _probe_auth_policy(
+                tenant_lister=resolved_tenant_lister,
+                tenant_loader=resolved_tenant_loader,
+            ),
+        ),
     ):
         result = _run_check(name, probe)
         if result is not None:

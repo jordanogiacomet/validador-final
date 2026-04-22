@@ -163,6 +163,7 @@ export type AuditEventType =
   | "job_completed"
   | "job_reprocessed"
   | "duplicates_resolved"
+  | "legacy_api_key_rejected"
   | "api_key_issued"
   | "api_key_expired"
   | "api_key_revoked"

@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 11:52 -02
+Last Updated: 2026-04-22 12:28 -02
 
 ---
 
@@ -52,6 +52,8 @@ Last Updated: 2026-04-22 11:52 -02
 - Persist auth-related operational metadata with the configured `api_key_id`, never the raw API key secret.
 - Middleware that enforces custom auth headers must allow unauthenticated `OPTIONS` preflight requests and keep `/health` and `/metrics` public.
 - Login-issued API keys flow through `app/services/auth_service.py`: tenant operators live in `TenantConfig.operators` with PBKDF2 password hashes, `/login` is public, issued keys are stored by hash only via the shared SQLite store or the legacy `VALIDATOR_API_KEY_STORE_PATH` fallback, and middleware resolves issued keys before legacy tenant `api_keys`.
+- Production auth hardening lives in `app/core/auth_policy.py`: `VALIDATOR_ENV=production` disables legacy YAML `api_keys` and seed YAML operators by default; break-glass exceptions are `VALIDATOR_ALLOW_LEGACY_API_KEYS_IN_PRODUCTION` and `VALIDATOR_ALLOW_SEED_OPERATORS_IN_PRODUCTION`.
+- Frontend issued `X-API-Key` secrets should remain memory-only by default in `frontend/src/lib/api.ts`; persist the raw secret only when `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` is explicitly configured for a controlled environment.
 - Issued key lifecycle policy belongs in `tenant.auth.issued_api_key_ttl_seconds`; `AuthService` owns issue/expire/revoke transitions plus audit emission, and middleware should reject expired or revoked issued keys before falling back to legacy tenant `api_keys`.
 - When issued API keys are persisted in shared storage, `AuthService.inspect_issued_api_key()` must reload records on cache miss before returning `MISSING`; otherwise a fresh login issued by another process/pod can be rejected immediately as `Invalid API key`.
 - Derive upload/result/report artifact paths through shared tenant-scoped helpers (`uploads/{tenant_id}/...`, `results/{tenant_id}/...`) and keep a legacy root-path fallback during storage-layout migrations.
@@ -1214,4 +1216,21 @@ Expected architectural direction:
   - Managed profile drafts must never affect validation execution; `load_tenant_config()` should overlay only the latest published version.
   - Profile publication/rollback should validate against `load_tenant_config(..., include_profile=False)` to avoid existing published overlays hiding invalid draft changes.
   - The first profile UI is intentionally JSON-based but still goes through typed API contracts and publish-time validation; future field-by-field editors should reuse the same draft/publish/rollback endpoints.
+---
+## 2026-04-22 12:28 -02 - US-058
+- Implementado modo explícito de produção em `app/core/auth_policy.py`: `VALIDATOR_ENV=production` bloqueia por padrão `api_keys` legadas de YAML e operadores seed sem overlay persistido, mantendo exceções explícitas para compatibilidade emergencial.
+- O middleware agora audita tentativas de uso de chave legada bloqueada em produção com `legacy_api_key_rejected`, e o `/health` expõe falha crítica `auth_policy` quando exceções inseguras de produção estão ativas com credenciais YAML presentes.
+- O frontend passou a manter a `X-API-Key` emitida apenas em memória por padrão; o comportamento anterior de persistir o segredo cru em `sessionStorage` exige `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true`.
+- Files changed: `AGENTS.md`, `README.md`, `app/api/auth.py`, `app/core/audit.py`, `app/core/auth_policy.py`, `app/core/health.py`, `app/core/tenant_loader.py`, `app/services/auth_service.py`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/lib/__tests__/api.test.ts`, `tests/test_api.py`, `tests/test_auth_service.py`, `tests/test_health.py`, `tests/test_tenant.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of login/renew/logout after a page refresh is recommended because raw session persistence is now opt-in.
+- **Learnings for future iterations:**
+  - Use `app/core/auth_policy.py` for production-vs-local auth policy instead of checking environment variables directly in middleware or services.
+  - Seed operators remain useful bootstrap data in tenant YAML, but production login should rely on managed operator records unless a break-glass seed exception is intentionally enabled.
+  - Frontend tests that need persistent raw session storage must set `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true`; the default auth helper behavior is memory-only.
 ---

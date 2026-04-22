@@ -297,6 +297,30 @@ If `VALIDATOR_SQLITE_PATH` is not set, the legacy JSON-backed env vars remain su
 - `VALIDATOR_API_KEY_STORE_PATH`
 - `VALIDATOR_OPERATOR_STORE_PATH`
 
+Production Auth Hardening
+
+Set `VALIDATOR_ENV=production` in published environments. In production mode:
+
+- legacy static `api_keys` from tenant YAML are not accepted by default
+- seed operators declared in tenant YAML are not valid login credentials unless they have a
+  persisted managed-operator overlay
+- managed operators and issued API keys continue to use the operational store
+
+Emergency compatibility exceptions are available but should not be used as a normal operating
+mode:
+
+```bash
+export VALIDATOR_ALLOW_LEGACY_API_KEYS_IN_PRODUCTION=true
+export VALIDATOR_ALLOW_SEED_OPERATORS_IN_PRODUCTION=true
+```
+
+When these exceptions are active and matching YAML credentials exist, `/health` reports a failing
+`auth_policy` check so the insecure state is visible to operators.
+
+The frontend keeps issued `X-API-Key` values in memory by default. To preserve the previous
+sessionStorage behavior for a controlled local environment, set
+`NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` before building or running the frontend.
+
 Bootstrap do primeiro operador administrativo
 
 To create the first administrative operator for the official tenant during API startup, set:

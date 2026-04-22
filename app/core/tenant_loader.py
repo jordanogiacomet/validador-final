@@ -3,6 +3,7 @@ from pathlib import Path
 
 import yaml
 
+from app.core.auth_policy import legacy_api_keys_enabled
 from app.core.tenant_config import DEFAULT_TENANT_ID, APIKeyConfig, TenantConfig
 from app.core.tenant_profile import (
     apply_validation_profile_to_tenant_config,
@@ -184,7 +185,14 @@ def tenant_ids_match(left_tenant_id: str, right_tenant_id: str) -> bool:
     )
 
 
-def resolve_tenant_api_key(raw_api_key: str) -> TenantAPIKeyMatch | None:
+def resolve_tenant_api_key(
+    raw_api_key: str,
+    *,
+    enforce_runtime_policy: bool = True,
+) -> TenantAPIKeyMatch | None:
+    if enforce_runtime_policy and not legacy_api_keys_enabled():
+        return None
+
     matches: list[TenantAPIKeyMatch] = []
     for tenant_id in list_tenants():
         tenant = load_tenant_config(tenant_id)

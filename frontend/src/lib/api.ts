@@ -28,6 +28,7 @@ const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const DEPLOYED_BACKEND_PORT = "30091";
 const API_KEY_HEADER = "X-API-Key";
 const API_SESSION_STORAGE_KEY = "validator.api_session.v1";
+const PERSIST_RAW_API_SESSION_ENV = "NEXT_PUBLIC_PERSIST_RAW_API_SESSION";
 
 let currentSession: LoginResponse | null = null;
 let sessionInvalidHandler: (() => void) | null = null;
@@ -69,6 +70,10 @@ function canUseSessionStorage(): boolean {
   return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined";
 }
 
+function shouldPersistRawApiSession(): boolean {
+  return process.env[PERSIST_RAW_API_SESSION_ENV]?.trim().toLowerCase() === "true";
+}
+
 function isLoginResponse(value: unknown): value is LoginResponse {
   if (!value || typeof value !== "object") {
     return false;
@@ -98,6 +103,11 @@ function readPersistedApiSession(): LoginResponse | null {
     return null;
   }
 
+  if (!shouldPersistRawApiSession()) {
+    window.sessionStorage.removeItem(API_SESSION_STORAGE_KEY);
+    return null;
+  }
+
   const rawSession = window.sessionStorage.getItem(API_SESSION_STORAGE_KEY);
   if (!rawSession) {
     return null;
@@ -122,6 +132,11 @@ function persistApiSession(session: LoginResponse | null): void {
   }
 
   if (!session) {
+    window.sessionStorage.removeItem(API_SESSION_STORAGE_KEY);
+    return;
+  }
+
+  if (!shouldPersistRawApiSession()) {
     window.sessionStorage.removeItem(API_SESSION_STORAGE_KEY);
     return;
   }

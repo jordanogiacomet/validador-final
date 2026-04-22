@@ -38,6 +38,7 @@ describe("api auth session helpers", () => {
     clearApiSession();
     setApiSessionInvalidHandler(null);
     window.sessionStorage.clear();
+    delete process.env.NEXT_PUBLIC_PERSIST_RAW_API_SESSION;
   });
 
   it("calls login without sending an existing X-API-Key header", async () => {
@@ -355,7 +356,20 @@ describe("api auth session helpers", () => {
     }
   });
 
-  it("persists the issued session in sessionStorage", () => {
+  it("keeps the issued session secret in memory by default", () => {
+    setApiSession(SESSION);
+
+    expect(getApiSession()).toEqual(SESSION);
+    expect(window.sessionStorage.length).toBe(0);
+
+    clearApiSession();
+    expect(getApiSession()).toBeNull();
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it("persists the raw issued session only with explicit opt-in", () => {
+    process.env.NEXT_PUBLIC_PERSIST_RAW_API_SESSION = "true";
+
     setApiSession(SESSION);
 
     expect(window.sessionStorage.length).toBe(1);

@@ -7,6 +7,10 @@ import pytest
 
 from app.core import tenant_loader
 from app.core.audit import AuditEventType
+from app.core.auth_policy import (
+    ALLOW_SEED_OPERATORS_IN_PRODUCTION_ENV,
+    RUNTIME_ENV_ENV,
+)
 from app.core.tenant_config import OperatorRole
 from app.services.audit_service import AuditService
 from app.services.auth_service import (
@@ -324,6 +328,61 @@ def test_issue_api_key_rejects_invalid_credentials() -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Invalid credentials"
+
+
+def test_issue_api_key_rejects_yaml_seed_operator_in_production_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+    service = AuthService()
+
+    with pytest.raises(AuthServiceError) as exc_info:
+        service.issue_api_key(
+            tenant_id="default",
+            username="default.operator",
+            password=DEFAULT_PASSWORD,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid credentials"
+
+
+def test_issue_api_key_allows_managed_operator_in_production(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+    service = AuthService(operator_storage_path=tmp_path / "operators.json")
+    operator = service.create_operator(
+        tenant_id="default",
+        username="gestor.producao",
+        password="GestorProducao@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="gestor.producao",
+        password="GestorProducao@2026",
+    )
+
+    assert issued_key.record.operator_id == operator.operator_id
+
+
+def test_issue_api_key_allows_seed_operator_with_explicit_production_exception(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+    monkeypatch.setenv(ALLOW_SEED_OPERATORS_IN_PRODUCTION_ENV, "true")
+    service = AuthService()
+
+    issued_key = service.issue_api_key(
+        tenant_id="default",
+        username="default.operator",
+        password=DEFAULT_PASSWORD,
+    )
+
+    assert issued_key.record.operator_id == "default-local-operator"
 
 
 def test_issue_api_key_rate_limits_repeated_failures_by_origin_and_username() -> None:

@@ -10,6 +10,7 @@ from openpyxl import Workbook, load_workbook
 import app.services.validation_service as validation_service
 from app.api.routes import audit_service, auth_service, job_service
 from app.core.audit import AuditEventType
+from app.core.auth_policy import RUNTIME_ENV_ENV
 from app.core.llm_cache import LLM_FORCE_REFRESH_PARAM
 from app.core.tenant_config import OperatorRole
 from app.core.tenant_loader import load_tenant_config
@@ -376,6 +377,21 @@ def test_invalid_api_key_is_rejected():
     response = client.get("/jobs", headers=auth_headers("invalid-api-key"))
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid API key"
+
+
+def test_legacy_api_key_is_rejected_and_audited_in_production(monkeypatch):
+    monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+
+    response = client.get("/jobs", headers=auth_headers(DEFAULT_API_KEY))
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key"
+    events = audit_service.list_events(tenant_id="default")
+    assert len(events) == 1
+    assert events[0].event_type is AuditEventType.LEGACY_API_KEY_REJECTED
+    assert events[0].api_key_id == DEFAULT_API_KEY_ID
+    assert events[0].details["reason"] == "legacy_api_key_disabled_in_production"
+    assert events[0].details["result"] == "denied"
 
 
 def test_initial_setup_status_is_public_and_reports_availability(tmp_path, monkeypatch):

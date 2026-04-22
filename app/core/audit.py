@@ -13,6 +13,7 @@ class AuditEventType(StrEnum):
     JOB_REPROCESSED = "job_reprocessed"
     DUPLICATES_RESOLVED = "duplicates_resolved"
     AUTH_LOGIN_FAILED = "auth_login_failed"
+    LEGACY_API_KEY_REJECTED = "legacy_api_key_rejected"
     INITIAL_SETUP_FAILED = "initial_setup_failed"
     ADMIN_LOGIN_SUCCEEDED = "admin_login_succeeded"
     API_KEY_ISSUED = "api_key_issued"
@@ -67,6 +68,7 @@ class AuditEvent(BaseModel):
 ADMINISTRATIVE_AUDIT_EVENT_TYPES = frozenset(
     {
         AuditEventType.AUTH_LOGIN_FAILED,
+        AuditEventType.LEGACY_API_KEY_REJECTED,
         AuditEventType.INITIAL_SETUP_FAILED,
         AuditEventType.ADMIN_LOGIN_SUCCEEDED,
         AuditEventType.INITIAL_ADMIN_CREATED,

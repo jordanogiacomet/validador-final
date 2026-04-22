@@ -208,6 +208,8 @@ If there are still stories with passes: false, end your response normally (anoth
 - Managed-user auth state belongs in persisted operator records (`must_change_password`), and invitation tokens must stay hashed-only in the operational store and audit trail; never persist raw invite tokens.
 - Administrative audit visibility also belongs in `AuthService`: keep `/audit` as the shared endpoint/log, let `platform_admin` read globally, `tenant_admin` read only the own-tenant admin scope, and keep operator/legacy-key access limited to the non-administrative operational subset.
 - Audit payload conventions live centrally in `app/core/audit.py`: reuse structured `details` keys such as `actor_operator_id`, `target_operator_id`, and `result`, and rely on centralized sanitization there instead of redacting secrets ad hoc in each service/route.
+- Production auth policy belongs in `app/core/auth_policy.py`: use `VALIDATOR_ENV=production` policy helpers instead of reading production/security env vars ad hoc in routes, services, or frontend helpers.
+- Frontend auth secrets should remain memory-only by default in `frontend/src/lib/api.ts`; only persist the raw issued `X-API-Key` when `NEXT_PUBLIC_PERSIST_RAW_API_SESSION=true` is explicitly configured.
 
 ## Reporting Guidance
 - Reports should be practical for operational correction workflows

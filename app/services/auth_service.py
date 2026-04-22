@@ -21,6 +21,7 @@ from app.core.audit import (
     AuditPrincipal,
     build_audit_principal_details,
 )
+from app.core.auth_policy import seed_operators_enabled
 from app.core.operational_sqlite import (
     OperationalSQLiteStore,
     resolve_operational_sqlite_path,
@@ -1538,6 +1539,26 @@ class AuthService:
     def list_records(self) -> list[IssuedAPIKeyRecord]:
         return sorted(self._records.values(), key=lambda item: item.created_at)
 
+    def record_legacy_api_key_rejected(
+        self,
+        *,
+        tenant_id: str,
+        api_key_id: str,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record_event(
+            AuditEventType.LEGACY_API_KEY_REJECTED,
+            tenant_id=tenant_id,
+            api_key_id=api_key_id,
+            details={
+                "reason": "legacy_api_key_disabled_in_production",
+                "api_key_id": api_key_id,
+                "result": AuditEventResult.DENIED.value,
+            },
+        )
+
     def _load_tenant_for_login(self, tenant_id: str) -> TenantConfig:
         try:
             return load_tenant_config(tenant_id)
@@ -1607,6 +1628,8 @@ class AuthService:
         for operator in tenant.operators:
             stored_record = stored_by_id.get(operator.operator_id)
             if stored_record is None:
+                if not seed_operators_enabled():
+                    continue
                 operators.append(
                     self._operator_from_config(
                         tenant_id=tenant_id,

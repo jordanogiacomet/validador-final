@@ -1,5 +1,9 @@
 import pytest
 
+from app.core.auth_policy import (
+    ALLOW_LEGACY_API_KEYS_IN_PRODUCTION_ENV,
+    RUNTIME_ENV_ENV,
+)
 from app.core.tenant_config import (
     DEFAULT_ISSUED_API_KEY_TTL_SECONDS,
     APIKeyConfig,
@@ -245,6 +249,26 @@ class TestTenantLoader:
         assert match is not None
         assert match.tenant.tenant_id == "redesim"
         assert match.api_key.key_id == "redesim-local"
+
+    def test_resolve_tenant_api_key_rejects_legacy_keys_in_production_by_default(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+
+        assert resolve_tenant_api_key("redesim-local-test-key") is None
+
+    def test_resolve_tenant_api_key_allows_legacy_keys_with_explicit_production_exception(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+        monkeypatch.setenv(ALLOW_LEGACY_API_KEYS_IN_PRODUCTION_ENV, "true")
+
+        match = resolve_tenant_api_key("redesim-local-test-key")
+
+        assert match is not None
+        assert match.tenant.tenant_id == "redesim"
 
     def test_resolve_legacy_redesim_v2_api_key_returns_canonical_match(self) -> None:
         match = resolve_tenant_api_key("redesim-v2-local-test-key")

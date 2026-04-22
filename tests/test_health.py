@@ -3,7 +3,11 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.core import health
-from app.core.tenant_config import LLMConfig, TenantConfig
+from app.core.auth_policy import (
+    ALLOW_LEGACY_API_KEYS_IN_PRODUCTION_ENV,
+    RUNTIME_ENV_ENV,
+)
+from app.core.tenant_config import APIKeyConfig, LLMConfig, TenantConfig
 from app.main import app
 from app.services import validation_service
 from app.services.job_service import JobService
@@ -117,3 +121,33 @@ def test_health_skips_llm_probe_when_tenant_opt_in_is_disabled(
     payload = response.json()
     assert payload["status"] == "ok"
     assert all(not check["name"].startswith("llm:") for check in payload["checks"])
+
+
+def test_health_fails_when_insecure_production_auth_exception_is_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _configure_health_dependencies(tmp_path, monkeypatch)
+    monkeypatch.setenv(RUNTIME_ENV_ENV, "production")
+    monkeypatch.setenv(ALLOW_LEGACY_API_KEYS_IN_PRODUCTION_ENV, "true")
+    monkeypatch.setattr(health, "list_tenants", lambda: ["default"])
+    monkeypatch.setattr(
+        health,
+        "load_tenant_config",
+        lambda tenant_id: TenantConfig(
+            tenant_id=tenant_id,
+            display_name="Default",
+            api_keys=[APIKeyConfig(key_id="default-local", value="secret")],
+        ),
+    )
+
+    response = client.get("/health")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "failed"
+    auth_check = next(
+        check for check in payload["checks"] if check["name"] == "auth_policy"
+    )
+    assert auth_check["ok"] is False
+    assert "legacy YAML API keys enabled in production" in auth_check["detail"]
