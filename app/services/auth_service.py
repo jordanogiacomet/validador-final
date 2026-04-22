@@ -560,6 +560,65 @@ class AuthService:
             include_administrative=False,
         )
 
+    def authorize_operational_kpi_read(
+        self,
+        *,
+        actor_tenant_id: str,
+        actor_operator_id: str | None,
+        api_key_id: str | None,
+        requested_tenant_id: str | None,
+    ) -> str | None:
+        normalized_actor_tenant_id = canonicalize_tenant_id(actor_tenant_id)
+        normalized_requested_tenant_id = (
+            canonicalize_tenant_id(requested_tenant_id)
+            if requested_tenant_id is not None
+            else None
+        )
+        actor = (
+            self._find_operator_by_id(normalized_actor_tenant_id, actor_operator_id)
+            if actor_operator_id is not None
+            else None
+        )
+
+        if actor is not None and not actor.disabled:
+            if actor.role is OperatorRole.PLATFORM_ADMIN:
+                return normalized_requested_tenant_id
+
+            if actor.role is OperatorRole.TENANT_ADMIN:
+                target_tenant_id = (
+                    normalized_requested_tenant_id or normalized_actor_tenant_id
+                )
+                if tenant_ids_match(target_tenant_id, normalized_actor_tenant_id):
+                    return normalized_actor_tenant_id
+
+        if normalized_requested_tenant_id is not None and not tenant_ids_match(
+            normalized_requested_tenant_id,
+            normalized_actor_tenant_id,
+        ):
+            self._record_authorization_denied_event(
+                tenant_id=normalized_actor_tenant_id,
+                api_key_id=api_key_id,
+                action="kpis.read",
+                target_tenant_id=normalized_requested_tenant_id,
+                operator=actor,
+            )
+            raise AuthServiceError(
+                403,
+                f"API key does not grant access to tenant '{normalized_requested_tenant_id}'",
+            )
+
+        self._record_authorization_denied_event(
+            tenant_id=normalized_actor_tenant_id,
+            api_key_id=api_key_id,
+            action="kpis.read",
+            target_tenant_id=normalized_requested_tenant_id or normalized_actor_tenant_id,
+            operator=actor,
+        )
+        raise AuthServiceError(
+            403,
+            "Only tenant_admin or platform_admin can read operational KPIs",
+        )
+
     def authorize_operator_role_assignment(
         self,
         *,

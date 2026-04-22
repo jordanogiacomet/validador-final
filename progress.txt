@@ -1,5 +1,5 @@
 Started: 2026-04-13 00:00 BRT
-Last Updated: 2026-04-22 14:33 -02
+Last Updated: 2026-04-22 15:19 -02
 
 ---
 
@@ -42,6 +42,7 @@ Last Updated: 2026-04-22 14:33 -02
 - Manual correction history should be persisted as job-scoped audit events with structured diffs and overlaid into `GET /jobs/{job_id}/result`; safe rollback stays LIFO so only the latest eligible correction can be undone before the next reprocess.
 - Low-volume operational persistence (jobs, audit events, issued API keys, managed operators) should go through `app/core/operational_sqlite.py` when `VALIDATOR_SQLITE_PATH` is configured; keep the legacy `VALIDATOR_*_STORE_PATH` JSON env vars as migration fallback.
 - Keep artifact-local outputs on the filesystem even when operational metadata moves to SQLite: uploaded CSVs, generated result/report files, per-job `review_flags.json`, and the LLM cache remain file-based.
+- Operational KPI aggregation should stay in `app/services/operational_kpi_service.py`; use persisted `JobRecord` counters as fallback for volume metrics when result artifacts are missing, and read detailed error/warning/LLM usage splits from result JSON when available.
 - Operational artifact retention should stay in `app/services/retention_service.py` with env-backed `RetentionPolicy`; use `GET /retention/plan` for dry-run inspection and `POST /retention/cleanup` for execution.
 - Retention cleanup must protect queued/running jobs, recently updated artifacts, and jobs with `preserve_artifacts=true` before deleting uploads/results/reports/review_flags or pruning LLM cache entries.
 - Frontend review-marker filtering should stay in `frontend/src/lib/presentation.ts` over `review_flags`, and local review filters should reset together with search/result filters when `currentJobId` changes.
@@ -1302,4 +1303,21 @@ Expected architectural direction:
   - Keep the CI smoke path API-level over `tests/test_api.py` so automation can validate `login -> validate -> job/result` without booting separate backend/frontend processes.
   - GitHub Actions failures only block promotion when the corresponding jobs are configured as required status checks on protected branches; document that expectation alongside the workflow.
   - Path-filtered CI triggers keep enforcement focused on runtime, test, deploy, and workflow changes instead of spending runs on bookkeeping-only edits.
+---
+## 2026-04-22 15:19 -02 - US-063
+- Implementado painel e endpoint de KPIs operacionais por tenant/período, com agregação de lotes, linhas, taxas de erro/aviso, tempo médio e uso de auditoria LLM por modelo.
+- Adicionada estimativa auditável de custo LLM por modelo via `VALIDATOR_LLM_PRICING_JSON`, preservando contadores de tokens/chamadas/cache/falhas no resultado do job e nos relatórios.
+- Reforçada autorização para KPIs: `platform_admin` pode consultar visão global ou tenant específico, `tenant_admin` fica limitado ao próprio tenant e operadores comuns recebem `403`.
+- Files changed: `AGENTS.md`, `app/api/routes.py`, `app/core/llm_pricing.py`, `app/rules/llm_audit.py`, `app/services/auth_service.py`, `app/services/operational_kpi_service.py`, `app/services/report_service.py`, `app/services/validation_service.py`, `frontend/src/app/globals.css`, `frontend/src/components/admin-console.tsx`, `frontend/src/components/admin-console.test.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/__tests__/api.test.ts`, `frontend/src/lib/presentation.ts`, `frontend/src/lib/types.ts`, `tests/test_api.py`, `tests/test_llm_audit.py`, `tests/test_operational_kpi_service.py`, `tests/test_report_service.py`, `tests/test_validation_service.py`, `prd.json`, `progress.txt`
+- Checks passed:
+  - `ruff check app tests`
+  - `pytest`
+  - `cd frontend && npm run typecheck`
+  - `cd frontend && npm run lint`
+  - `cd frontend && npm run test`
+- Browser verification: no browser-testing connector was available in this session; manual UI verification of the new admin indicators panel and CSV export is still recommended before publishing.
+- **Learnings for future iterations:**
+  - Operational KPI aggregation should stay service-owned; FastAPI routes should only resolve auth scope and date filters.
+  - Store LLM usage metadata in generated result JSON so KPI reads do not depend on raw logs or live provider state.
+  - Keep persisted `JobRecord` counters as a volume fallback because retention can remove result artifacts while job metadata remains useful for management reports.
 ---

@@ -1088,7 +1088,7 @@
         "Ruff lint, pytest, frontend typecheck, lint e testes passam"
       ],
       "priority": 63,
-      "passes": false,
+      "passes": true,
       "notes": "Prioridade baixa porque depende de uma base operacional mais endurecida antes de virar prioridade de produto."
     },
     {

@@ -11,6 +11,7 @@ import {
   getApiSession,
   getApiSessionExpiresAtMs,
   getInitialSetupState,
+  getOperationalKpis,
   getTenantValidationProfile,
   listAuditEvents,
   listJobs,
@@ -214,6 +215,72 @@ describe("api auth session helpers", () => {
     expect(requestUrl).toContain("/audit?");
     expect(requestUrl).toContain("tenant_id=default");
     expect(requestUrl).toContain("limit=25");
+    expect(headers.get("X-API-Key")).toBe("vapi_example");
+  });
+
+  it("loads operational KPIs through the authenticated admin helper", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          tenant_id: "default",
+          created_from: "2026-04-01T00:00:00+00:00",
+          created_to: "2026-04-30T23:59:59+00:00",
+          generated_at: "2026-04-30T12:00:00+00:00",
+          summary: {
+            tenant_id: "default",
+            total_jobs: 1,
+            queued_jobs: 0,
+            running_jobs: 0,
+            completed_jobs: 1,
+            failed_jobs: 0,
+            canceled_jobs: 0,
+            validated_rows: 10,
+            source_rows: 12,
+            rows_with_errors: 2,
+            rows_with_warnings: 3,
+            error_issue_count: 2,
+            warning_issue_count: 3,
+            error_rate: 0.2,
+            warning_rate: 0.3,
+            average_duration_ms: 1200,
+            llm: {
+              audited_rows: 1,
+              provider_requests: 1,
+              cache_hits: 0,
+              successful_requests: 1,
+              failed_requests: 0,
+              findings: 0,
+              input_tokens: 100,
+              output_tokens: 20,
+              estimated_cost_usd: 0.001,
+              models: [],
+            },
+          },
+          tenants: [],
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+
+    setApiSession(SESSION);
+
+    await getOperationalKpis({
+      tenantId: "default",
+      createdFrom: "2026-04-01T00:00:00+00:00",
+      createdTo: "2026-04-30T23:59:59+00:00",
+    });
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(requestInit?.headers);
+    expect(requestUrl).toContain("/admin/kpis/operational?");
+    expect(requestUrl).toContain("tenant_id=default");
+    expect(requestUrl).toContain("created_from=2026-04-01T00%3A00%3A00%2B00%3A00");
+    expect(requestUrl).toContain("created_to=2026-04-30T23%3A59%3A59%2B00%3A00");
     expect(headers.get("X-API-Key")).toBe("vapi_example");
   });
 

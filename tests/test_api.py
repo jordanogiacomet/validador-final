@@ -114,6 +114,60 @@ def platform_admin_headers() -> dict[str, str]:
     return headers
 
 
+def create_completed_job_with_result(
+    *,
+    tenant_id: str,
+    result_dir: Path,
+    created_at: datetime,
+    duration_seconds: int = 10,
+    summary: dict | None = None,
+    row_results: list[dict] | None = None,
+    llm_usage: dict | None = None,
+) -> str:
+    job = job_service.create_job(
+        tenant_id=tenant_id,
+        file_name=f"{tenant_id}.csv",
+    )
+    result_path = result_dir / f"{job.job_id}.json"
+    payload = {
+        "summary": summary
+        or {
+            "total_rows": 1,
+            "validated_rows": 1,
+            "source_total_rows": 1,
+            "rows_with_issues": 0,
+            "total_issues": 0,
+            "error_count": 0,
+            "warning_count": 0,
+        },
+        "row_results": row_results or [],
+        "duplicates": [],
+        "grouped_problems": {},
+    }
+    if llm_usage is not None:
+        payload["llm_audit"] = {
+            "prompt_versions": ["empresa_exemplo-v1"],
+            "models": [model["model"] for model in llm_usage.get("models", [])],
+            "usage": llm_usage,
+        }
+    result_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    job_service.start_job(job.job_id)
+    job_service.complete_job(
+        job.job_id,
+        result_path=str(result_path),
+        total_rows=payload["summary"]["total_rows"],
+        source_total_rows=payload["summary"]["source_total_rows"],
+        rows_with_issues=payload["summary"]["rows_with_issues"],
+        total_issues=payload["summary"]["total_issues"],
+    )
+    persisted = job_service.get_job(job.job_id)
+    assert persisted is not None
+    persisted.created_at = created_at
+    persisted.updated_at = created_at + timedelta(seconds=duration_seconds)
+    job_service.save_job(job.job_id)
+    return job.job_id
+
+
 CSV_CONTENT = (
     "Item,Placa Anterior,Descrição,Marca,Modelo,NS,Local,CC,Complemento,Observação\n"
     "001,PA-100,Mesa,MarcaX,ModeloY,SN1,Sala1,CC1,Detalhe completo,Obs\n"
@@ -366,6 +420,166 @@ def test_operator_audit_view_keeps_operational_events_and_hides_admin_events():
     returned_event_ids = {event["event_id"] for event in payload}
     assert job_event.event_id in returned_event_ids
     assert admin_event.event_id not in returned_event_ids
+
+
+def test_platform_admin_can_read_global_operational_kpis(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "VALIDATOR_LLM_PRICING_JSON",
+        json.dumps(
+            {
+                "claude-sonnet-4-20250514": {
+                    "input_per_million_tokens_usd": 3.0,
+                    "output_per_million_tokens_usd": 15.0,
+                }
+            }
+        ),
+    )
+    headers = platform_admin_headers()
+
+    create_completed_job_with_result(
+        tenant_id="default",
+        result_dir=tmp_path,
+        created_at=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
+        summary={
+            "total_rows": 2,
+            "validated_rows": 2,
+            "source_total_rows": 3,
+            "rows_with_issues": 2,
+            "total_issues": 2,
+            "error_count": 1,
+            "warning_count": 1,
+        },
+        row_results=[
+            {"row_index": 0, "has_errors": True, "has_warnings": False},
+            {"row_index": 1, "has_errors": False, "has_warnings": True},
+        ],
+        llm_usage={
+            "audited_rows": 2,
+            "provider_requests": 1,
+            "cache_hits": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "findings": 1,
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "models": [
+                {
+                    "model": "claude-sonnet-4-20250514",
+                    "provider_requests": 1,
+                    "cache_hits": 1,
+                    "successful_requests": 1,
+                    "failed_requests": 0,
+                    "findings": 1,
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                }
+            ],
+        },
+    )
+    create_completed_job_with_result(
+        tenant_id="redesim",
+        result_dir=tmp_path,
+        created_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+        summary={
+            "total_rows": 1,
+            "validated_rows": 1,
+            "source_total_rows": 1,
+            "rows_with_issues": 1,
+            "total_issues": 1,
+            "error_count": 0,
+            "warning_count": 1,
+        },
+        row_results=[
+            {"row_index": 0, "has_errors": False, "has_warnings": True},
+        ],
+    )
+
+    response = client.get(
+        "/admin/kpis/operational",
+        headers=headers,
+        params={
+            "created_from": "2026-04-20T00:00:00+00:00",
+            "created_to": "2026-04-20T23:59:59+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tenant_id"] is None
+    assert payload["summary"]["total_jobs"] == 2
+    assert payload["summary"]["validated_rows"] == 3
+    assert payload["summary"]["rows_with_errors"] == 1
+    assert payload["summary"]["rows_with_warnings"] == 2
+    assert payload["summary"]["llm"]["provider_requests"] == 1
+    assert payload["summary"]["llm"]["estimated_cost_usd"] == 0.0105
+    assert {tenant["tenant_id"] for tenant in payload["tenants"]} == {
+        "default",
+        "redesim",
+    }
+
+
+def test_tenant_admin_reads_only_own_operational_kpis(tmp_path):
+    auth_service.create_operator(
+        tenant_id="default",
+        username="admin.kpi.tenant",
+        password="AdminTenant@2026",
+        role=OperatorRole.TENANT_ADMIN,
+    )
+    headers, _payload = login_headers(
+        username="admin.kpi.tenant",
+        password="AdminTenant@2026",
+    )
+
+    create_completed_job_with_result(
+        tenant_id="default",
+        result_dir=tmp_path,
+        created_at=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
+    )
+    create_completed_job_with_result(
+        tenant_id="redesim",
+        result_dir=tmp_path,
+        created_at=datetime(2026, 4, 20, 11, 0, tzinfo=UTC),
+    )
+
+    own_scope_response = client.get("/admin/kpis/operational", headers=headers)
+    assert own_scope_response.status_code == 200
+    own_scope_payload = own_scope_response.json()
+    assert own_scope_payload["tenant_id"] == "default"
+    assert own_scope_payload["summary"]["total_jobs"] == 1
+    assert own_scope_payload["summary"]["validated_rows"] == 1
+    assert [tenant["tenant_id"] for tenant in own_scope_payload["tenants"]] == [
+        "default"
+    ]
+
+    forbidden_response = client.get(
+        "/admin/kpis/operational",
+        headers=headers,
+        params={"tenant_id": "redesim"},
+    )
+    assert forbidden_response.status_code == 403
+    assert forbidden_response.json()["detail"] == (
+        "API key does not grant access to tenant 'redesim'"
+    )
+
+
+def test_operator_cannot_read_operational_kpis():
+    auth_service.create_operator(
+        tenant_id="default",
+        username="operador.kpi",
+        password="Operador@2026",
+        role=OperatorRole.OPERATOR,
+    )
+    headers, _payload = login_headers(
+        username="operador.kpi",
+        password="Operador@2026",
+    )
+
+    response = client.get("/admin/kpis/operational", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Only tenant_admin or platform_admin can read operational KPIs"
+    )
 
 
 def test_retention_plan_and_cleanup_are_available_through_api(tmp_path, monkeypatch):

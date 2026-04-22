@@ -395,10 +395,22 @@ def test_run_validation_job_records_llm_prompt_version_in_result_and_pdf(
         assert len(client.calls) == 1
 
         payload = json.loads(Path(updated_job.result_path).read_text(encoding="utf-8"))
-        assert payload["llm_audit"] == {
-            "prompt_versions": ["empresa_exemplo-v1"],
-            "models": ["claude-sonnet-4-20250514"],
-        }
+        assert payload["llm_audit"]["prompt_versions"] == ["empresa_exemplo-v1"]
+        assert payload["llm_audit"]["models"] == ["claude-sonnet-4-20250514"]
+        assert payload["llm_audit"]["usage"]["audited_rows"] == 1
+        assert payload["llm_audit"]["usage"]["provider_requests"] == 1
+        assert payload["llm_audit"]["usage"]["models"] == [
+            {
+                "model": "claude-sonnet-4-20250514",
+                "provider_requests": 1,
+                "cache_hits": 0,
+                "successful_requests": 1,
+                "failed_requests": 0,
+                "findings": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+        ]
         assert payload["row_results"][0]["issues"] == []
 
         report_content = Path(updated_job.report_path).read_bytes()
@@ -424,10 +436,9 @@ def test_run_validation_job_parallel_llm_matches_serial_output(
     )
 
     assert serial_payload == parallel_payload
-    assert serial_payload["llm_audit"] == {
-        "prompt_versions": ["empresa_exemplo-v1"],
-        "models": ["claude-sonnet-4-20250514"],
-    }
+    assert serial_payload["llm_audit"]["prompt_versions"] == ["empresa_exemplo-v1"]
+    assert serial_payload["llm_audit"]["models"] == ["claude-sonnet-4-20250514"]
+    assert serial_payload["llm_audit"]["usage"] == parallel_payload["llm_audit"]["usage"]
     assert len(serial_client.calls) == 6
     assert len(parallel_client.calls) == 6
 

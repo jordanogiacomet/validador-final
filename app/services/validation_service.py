@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from io import BytesIO, StringIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
@@ -42,6 +43,7 @@ from app.rules.llm_audit import (
     LLM_AUDIT_METADATA_KEY,
     LLMAuditRule,
     merge_llm_audit_metadata,
+    snapshot_llm_audit_metadata,
 )
 from app.rules.suspicious_patterns import SuspiciousPatternRule
 from app.rules.zero_item_quality import ZeroItemQualityRule
@@ -1234,26 +1236,8 @@ def _copy_llm_parallel_shared_context(shared_context: dict) -> dict:
     }
 
 
-def _extract_llm_audit_metadata(shared_context: dict) -> dict[str, list[str]] | None:
-    metadata = shared_context.get(LLM_AUDIT_METADATA_KEY)
-    if not isinstance(metadata, dict):
-        return None
-
-    extracted = {
-        "models": [
-            str(model).strip()
-            for model in metadata.get("models", [])
-            if str(model).strip()
-        ],
-        "prompt_versions": [
-            str(prompt_version).strip()
-            for prompt_version in metadata.get("prompt_versions", [])
-            if str(prompt_version).strip()
-        ],
-    }
-    if not extracted["models"] and not extracted["prompt_versions"]:
-        return None
-    return extracted
+def _extract_llm_audit_metadata(shared_context: dict) -> dict[str, Any] | None:
+    return snapshot_llm_audit_metadata(shared_context)
 
 
 def _validate_parallel_rule_batch(
@@ -1274,7 +1258,7 @@ def _validate_parallel_rule_batch(
 
     def _validate_row_with_isolated_context(
         row_index: int,
-    ) -> tuple[list[ValidationIssue], dict[str, list[str]] | None]:
+    ) -> tuple[list[ValidationIssue], dict[str, Any] | None]:
         row_shared_context = _copy_llm_parallel_shared_context(base_shared_context)
         issues = engine.validate_row(
             row_index=row_index,
@@ -1288,7 +1272,7 @@ def _validate_parallel_rule_batch(
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
     future_to_row_index: dict[
-        Future[tuple[list[ValidationIssue], dict[str, list[str]] | None]],
+        Future[tuple[list[ValidationIssue], dict[str, Any] | None]],
         int,
     ] = {
         executor.submit(_validate_row_with_isolated_context, row_index): row_index
@@ -1297,7 +1281,7 @@ def _validate_parallel_rule_batch(
     pending = set(future_to_row_index)
     batch_results: dict[
         int,
-        tuple[list[ValidationIssue], dict[str, list[str]] | None],
+        tuple[list[ValidationIssue], dict[str, Any] | None],
     ] = {}
 
     try:

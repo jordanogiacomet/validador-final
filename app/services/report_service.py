@@ -181,8 +181,8 @@ def _merge_unique(values: list[str], candidates: list[object]) -> None:
 def _resolve_llm_audit_report_metadata(
     validation_results: ValidationResults,
     row_indices: list[int],
-    llm_audit_metadata: dict[str, list[str]] | None = None,
-) -> dict[str, list[str]] | None:
+    llm_audit_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     prompt_versions: list[str] = []
     models: list[str] = []
 
@@ -198,13 +198,112 @@ def _resolve_llm_audit_report_metadata(
             _merge_unique(prompt_versions, [meta.get("prompt_version")])
             _merge_unique(models, [meta.get("model")])
 
-    if not prompt_versions and not models:
+    report_metadata: dict[str, Any] | None = None
+    if prompt_versions or models:
+        report_metadata = {
+            "prompt_versions": prompt_versions,
+            "models": models,
+        }
+
+    resolved_usage = _resolve_llm_usage_report_metadata(llm_audit_metadata)
+    if report_metadata is None and resolved_usage is None:
+        return None
+    if report_metadata is None:
+        report_metadata = {
+            "prompt_versions": prompt_versions,
+            "models": models,
+        }
+    if resolved_usage is not None:
+        report_metadata["usage"] = resolved_usage
+    return report_metadata
+
+
+def _resolve_llm_usage_report_metadata(
+    llm_audit_metadata: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(llm_audit_metadata, dict):
         return None
 
-    return {
-        "prompt_versions": prompt_versions,
-        "models": models,
+    usage = llm_audit_metadata.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    resolved_usage = {
+        "audited_rows": _coerce_non_negative_int(usage.get("audited_rows", 0)),
+        "provider_requests": _coerce_non_negative_int(
+            usage.get("provider_requests", 0)
+        ),
+        "cache_hits": _coerce_non_negative_int(usage.get("cache_hits", 0)),
+        "successful_requests": _coerce_non_negative_int(
+            usage.get("successful_requests", 0)
+        ),
+        "failed_requests": _coerce_non_negative_int(usage.get("failed_requests", 0)),
+        "findings": _coerce_non_negative_int(usage.get("findings", 0)),
+        "input_tokens": _coerce_non_negative_int(usage.get("input_tokens", 0)),
+        "output_tokens": _coerce_non_negative_int(usage.get("output_tokens", 0)),
+        "models": [],
     }
+
+    raw_models = usage.get("models", {})
+    if isinstance(raw_models, dict):
+        model_names = sorted(
+            model
+            for model in (str(candidate).strip() for candidate in raw_models)
+            if model
+        )
+        for model in model_names:
+            raw_stats = raw_models.get(model)
+            if not isinstance(raw_stats, dict):
+                continue
+            resolved_usage["models"].append(
+                {
+                    "model": model,
+                    "provider_requests": _coerce_non_negative_int(
+                        raw_stats.get("provider_requests", 0)
+                    ),
+                    "cache_hits": _coerce_non_negative_int(
+                        raw_stats.get("cache_hits", 0)
+                    ),
+                    "successful_requests": _coerce_non_negative_int(
+                        raw_stats.get("successful_requests", 0)
+                    ),
+                    "failed_requests": _coerce_non_negative_int(
+                        raw_stats.get("failed_requests", 0)
+                    ),
+                    "findings": _coerce_non_negative_int(raw_stats.get("findings", 0)),
+                    "input_tokens": _coerce_non_negative_int(
+                        raw_stats.get("input_tokens", 0)
+                    ),
+                    "output_tokens": _coerce_non_negative_int(
+                        raw_stats.get("output_tokens", 0)
+                    ),
+                }
+            )
+
+    has_usage = any(
+        resolved_usage[field] > 0
+        for field in (
+            "audited_rows",
+            "provider_requests",
+            "cache_hits",
+            "successful_requests",
+            "failed_requests",
+            "findings",
+            "input_tokens",
+            "output_tokens",
+        )
+    ) or bool(resolved_usage["models"])
+    if not has_usage:
+        return None
+
+    return resolved_usage
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _format_llm_audit_metadata_value(values: list[str]) -> str:
@@ -1401,7 +1500,7 @@ def build_full_report(
     validation_results: ValidationResults,
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
-    llm_audit_metadata: dict[str, list[str]] | None = None,
+    llm_audit_metadata: dict[str, Any] | None = None,
 ) -> dict:
     validated_indices = _resolve_validated_row_indices(
         normalized_rows, validated_row_indices
@@ -1603,7 +1702,7 @@ def generate_pdf_report(
     validated_row_indices: list[int] | None = None,
     source_total_rows: int | None = None,
     validation_scope: ValidationScope = DEFAULT_VALIDATION_SCOPE,
-    llm_audit_metadata: dict[str, list[str]] | None = None,
+    llm_audit_metadata: dict[str, Any] | None = None,
 ) -> Path:
     output_path = Path(output_path)
     report_data = build_full_report(

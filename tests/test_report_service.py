@@ -347,6 +347,64 @@ def test_full_report_includes_llm_audit_metadata():
     }
 
 
+def test_full_report_includes_llm_audit_usage_metadata():
+    rows = [{"item": "A001", "descricao": "Mesa"}]
+    results = {0: []}
+
+    report = build_full_report(
+        rows,
+        results,
+        llm_audit_metadata={
+            "prompt_versions": ["v2"],
+            "models": ["claude-sonnet-4-20250514"],
+            "usage": {
+                "audited_rows": 1,
+                "provider_requests": 1,
+                "cache_hits": 0,
+                "successful_requests": 1,
+                "failed_requests": 0,
+                "findings": 0,
+                "input_tokens": 120,
+                "output_tokens": 40,
+                "models": {
+                    "claude-sonnet-4-20250514": {
+                        "provider_requests": 1,
+                        "cache_hits": 0,
+                        "successful_requests": 1,
+                        "failed_requests": 0,
+                        "findings": 0,
+                        "input_tokens": 120,
+                        "output_tokens": 40,
+                    }
+                },
+            },
+        },
+    )
+
+    assert report["llm_audit"]["usage"] == {
+        "audited_rows": 1,
+        "provider_requests": 1,
+        "cache_hits": 0,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "findings": 0,
+        "input_tokens": 120,
+        "output_tokens": 40,
+        "models": [
+            {
+                "model": "claude-sonnet-4-20250514",
+                "provider_requests": 1,
+                "cache_hits": 0,
+                "successful_requests": 1,
+                "failed_requests": 0,
+                "findings": 0,
+                "input_tokens": 120,
+                "output_tokens": 40,
+            }
+        ],
+    }
+
+
 def test_partial_report_limits_summary_and_rows_to_processed_slice():
     rows = _sample_rows()
     results = {

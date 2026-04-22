@@ -8,6 +8,7 @@ import type {
   JobListItemResponse,
   LoginRequestPayload,
   LoginResponse,
+  OperationalKPIResponse,
   JobResultPayload,
   JobStatusResponse,
   OperatorResponse,
@@ -540,6 +541,29 @@ export async function listAuditEvents(params: {
   const queryString = query.toString();
   const response = await apiFetch(`/audit${queryString ? `?${queryString}` : ""}`);
   return readResponse<AuditEventResponse[]>(response);
+}
+
+export async function getOperationalKpis(params: {
+  tenantId?: string | null;
+  createdFrom?: string | null;
+  createdTo?: string | null;
+} = {}): Promise<OperationalKPIResponse> {
+  const query = new URLSearchParams();
+  if (params.tenantId?.trim()) {
+    query.set("tenant_id", params.tenantId.trim());
+  }
+  if (params.createdFrom?.trim()) {
+    query.set("created_from", params.createdFrom.trim());
+  }
+  if (params.createdTo?.trim()) {
+    query.set("created_to", params.createdTo.trim());
+  }
+
+  const queryString = query.toString();
+  const response = await apiFetch(
+    `/admin/kpis/operational${queryString ? `?${queryString}` : ""}`,
+  );
+  return readResponse<OperationalKPIResponse>(response);
 }
 
 export async function renewApiSession(): Promise<LoginResponse> {

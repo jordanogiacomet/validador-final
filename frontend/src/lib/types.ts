@@ -190,6 +190,60 @@ export interface AuditEventResponse {
   details: Record<string, unknown>;
 }
 
+export interface OperationalKPILLMModelPayload {
+  model: string;
+  provider_requests: number;
+  cache_hits: number;
+  successful_requests: number;
+  failed_requests: number;
+  findings: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number | null;
+}
+
+export interface OperationalKPILLMPayload {
+  audited_rows: number;
+  provider_requests: number;
+  cache_hits: number;
+  successful_requests: number;
+  failed_requests: number;
+  findings: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number | null;
+  models: OperationalKPILLMModelPayload[];
+}
+
+export interface OperationalKPITenantPayload {
+  tenant_id: string | null;
+  total_jobs: number;
+  queued_jobs: number;
+  running_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  canceled_jobs: number;
+  validated_rows: number;
+  source_rows: number;
+  rows_with_errors: number;
+  rows_with_warnings: number;
+  error_issue_count: number;
+  warning_issue_count: number;
+  error_rate: number;
+  warning_rate: number;
+  average_duration_ms: number | null;
+  llm: OperationalKPILLMPayload;
+}
+
+export interface OperationalKPIResponse {
+  tenant_id: string | null;
+  created_from: string | null;
+  created_to: string | null;
+  generated_at: string;
+  summary: OperationalKPITenantPayload;
+  tenants: OperationalKPITenantPayload[];
+}
+
 export interface UploadResponse {
   job_id: string;
   status: JobStatus;

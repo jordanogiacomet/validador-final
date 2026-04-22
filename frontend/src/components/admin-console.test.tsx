@@ -6,6 +6,8 @@ import {
   ApiError,
   createAdminTenant,
   createOperatorAccount,
+  downloadGeneratedFile,
+  getOperationalKpis,
   getTenantValidationProfile,
   listAdminTenants,
   listOperators,
@@ -23,10 +25,12 @@ vi.mock("@/lib/api", async () => {
     ApiError: actual.ApiError,
     createAdminTenant: vi.fn(),
     createOperatorAccount: vi.fn(),
+    downloadGeneratedFile: vi.fn(),
     createOperatorInvitation: vi.fn(),
     disableAdminTenant: vi.fn(),
     disableOperatorAccount: vi.fn(),
     getTenantValidationProfile: vi.fn(),
+    getOperationalKpis: vi.fn(),
     listAdminTenants: vi.fn(),
     listOperators: vi.fn(),
     publishTenantValidationProfileDraft: vi.fn(),
@@ -40,6 +44,8 @@ vi.mock("@/lib/api", async () => {
 
 const createAdminTenantMock = vi.mocked(createAdminTenant);
 const createOperatorAccountMock = vi.mocked(createOperatorAccount);
+const downloadGeneratedFileMock = vi.mocked(downloadGeneratedFile);
+const getOperationalKpisMock = vi.mocked(getOperationalKpis);
 const getTenantValidationProfileMock = vi.mocked(getTenantValidationProfile);
 const listAdminTenantsMock = vi.mocked(listAdminTenants);
 const listOperatorsMock = vi.mocked(listOperators);
@@ -96,10 +102,105 @@ const PROFILE_STATE: TenantValidationProfileResponse = {
   versions: [],
 };
 
+const KPI_STATE = {
+  tenant_id: null,
+  created_from: "2026-04-01T00:00:00+00:00",
+  created_to: "2026-04-30T23:59:59+00:00",
+  generated_at: "2026-04-30T12:00:00+00:00",
+  summary: {
+    tenant_id: null,
+    total_jobs: 4,
+    queued_jobs: 0,
+    running_jobs: 0,
+    completed_jobs: 3,
+    failed_jobs: 1,
+    canceled_jobs: 0,
+    validated_rows: 30,
+    source_rows: 35,
+    rows_with_errors: 6,
+    rows_with_warnings: 8,
+    error_issue_count: 7,
+    warning_issue_count: 9,
+    error_rate: 0.2,
+    warning_rate: 0.2667,
+    average_duration_ms: 12500,
+    llm: {
+      audited_rows: 5,
+      provider_requests: 3,
+      cache_hits: 2,
+      successful_requests: 3,
+      failed_requests: 0,
+      findings: 1,
+      input_tokens: 1500,
+      output_tokens: 400,
+      estimated_cost_usd: 0.0123,
+      models: [
+        {
+          model: "claude-sonnet-4-20250514",
+          provider_requests: 3,
+          cache_hits: 2,
+          successful_requests: 3,
+          failed_requests: 0,
+          findings: 1,
+          input_tokens: 1500,
+          output_tokens: 400,
+          estimated_cost_usd: 0.0123,
+        },
+      ],
+    },
+  },
+  tenants: [
+    {
+      tenant_id: "default",
+      total_jobs: 4,
+      queued_jobs: 0,
+      running_jobs: 0,
+      completed_jobs: 3,
+      failed_jobs: 1,
+      canceled_jobs: 0,
+      validated_rows: 30,
+      source_rows: 35,
+      rows_with_errors: 6,
+      rows_with_warnings: 8,
+      error_issue_count: 7,
+      warning_issue_count: 9,
+      error_rate: 0.2,
+      warning_rate: 0.2667,
+      average_duration_ms: 12500,
+      llm: {
+        audited_rows: 5,
+        provider_requests: 3,
+        cache_hits: 2,
+        successful_requests: 3,
+        failed_requests: 0,
+        findings: 1,
+        input_tokens: 1500,
+        output_tokens: 400,
+        estimated_cost_usd: 0.0123,
+        models: [
+          {
+            model: "claude-sonnet-4-20250514",
+            provider_requests: 3,
+            cache_hits: 2,
+            successful_requests: 3,
+            failed_requests: 0,
+            findings: 1,
+            input_tokens: 1500,
+            output_tokens: 400,
+            estimated_cost_usd: 0.0123,
+          },
+        ],
+      },
+    },
+  ],
+};
+
 describe("AdminConsole", () => {
   beforeEach(() => {
     createAdminTenantMock.mockReset();
     createOperatorAccountMock.mockReset();
+    downloadGeneratedFileMock.mockReset();
+    getOperationalKpisMock.mockReset();
     getTenantValidationProfileMock.mockReset();
     listAdminTenantsMock.mockReset();
     listOperatorsMock.mockReset();
@@ -107,6 +208,7 @@ describe("AdminConsole", () => {
     saveTenantValidationProfileDraftMock.mockReset();
     listOperatorsMock.mockResolvedValue([]);
     getTenantValidationProfileMock.mockResolvedValue(PROFILE_STATE);
+    getOperationalKpisMock.mockResolvedValue(KPI_STATE);
   });
 
   it("shows only tenant-scoped user controls for tenant_admin", async () => {
@@ -265,5 +367,36 @@ describe("AdminConsole", () => {
       expect(publishTenantValidationProfileDraftMock).toHaveBeenCalledWith("default");
     });
     expect(screen.getByText(/Perfil publicado na versão 1/)).toBeDefined();
+  });
+
+  it("loads operational KPIs and exports the current CSV slice", async () => {
+    listAdminTenantsMock.mockResolvedValueOnce([
+      {
+        tenant_id: "default",
+        display_name: "Default Tenant",
+        aliases: [],
+        disabled: false,
+        source: "file",
+        is_default: true,
+      },
+    ]);
+
+    render(
+      <AdminConsole role="platform_admin" sessionTenantId="default" onClose={vi.fn()} />,
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Indicadores" }));
+
+    expect(await screen.findByText("Resumo do período")).toBeDefined();
+    expect(getOperationalKpisMock).toHaveBeenCalled();
+    expect(screen.getByText(/30 linhas validadas/i)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exportar CSV" }));
+
+    expect(downloadGeneratedFileMock).toHaveBeenCalledWith(
+      expect.stringContaining("overall_summary"),
+      expect.stringContaining("indicadores_operacionais"),
+      expect.objectContaining({ type: "text/csv;charset=utf-8" }),
+    );
   });
 });

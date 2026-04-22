@@ -39,6 +39,13 @@ from app.services.correction_history_service import (
     set_job_row_review_flag_with_history,
     update_job_row_with_history,
 )
+from app.services.operational_kpi_service import (
+    LLMModelUsageSnapshot,
+    LLMUsageSnapshot,
+    OperationalKPIService,
+    OperationalKPISnapshot,
+    OperationalTenantKPISnapshot,
+)
 from app.services.runtime import (
     build_audit_service,
     build_job_service,
@@ -97,6 +104,7 @@ retention_service = build_retention_service(
     job_service=job_service,
     audit_service=audit_service,
 )
+operational_kpi_service = OperationalKPIService(job_service=job_service)
 
 LOGIN_TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 LOGIN_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@-]+$")
@@ -525,6 +533,60 @@ class AuditEventResponse(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class OperationalKPILLMModelResponse(BaseModel):
+    model: str
+    provider_requests: int
+    cache_hits: int
+    successful_requests: int
+    failed_requests: int
+    findings: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float | None = None
+
+
+class OperationalKPILLMResponse(BaseModel):
+    audited_rows: int
+    provider_requests: int
+    cache_hits: int
+    successful_requests: int
+    failed_requests: int
+    findings: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float | None = None
+    models: list[OperationalKPILLMModelResponse] = Field(default_factory=list)
+
+
+class OperationalKPITenantResponse(BaseModel):
+    tenant_id: str | None = None
+    total_jobs: int
+    queued_jobs: int
+    running_jobs: int
+    completed_jobs: int
+    failed_jobs: int
+    canceled_jobs: int
+    validated_rows: int
+    source_rows: int
+    rows_with_errors: int
+    rows_with_warnings: int
+    error_issue_count: int
+    warning_issue_count: int
+    error_rate: float
+    warning_rate: float
+    average_duration_ms: float | None = None
+    llm: OperationalKPILLMResponse
+
+
+class OperationalKPIResponse(BaseModel):
+    tenant_id: str | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    generated_at: datetime
+    summary: OperationalKPITenantResponse
+    tenants: list[OperationalKPITenantResponse] = Field(default_factory=list)
+
+
 class RetentionArtifactResponse(BaseModel):
     kind: str
     path: str
@@ -656,6 +718,82 @@ def _build_audit_event_response(event: AuditEvent) -> AuditEventResponse:
         api_key_id=event.api_key_id,
         created_at=event.created_at,
         details=event.details,
+    )
+
+
+def _build_operational_kpi_llm_model_response(
+    snapshot: LLMModelUsageSnapshot,
+) -> OperationalKPILLMModelResponse:
+    return OperationalKPILLMModelResponse(
+        model=snapshot.model,
+        provider_requests=snapshot.provider_requests,
+        cache_hits=snapshot.cache_hits,
+        successful_requests=snapshot.successful_requests,
+        failed_requests=snapshot.failed_requests,
+        findings=snapshot.findings,
+        input_tokens=snapshot.input_tokens,
+        output_tokens=snapshot.output_tokens,
+        estimated_cost_usd=snapshot.estimated_cost_usd,
+    )
+
+
+def _build_operational_kpi_llm_response(
+    snapshot: LLMUsageSnapshot,
+) -> OperationalKPILLMResponse:
+    return OperationalKPILLMResponse(
+        audited_rows=snapshot.audited_rows,
+        provider_requests=snapshot.provider_requests,
+        cache_hits=snapshot.cache_hits,
+        successful_requests=snapshot.successful_requests,
+        failed_requests=snapshot.failed_requests,
+        findings=snapshot.findings,
+        input_tokens=snapshot.input_tokens,
+        output_tokens=snapshot.output_tokens,
+        estimated_cost_usd=snapshot.estimated_cost_usd,
+        models=[
+            _build_operational_kpi_llm_model_response(model)
+            for model in snapshot.models
+        ],
+    )
+
+
+def _build_operational_kpi_tenant_response(
+    snapshot: OperationalTenantKPISnapshot,
+) -> OperationalKPITenantResponse:
+    return OperationalKPITenantResponse(
+        tenant_id=snapshot.tenant_id,
+        total_jobs=snapshot.total_jobs,
+        queued_jobs=snapshot.queued_jobs,
+        running_jobs=snapshot.running_jobs,
+        completed_jobs=snapshot.completed_jobs,
+        failed_jobs=snapshot.failed_jobs,
+        canceled_jobs=snapshot.canceled_jobs,
+        validated_rows=snapshot.validated_rows,
+        source_rows=snapshot.source_rows,
+        rows_with_errors=snapshot.rows_with_errors,
+        rows_with_warnings=snapshot.rows_with_warnings,
+        error_issue_count=snapshot.error_issue_count,
+        warning_issue_count=snapshot.warning_issue_count,
+        error_rate=snapshot.error_rate,
+        warning_rate=snapshot.warning_rate,
+        average_duration_ms=snapshot.average_duration_ms,
+        llm=_build_operational_kpi_llm_response(snapshot.llm),
+    )
+
+
+def _build_operational_kpi_response(
+    snapshot: OperationalKPISnapshot,
+) -> OperationalKPIResponse:
+    return OperationalKPIResponse(
+        tenant_id=snapshot.tenant_id,
+        created_from=snapshot.created_from,
+        created_to=snapshot.created_to,
+        generated_at=snapshot.generated_at,
+        summary=_build_operational_kpi_tenant_response(snapshot.summary),
+        tenants=[
+            _build_operational_kpi_tenant_response(tenant)
+            for tenant in snapshot.tenants
+        ],
     )
 
 
@@ -865,6 +1003,23 @@ def _authorize_audit_read(
     auth = get_authenticated_tenant(request)
     try:
         return auth_service.authorize_audit_read(
+            actor_tenant_id=auth.tenant_id,
+            actor_operator_id=auth.operator_id,
+            api_key_id=auth.api_key_id,
+            requested_tenant_id=tenant_id,
+        )
+    except AuthServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
+def _authorize_operational_kpi_read(
+    request: Request,
+    *,
+    tenant_id: str | None,
+) -> str | None:
+    auth = get_authenticated_tenant(request)
+    try:
+        return auth_service.authorize_operational_kpi_read(
             actor_tenant_id=auth.tenant_id,
             actor_operator_id=auth.operator_id,
             api_key_id=auth.api_key_id,
@@ -1556,6 +1711,34 @@ async def list_audit_events(
         limit=limit,
     )
     return [_build_audit_event_response(event) for event in events]
+
+
+@router.get("/admin/kpis/operational", response_model=OperationalKPIResponse)
+async def get_operational_kpis(
+    request: Request,
+    tenant_id: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> OperationalKPIResponse:
+    resolved_tenant_id = _authorize_operational_kpi_read(
+        request,
+        tenant_id=tenant_id,
+    )
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="created_from must be before or equal to created_to",
+        )
+    snapshot = operational_kpi_service.collect(
+        tenant_id=resolved_tenant_id,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    return _build_operational_kpi_response(snapshot)
 
 
 @router.get("/retention/plan", response_model=RetentionRunResponse)

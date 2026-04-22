@@ -3,6 +3,8 @@ import type {
   DuplicateGroup,
   JobListItemResponse,
   JobStatusResponse,
+  OperationalKPIResponse,
+  OperationalKPITenantPayload,
   PreviewReportPayload,
   ProblemOccurrence,
   ReviewFlagPayload,
@@ -1453,6 +1455,138 @@ export function buildFilteredOperationalExportCsv({
   }
 
   return rows.join("\r\n");
+}
+
+export function formatOperationalKpiRate(rate: number | null | undefined): string {
+  if (typeof rate !== "number" || !Number.isFinite(rate)) {
+    return "-";
+  }
+  return `${(rate * 100).toLocaleString("pt-BR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`;
+}
+
+export function formatOperationalKpiDuration(
+  durationMs: number | null | undefined,
+): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
+    return "-";
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)} ms`;
+  }
+
+  const durationSeconds = durationMs / 1000;
+  if (durationSeconds < 60) {
+    return `${durationSeconds.toLocaleString("pt-BR", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })} s`;
+  }
+
+  const minutes = Math.floor(durationSeconds / 60);
+  const seconds = Math.round(durationSeconds % 60);
+  return `${minutes} min ${seconds}s`;
+}
+
+export function buildOperationalKpiCsv(payload: OperationalKPIResponse): string {
+  const rows: string[] = [
+    buildCsvRow([
+      "row_type",
+      "tenant_id",
+      "model",
+      "total_jobs",
+      "completed_jobs",
+      "failed_jobs",
+      "canceled_jobs",
+      "validated_rows",
+      "source_rows",
+      "rows_with_errors",
+      "rows_with_warnings",
+      "error_issue_count",
+      "warning_issue_count",
+      "error_rate_pct",
+      "warning_rate_pct",
+      "average_duration_ms",
+      "llm_audited_rows",
+      "llm_provider_requests",
+      "llm_cache_hits",
+      "llm_input_tokens",
+      "llm_output_tokens",
+      "llm_estimated_cost_usd",
+    ]),
+  ];
+
+  rows.push(...buildOperationalKpiCsvRows("overall_summary", payload.summary));
+  for (const tenant of payload.tenants) {
+    rows.push(...buildOperationalKpiCsvRows("tenant_summary", tenant));
+  }
+
+  return rows.join("\r\n");
+}
+
+function buildOperationalKpiCsvRows(
+  rowType: string,
+  snapshot: OperationalKPITenantPayload,
+): string[] {
+  const rows = [
+    buildCsvRow([
+      rowType,
+      snapshot.tenant_id,
+      "",
+      snapshot.total_jobs,
+      snapshot.completed_jobs,
+      snapshot.failed_jobs,
+      snapshot.canceled_jobs,
+      snapshot.validated_rows,
+      snapshot.source_rows,
+      snapshot.rows_with_errors,
+      snapshot.rows_with_warnings,
+      snapshot.error_issue_count,
+      snapshot.warning_issue_count,
+      (snapshot.error_rate * 100).toFixed(2),
+      (snapshot.warning_rate * 100).toFixed(2),
+      snapshot.average_duration_ms,
+      snapshot.llm.audited_rows,
+      snapshot.llm.provider_requests,
+      snapshot.llm.cache_hits,
+      snapshot.llm.input_tokens,
+      snapshot.llm.output_tokens,
+      snapshot.llm.estimated_cost_usd,
+    ]),
+  ];
+
+  for (const model of snapshot.llm.models) {
+    rows.push(
+      buildCsvRow([
+        "llm_model",
+        snapshot.tenant_id,
+        model.model,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        model.provider_requests,
+        model.cache_hits,
+        model.input_tokens,
+        model.output_tokens,
+        model.estimated_cost_usd,
+      ]),
+    );
+  }
+
+  return rows;
 }
 
 export function getBulkConsolidatableSameNameDuplicates(

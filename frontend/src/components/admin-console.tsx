@@ -8,9 +8,11 @@ import {
   createAdminTenant,
   createOperatorAccount,
   createOperatorInvitation,
+  downloadGeneratedFile,
   disableAdminTenant,
   disableOperatorAccount,
   formatApiErrorMessage,
+  getOperationalKpis,
   getTenantValidationProfile,
   listAdminTenants,
   listOperators,
@@ -21,16 +23,22 @@ import {
   saveTenantValidationProfileDraft,
   updateAdminTenant,
 } from "@/lib/api";
+import {
+  buildOperationalKpiCsv,
+  formatOperationalKpiDuration,
+  formatOperationalKpiRate,
+} from "@/lib/presentation";
 import type {
   OperatorInvitationResponse,
   OperatorResponse,
   OperatorRole,
+  OperationalKPIResponse,
   TenantAdminResponse,
   TenantValidationProfileData,
   TenantValidationProfileResponse,
 } from "@/lib/types";
 
-type AdminSection = "operators" | "tenants" | "profiles";
+type AdminSection = "operators" | "tenants" | "profiles" | "kpis";
 type NoticeKind = "success" | "error";
 
 interface AdminConsoleProps {
@@ -73,6 +81,11 @@ interface TenantDraftState {
   aliases: string;
 }
 
+interface KpiFilterState {
+  createdFrom: string;
+  createdTo: string;
+}
+
 const INITIAL_RESET_PASSWORD_FORM_STATE: ResetPasswordFormState = {
   password: "",
   requirePasswordChange: true,
@@ -80,6 +93,34 @@ const INITIAL_RESET_PASSWORD_FORM_STATE: ResetPasswordFormState = {
 
 const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9._@-]+$/;
+
+function toDateInputValue(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildDefaultKpiFilterState(): KpiFilterState {
+  const createdTo = new Date();
+  const createdFrom = new Date(createdTo);
+  createdFrom.setDate(createdFrom.getDate() - 29);
+  return {
+    createdFrom: toDateInputValue(createdFrom),
+    createdTo: toDateInputValue(createdTo),
+  };
+}
+
+function toStartOfDayIso(value: string): string | null {
+  if (!value.trim()) {
+    return null;
+  }
+  return new Date(`${value}T00:00:00`).toISOString();
+}
+
+function toEndOfDayIso(value: string): string | null {
+  if (!value.trim()) {
+    return null;
+  }
+  return new Date(`${value}T23:59:59.999`).toISOString();
+}
 
 function isPlatformAdmin(role: OperatorRole): boolean {
   return role === "platform_admin";
@@ -223,6 +264,15 @@ export function AdminConsole({
   const [profileNotice, setProfileNotice] = useState<NoticeState | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [pendingProfileAction, setPendingProfileAction] = useState<string | null>(null);
+  const [selectedKpiTenantId, setSelectedKpiTenantId] = useState("");
+  const [kpiFilters, setKpiFilters] = useState<KpiFilterState>(
+    buildDefaultKpiFilterState(),
+  );
+  const [kpiState, setKpiState] = useState<OperationalKPIResponse | null>(null);
+  const [kpiLoadError, setKpiLoadError] = useState<string | null>(null);
+  const [kpiNotice, setKpiNotice] = useState<NoticeState | null>(null);
+  const [isKpiLoading, setIsKpiLoading] = useState(false);
+  const [kpiRefreshToken, setKpiRefreshToken] = useState(0);
   const [isCreatingOperator, setIsCreatingOperator] = useState(false);
   const [isInvitingOperator, setIsInvitingOperator] = useState(false);
   const [pendingOperatorAction, setPendingOperatorAction] = useState<string | null>(null);
@@ -255,6 +305,17 @@ export function AdminConsole({
     );
   }, [role, tenants]);
 
+  const kpiTenantOptions = useMemo(() => {
+    if (!isPlatformAdmin(role)) {
+      return [];
+    }
+    return [...tenants].sort((left, right) =>
+      left.display_name.localeCompare(right.display_name, "pt-BR", {
+        sensitivity: "base",
+      }),
+    );
+  }, [role, tenants]);
+
   const selectedOperatorTenant =
     tenants.find((tenant) => tenant.tenant_id === selectedOperatorTenantId) || null;
 
@@ -266,6 +327,7 @@ export function AdminConsole({
       setIsTenantsLoading(false);
       setSelectedOperatorTenantId(sessionTenantId);
       setSelectedProfileTenantId(sessionTenantId);
+      setSelectedKpiTenantId(sessionTenantId);
       return;
     }
 
@@ -297,6 +359,15 @@ export function AdminConsole({
             nextTenants.find((tenant) => tenant.tenant_id === sessionTenantId) ||
             nextTenants[0];
           return preferredTenant?.tenant_id || currentTenantId;
+        });
+        setSelectedKpiTenantId((currentTenantId) => {
+          if (!currentTenantId) {
+            return "";
+          }
+          const hasCurrentTenant = nextTenants.some(
+            (tenant) => tenant.tenant_id === currentTenantId,
+          );
+          return hasCurrentTenant ? currentTenantId : "";
         });
       } catch (error) {
         if (isCancelled) {
@@ -424,6 +495,54 @@ export function AdminConsole({
     setProfileLoadError(null);
   }, [selectedProfileTenantId]);
 
+  useEffect(() => {
+    if (activeSection !== "kpis") {
+      return;
+    }
+
+    const tenantId = isPlatformAdmin(role)
+      ? selectedKpiTenantId || null
+      : sessionTenantId;
+
+    let isCancelled = false;
+
+    async function loadOperationalKpis() {
+      setIsKpiLoading(true);
+      setKpiLoadError(null);
+
+      try {
+        const payload = await getOperationalKpis({
+          tenantId,
+          createdFrom: toStartOfDayIso(kpiFilters.createdFrom),
+          createdTo: toEndOfDayIso(kpiFilters.createdTo),
+        });
+        if (isCancelled) {
+          return;
+        }
+
+        setKpiState(payload);
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setKpiState(null);
+        setKpiLoadError(
+          formatApiErrorMessage(error, "Não foi possível carregar os indicadores operacionais."),
+        );
+      } finally {
+        if (!isCancelled) {
+          setIsKpiLoading(false);
+        }
+      }
+    }
+
+    void loadOperationalKpis();
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeSection, kpiFilters, kpiRefreshToken, role, selectedKpiTenantId, sessionTenantId]);
+
   function handleCreateOperatorFieldChange(
     field: keyof CreateOperatorFormState,
   ): (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void {
@@ -494,6 +613,46 @@ export function AdminConsole({
       }));
       setTenantNotice(null);
     };
+  }
+
+  function handleKpiFilterChange(
+    field: keyof KpiFilterState,
+  ): (event: ChangeEvent<HTMLInputElement>) => void {
+    return (event) => {
+      setKpiFilters((currentValue) => ({
+        ...currentValue,
+        [field]: event.target.value,
+      }));
+      setKpiNotice(null);
+    };
+  }
+
+  function handleRefreshKpis() {
+    setKpiNotice(null);
+    setKpiRefreshToken((currentValue) => currentValue + 1);
+  }
+
+  function handleExportKpis() {
+    if (!kpiState) {
+      setKpiNotice({
+        kind: "error",
+        message: "Carregue os indicadores antes de exportar o CSV operacional.",
+      });
+      return;
+    }
+
+    const tenantToken = isPlatformAdmin(role)
+      ? selectedKpiTenantId || "todas"
+      : sessionTenantId;
+    downloadGeneratedFile(
+      buildOperationalKpiCsv(kpiState),
+      `indicadores_operacionais_${tenantToken}.csv`,
+      { type: "text/csv;charset=utf-8" },
+    );
+    setKpiNotice({
+      kind: "success",
+      message: "CSV operacional gerado com o recorte atual de empresas e período.",
+    });
   }
 
   async function handleCreateOperator(event: FormEvent<HTMLFormElement>) {
@@ -928,6 +1087,15 @@ export function AdminConsole({
           onClick={() => setActiveSection("profiles")}
         >
           Perfis
+        </button>
+        <button
+          className={`action-button${activeSection === "kpis" ? " primary" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "kpis"}
+          onClick={() => setActiveSection("kpis")}
+        >
+          Indicadores
         </button>
       </div>
 
@@ -1407,7 +1575,7 @@ export function AdminConsole({
             </div>
           )}
         </div>
-      ) : (
+      ) : activeSection === "profiles" ? (
         <div className="admin-console-body">
           <section className="admin-subcard">
             <div className="admin-subhead">
@@ -1567,6 +1735,223 @@ export function AdminConsole({
                   <div className="audit-empty-card">
                     <strong>Nenhuma versão publicada pela aplicação</strong>
                     <p>O tenant ainda usa o perfil bootstrap carregado de arquivo.</p>
+                  </div>
+                )}
+              </section>
+            </>
+          ) : null}
+        </div>
+      ) : (
+        <div className="admin-console-body">
+          <section className="admin-subcard">
+            <div className="admin-subhead">
+              <strong>Indicadores operacionais</strong>
+              <p>
+                Consulte volume, qualidade e uso da auditoria LLM por empresa sem depender de
+                leitura manual de logs brutos.
+              </p>
+            </div>
+
+            <div className="admin-tenant-form">
+              {isPlatformAdmin(role) ? (
+                <div className="field">
+                  <label htmlFor="admin-kpi-tenant">Empresa</label>
+                  <select
+                    id="admin-kpi-tenant"
+                    value={selectedKpiTenantId}
+                    disabled={isTenantsLoading}
+                    onChange={(event) => {
+                      setSelectedKpiTenantId(event.target.value);
+                      setKpiNotice(null);
+                    }}
+                  >
+                    <option value="">Todas as empresas</option>
+                    {kpiTenantOptions.map((tenant) => (
+                      <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                        {tenant.display_name} ({tenant.tenant_id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="tenant-context">
+                  <strong>{sessionTenantId}</strong>
+                  <span>Indicadores da sua empresa</span>
+                </div>
+              )}
+
+              <div className="field">
+                <label htmlFor="admin-kpi-created-from">De</label>
+                <input
+                  id="admin-kpi-created-from"
+                  type="date"
+                  value={kpiFilters.createdFrom}
+                  onChange={handleKpiFilterChange("createdFrom")}
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="admin-kpi-created-to">Até</label>
+                <input
+                  id="admin-kpi-created-to"
+                  type="date"
+                  value={kpiFilters.createdTo}
+                  onChange={handleKpiFilterChange("createdTo")}
+                />
+              </div>
+
+              <div className="admin-row-actions">
+                <button
+                  className="action-button"
+                  type="button"
+                  onClick={handleRefreshKpis}
+                  disabled={isKpiLoading}
+                >
+                  {isKpiLoading ? "Atualizando..." : "Atualizar indicadores"}
+                </button>
+                <button
+                  className="cta"
+                  type="button"
+                  onClick={handleExportKpis}
+                  disabled={!kpiState}
+                >
+                  Exportar CSV
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {kpiNotice ? (
+            <div className={`admin-notice ${kpiNotice.kind}`} role="status">
+              <strong>{kpiNotice.kind === "success" ? "Ação concluída" : "Ação não concluída"}</strong>
+              <p>{kpiNotice.message}</p>
+            </div>
+          ) : null}
+
+          {kpiLoadError ? <p className="inline-error">{kpiLoadError}</p> : null}
+          {isKpiLoading ? (
+            <p className="job-empty">Carregando indicadores operacionais...</p>
+          ) : kpiState ? (
+            <>
+              <section className="admin-subcard">
+                <div className="admin-subhead">
+                  <strong>Resumo do período</strong>
+                  <p>
+                    {isPlatformAdmin(role) && !kpiState.tenant_id
+                      ? "Visão consolidada de todas as empresas com acesso administrativo."
+                      : "Visão consolidada do recorte selecionado."}
+                  </p>
+                </div>
+
+                <div className="admin-tenant-list">
+                  <article className="admin-tenant-card">
+                    <div className="admin-tenant-head">
+                      <div>
+                        <strong>
+                          {kpiState.tenant_id || "Todas as empresas"}
+                        </strong>
+                        <p>
+                          {kpiState.created_from || "Sem início"} até{" "}
+                          {kpiState.created_to || "agora"}
+                        </p>
+                      </div>
+                      <div className="admin-chip-row">
+                        <span className="status-chip info">
+                          {kpiState.summary.total_jobs} lotes
+                        </span>
+                        <span className="status-chip success">
+                          {kpiState.summary.completed_jobs} concluídos
+                        </span>
+                      </div>
+                    </div>
+
+                    <p>
+                      Linhas validadas: {kpiState.summary.validated_rows.toLocaleString("pt-BR")} •
+                      Linhas no CSV: {kpiState.summary.source_rows.toLocaleString("pt-BR")}
+                    </p>
+                    <p>
+                      Taxa de erro: {formatOperationalKpiRate(kpiState.summary.error_rate)} • Taxa
+                      de aviso: {formatOperationalKpiRate(kpiState.summary.warning_rate)}
+                    </p>
+                    <p>
+                      Tempo médio dos lotes concluídos:{" "}
+                      {formatOperationalKpiDuration(kpiState.summary.average_duration_ms)}
+                    </p>
+                    <p>
+                      Auditoria LLM: {kpiState.summary.llm.provider_requests} chamadas ao provedor •{" "}
+                      {kpiState.summary.llm.cache_hits} reutilizações de cache •{" "}
+                      {kpiState.summary.llm.input_tokens.toLocaleString("pt-BR")} tokens de entrada
+                    </p>
+                    <p>
+                      Custo estimado:{" "}
+                      {kpiState.summary.llm.estimated_cost_usd === null
+                        ? "precificação não configurada"
+                        : kpiState.summary.llm.estimated_cost_usd.toLocaleString("pt-BR", {
+                            minimumFractionDigits: 4,
+                            maximumFractionDigits: 4,
+                          })}
+                    </p>
+                  </article>
+                </div>
+              </section>
+
+              <section className="admin-subcard">
+                <div className="admin-subhead">
+                  <strong>Empresas no recorte</strong>
+                  <p>
+                    Compare volume, qualidade e uso de LLM entre as empresas visíveis neste
+                    período.
+                  </p>
+                </div>
+
+                {kpiState.tenants.length ? (
+                  <div className="admin-tenant-list">
+                    {kpiState.tenants.map((tenant) => (
+                      <article className="admin-tenant-card" key={tenant.tenant_id || "all"}>
+                        <div className="admin-tenant-head">
+                          <div>
+                            <strong>{tenant.tenant_id || "Todas as empresas"}</strong>
+                            <p>
+                              {tenant.total_jobs} lotes • {tenant.completed_jobs} concluídos •{" "}
+                              {tenant.failed_jobs} com falha
+                            </p>
+                          </div>
+                          <div className="admin-chip-row">
+                            <span className="status-chip info">
+                              {formatOperationalKpiRate(tenant.error_rate)} erro
+                            </span>
+                            <span className="status-chip warning">
+                              {formatOperationalKpiRate(tenant.warning_rate)} aviso
+                            </span>
+                          </div>
+                        </div>
+
+                        <p>
+                          {tenant.validated_rows.toLocaleString("pt-BR")} linhas validadas •{" "}
+                          {tenant.rows_with_errors.toLocaleString("pt-BR")} com erro •{" "}
+                          {tenant.rows_with_warnings.toLocaleString("pt-BR")} com aviso
+                        </p>
+                        <p>
+                          Tempo médio: {formatOperationalKpiDuration(tenant.average_duration_ms)} •
+                          LLM: {tenant.llm.provider_requests} chamadas /{" "}
+                          {tenant.llm.input_tokens.toLocaleString("pt-BR")} tokens de entrada
+                        </p>
+                        {tenant.llm.models.length ? (
+                          <div className="admin-chip-row">
+                            {tenant.llm.models.map((model) => (
+                              <span className="status-chip info" key={`${tenant.tenant_id}-${model.model}`}>
+                                {model.model}: {model.provider_requests} chamadas
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="audit-empty-card">
+                    <strong>Nenhum lote encontrado no período</strong>
+                    <p>Ajuste o intervalo de datas ou o filtro de empresa para consultar outro recorte.</p>
                   </div>
                 )}
               </section>

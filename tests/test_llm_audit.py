@@ -8,6 +8,7 @@ from app.rules.llm_audit import (
     DEFAULT_PROMPT_VERSION,
     LLM_AUDIT_METADATA_KEY,
     LLMAuditRule,
+    LLMCompletionResult,
     format_prompt,
     is_retriable_llm_error,
     normalize_findings,
@@ -76,12 +77,27 @@ def _ctx(
 
 
 class FakeLLMClient:
-    def __init__(self, response: str = "[]", error: Exception | None = None):
+    def __init__(
+        self,
+        response: str = "[]",
+        error: Exception | None = None,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ):
         self.response = response
         self.error = error
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
         self.calls: list[dict] = []
 
-    def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
+    def complete(
+        self,
+        model: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMCompletionResult:
         self.calls.append({
             "model": model,
             "prompt": prompt,
@@ -90,15 +106,28 @@ class FakeLLMClient:
         })
         if self.error:
             raise self.error
-        return self.response
+        return LLMCompletionResult(
+            text=self.response,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+        )
 
 
 class RoutingLLMClient:
-    def __init__(self, responses_by_model: dict[str, str | Exception]):
+    def __init__(
+        self,
+        responses_by_model: dict[str, str | LLMCompletionResult | Exception],
+    ):
         self.responses_by_model = responses_by_model
         self.calls: list[dict] = []
 
-    def complete(self, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
+    def complete(
+        self,
+        model: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> str | LLMCompletionResult:
         self.calls.append({
             "model": model,
             "prompt": prompt,
@@ -259,7 +288,7 @@ def test_format_prompt_none_values_become_empty():
 
 def test_validate_returns_findings():
     response = '[{"issue": "Descrição genérica", "severity": "warning", "field": "descricao"}]'
-    client = FakeLLMClient(response=response)
+    client = FakeLLMClient(response=response, input_tokens=120, output_tokens=30)
     rule = LLMAuditRule(client=client)
     ctx = _ctx()
     issues = rule.validate(ctx)
@@ -273,13 +302,34 @@ def test_validate_returns_findings():
     assert ctx.shared_context[LLM_AUDIT_METADATA_KEY] == {
         "models": ["claude-sonnet-4-20250514"],
         "prompt_versions": ["empresa_exemplo-v1"],
+        "usage": {
+            "audited_rows": 1,
+            "provider_requests": 1,
+            "cache_hits": 0,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "findings": 1,
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "models": {
+                "claude-sonnet-4-20250514": {
+                    "provider_requests": 1,
+                    "cache_hits": 0,
+                    "successful_requests": 1,
+                    "failed_requests": 0,
+                    "findings": 1,
+                    "input_tokens": 120,
+                    "output_tokens": 30,
+                }
+            },
+        },
     }
     assert len(client.calls) == 1
     assert client.calls[0]["model"] == "claude-sonnet-4-20250514"
 
 
 def test_validate_empty_response():
-    client = FakeLLMClient(response="[]")
+    client = FakeLLMClient(response="[]", input_tokens=50, output_tokens=10)
     rule = LLMAuditRule(client=client)
     ctx = _ctx()
     issues = rule.validate(ctx)
@@ -287,6 +337,9 @@ def test_validate_empty_response():
     assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["prompt_versions"] == [
         "empresa_exemplo-v1"
     ]
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["usage"]["provider_requests"] == 1
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["usage"]["findings"] == 0
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["usage"]["input_tokens"] == 50
 
 
 def test_validate_llm_failure_returns_warning():
@@ -305,6 +358,7 @@ def test_validate_llm_failure_returns_warning():
     assert issues[0].meta["primary_failure"] == (
         "TimeoutError: connection timed out"
     )
+    assert ctx.shared_context[LLM_AUDIT_METADATA_KEY]["usage"]["failed_requests"] == 1
 
 
 def test_validate_generic_exception_returns_warning():
@@ -511,6 +565,9 @@ def test_validate_caches_successful_response_and_reuses_it(tmp_path):
     assert second_client.calls == []
     assert first_issues[0].message == second_issues[0].message
     assert "Complemento genérico" in second_issues[0].message
+    second_context = _ctx(tenant=tenant)
+    second_rule.validate(second_context)
+    assert second_context.shared_context[LLM_AUDIT_METADATA_KEY]["usage"]["cache_hits"] == 1
 
 
 def test_validate_ttl_expired_cache_calls_llm_again(tmp_path):
